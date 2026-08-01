@@ -7,16 +7,18 @@ import type { WorkspaceImageAsset } from "@/lib/workspace-data";
 export const runtime = "nodejs";
 
 const assetDirectory = join(process.cwd(), "data", "images");
-const maxAssetSize = 24 * 1024 * 1024;
+const maxAssetSize = 50 * 1024 * 1024;
 const acceptedAssetTypes = new Map([
   ["image/png", ".png"],
   ["image/jpeg", ".jpg"],
+  ["image/webp", ".webp"],
   ["application/pdf", ".pdf"],
 ]);
 const acceptedAssetExtensions = new Map([
   [".png", "image/png"],
   [".jpg", "image/jpeg"],
   [".jpeg", "image/jpeg"],
+  [".webp", "image/webp"],
   [".pdf", "application/pdf"],
 ]);
 
@@ -40,6 +42,7 @@ export async function POST(request: Request) {
     const formData = await request.formData();
     const uploadedFile = formData.get("asset") ?? formData.get("image");
     const articleId = formData.get("articleId");
+    const normalizedArticleId = typeof articleId === "string" && articleId.trim() ? articleId.trim() : null;
 
     if (!(uploadedFile instanceof File)) {
       return NextResponse.json({ error: "Escolhe um ficheiro para carregar." }, { status: 400 });
@@ -52,14 +55,14 @@ export async function POST(request: Request) {
 
     if (!uploadedFileType) {
       return NextResponse.json(
-        { error: "Formato não suportado. Usa PNG, JPG ou PDF." },
+        { error: "Formato não suportado. Usa PNG, JPG, WEBP ou PDF." },
         { status: 400 },
       );
     }
 
     if (uploadedFile.size > maxAssetSize) {
       return NextResponse.json(
-        { error: "O ficheiro é demasiado grande. O limite é 24 MB." },
+        { error: "O ficheiro é demasiado grande. O limite é 50 MB." },
         { status: 400 },
       );
     }
@@ -72,7 +75,7 @@ export async function POST(request: Request) {
 
     const asset: WorkspaceImageAsset = {
       id: randomUUID(),
-      articleId: typeof articleId === "string" && articleId.trim() ? articleId.trim() : undefined,
+      articleId: normalizedArticleId ?? undefined,
       originalName: uploadedFile.name,
       storedName,
       mimeType: uploadedFileType,
@@ -81,9 +84,9 @@ export async function POST(request: Request) {
     };
 
     return NextResponse.json(asset, { status: 201 });
-  } catch {
+  } catch (error) {
     return NextResponse.json(
-      { error: "Não foi possível carregar o ficheiro." },
+      { error: error instanceof Error ? error.message : "Não foi possível carregar o ficheiro." },
       { status: 500 },
     );
   }

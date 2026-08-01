@@ -1,26 +1,30 @@
 "use client";
 
 import { ArticleLibrary } from "@/components/article-library";
+import { AuthLanding } from "@/components/auth-landing";
 import { EditorPane } from "@/components/editor-pane";
 import { GraphPane } from "@/components/graph-pane";
 import paperGraphLogoText from "@/imagens/PapergraghTexto.png";
 import type { AppLanguage } from "@/lib/portuguese-labels";
 import {
-  createInitialActivityFeed,
   createInitialAppStats,
-  articles,
-  articlePositions as seedArticlePositions,
+  defaultSnapshot,
   type ArticlePosition,
-  graphNodes,
   type UnlinkedMention,
   type WorkspaceSnapshot,
   type WorkspaceArticle,
   type WorkspaceImageAsset,
   type WorkspaceRelation,
-  workspaceTags,
 } from "@/lib/workspace-data";
+import {
+  loadWorkspaceSnapshotFromSupabase,
+  saveWorkspaceSnapshotToSupabase,
+} from "@/lib/supabase-workspace";
+import { getSupabaseBrowserClient } from "@/lib/supabase-client";
+import { paperGraphAssetBucket, uploadWorkspaceAssetToSupabase } from "@/lib/supabase-storage";
 import Image from "next/image";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { User } from "@supabase/supabase-js";
 
 const apiPath = "/api/workspace";
 const tabs = ["drafts", "editor", "graph", "settings"] as const;
@@ -30,6 +34,13 @@ type SettingsSection = (typeof settingsSections)[number];
 type PendingEditorResubmission = { articleId: string; title: string; source: string };
 type PendingEditorNavigation = { type: "tab"; tab: WorkspaceTab };
 type ArticleSubmission = { articleId?: string; title: string; source: string };
+type AuthMode = "sign-in" | "sign-up";
+type AccountWorkspace = {
+  id: string;
+  name: string;
+  language: AppLanguage;
+  role: string;
+};
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
@@ -319,13 +330,6 @@ function createFallbackPositions(workspaceArticles: WorkspaceArticle[]) {
   const totalArticles = Math.max(workspaceArticles.length, 1);
 
   workspaceArticles.forEach((article, index) => {
-    const existingPosition = seedArticlePositions[article.id];
-
-    if (existingPosition) {
-      fallbackPositions[article.id] = existingPosition;
-      return;
-    }
-
     const angle = (index / totalArticles) * Math.PI * 2;
     const radius = 18 + index * 5;
 
@@ -486,9 +490,9 @@ function mergeArticlePositions(
 }
 
 export default function Home() {
-  const [workspace, setWorkspace] = useState<WorkspaceSnapshot | null>(null);
-  const [selectedArticleId, setSelectedArticleId] = useState(articles[0].id);
-  const [graphSelectedArticleId, setGraphSelectedArticleId] = useState<string | null>(articles[0].id);
+  const [workspace, setWorkspace] = useState<WorkspaceSnapshot>(defaultSnapshot);
+  const [selectedArticleId, setSelectedArticleId] = useState(defaultSnapshot.selectedArticleId);
+  const [graphSelectedArticleId, setGraphSelectedArticleId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("graph");
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
@@ -505,15 +509,284 @@ export default function Home() {
   const [pendingEditorNavigation, setPendingEditorNavigation] = useState<PendingEditorNavigation | null>(null);
   const [connectionValidationError, setConnectionValidationError] = useState<string | null>(null);
   const [dismissedUnlinkedToastKey, setDismissedUnlinkedToastKey] = useState<string | null>(null);
+  const [authMode, setAuthMode] = useState<AuthMode>("sign-in");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authUser, setAuthUser] = useState<User | null>(null);
+  const [authAccessToken, setAuthAccessToken] = useState<string | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(false);
+  const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authStatus, setAuthStatus] = useState<string | null>(null);
+  const [accountWorkspace, setAccountWorkspace] = useState<AccountWorkspace | null>(null);
   const saveRequestIdRef = useRef(0);
   const saveQueueRef = useRef(Promise.resolve());
   const isEnglish = appLanguage === "en";
+  const supabase = useMemo(() => getSupabaseBrowserClient(), []);
 
   useEffect(() => {
     window.localStorage.setItem("papergraph-language", appLanguage);
   }, [appLanguage]);
 
+  const applyWorkspaceSnapshot = useCallback((snapshot: WorkspaceSnapshot) => {
+    const selectedArticle =
+      snapshot.articles.find((article) => article.id === snapshot.selectedArticleId) ??
+      snapshot.articles[0] ??
+      null;
+    const selectedSubmittedArticle =
+      selectedArticle && selectedArticle.status !== "Draft"
+        ? selectedArticle
+        : snapshot.articles.find((article) => article.status !== "Draft") ?? null;
+    const normalizedSnapshot = {
+      ...snapshot,
+      selectedArticleId: selectedArticle?.id ?? "",
+    };
+
+    setWorkspace(normalizedSnapshot);
+    setSelectedArticleId(normalizedSnapshot.selectedArticleId);
+    setGraphSelectedArticleId(selectedSubmittedArticle?.id ?? null);
+  }, []);
+
+  const mirrorWorkspaceLocally = useCallback(async (snapshot: WorkspaceSnapshot) => {
+    await fetch(apiPath, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(snapshot),
+    });
+  }, []);
+
+  const loadCloudWorkspace = useCallback(
+    async (workspaceId: string) => {
+      if (!supabase) {
+        return;
+      }
+
+      setLoadError(null);
+
+      try {
+        const snapshot = await loadWorkspaceSnapshotFromSupabase(supabase, workspaceId);
+        applyWorkspaceSnapshot(snapshot);
+        await mirrorWorkspaceLocally(snapshot);
+      } catch (error) {
+        setLoadError(
+          error instanceof Error
+            ? error.message
+            : isEnglish
+              ? "Could not load the cloud workspace."
+              : "Não foi possível carregar a workspace cloud.",
+        );
+      }
+    },
+    [applyWorkspaceSnapshot, isEnglish, mirrorWorkspaceLocally, supabase],
+  );
+
+  const syncAccountWorkspace = useCallback(
+    async (currentUser: User | null) => {
+      if (!supabase || !currentUser) {
+        setAccountWorkspace(null);
+        return;
+      }
+
+      setAuthStatus(isEnglish ? "Preparing cloud workspace..." : "A preparar workspace cloud...");
+      setAuthError(null);
+
+      const { data, error } = await supabase.rpc("ensure_user_workspace");
+
+      if (error) {
+        setAccountWorkspace(null);
+        setAuthStatus(null);
+        setAuthError(
+          isEnglish
+            ? `Account connected, but the cloud workspace could not be prepared: ${error.message}. Run supabase/bootstrap-workspace.sql in the SQL Editor.`
+            : `Conta ligada, mas não foi possível preparar a workspace cloud: ${error.message}. Corre supabase/bootstrap-workspace.sql no SQL Editor.`,
+        );
+        return;
+      }
+
+      const workspaceRow = Array.isArray(data) ? data[0] : null;
+
+      if (!workspaceRow) {
+        setAccountWorkspace(null);
+        setAuthStatus(isEnglish ? "Account connected." : "Conta ligada.");
+        return;
+      }
+
+      const nextAccountWorkspace = {
+        id: String(workspaceRow.workspace_id),
+        name: String(workspaceRow.workspace_name),
+        language: workspaceRow.workspace_language === "en" ? "en" : "pt",
+        role: String(workspaceRow.member_role),
+      } satisfies AccountWorkspace;
+
+      setAccountWorkspace(nextAccountWorkspace);
+      await loadCloudWorkspace(nextAccountWorkspace.id);
+      setAuthStatus(isEnglish ? "Cloud workspace ready." : "Workspace cloud pronta.");
+    },
+    [isEnglish, loadCloudWorkspace, supabase],
+  );
+
   useEffect(() => {
+    if (!supabase) {
+      return undefined;
+    }
+
+    let isMounted = true;
+    const sessionCheckTimeout = window.setTimeout(() => {
+      if (isMounted) {
+        setIsAuthLoading(false);
+      }
+    }, 1800);
+
+    supabase.auth
+      .getSession()
+      .then(({ data }) => {
+        if (!isMounted) {
+          return;
+        }
+
+        window.clearTimeout(sessionCheckTimeout);
+        const currentUser = data.session?.user ?? null;
+        setAuthUser(currentUser);
+        setAuthAccessToken(data.session?.access_token ?? null);
+        setIsAuthLoading(false);
+
+        if (currentUser) {
+          void syncAccountWorkspace(currentUser);
+        }
+      })
+      .catch((error) => {
+        if (!isMounted) {
+          return;
+        }
+
+        window.clearTimeout(sessionCheckTimeout);
+        setIsAuthLoading(false);
+        setAuthError(
+          error instanceof Error
+            ? error.message
+            : isEnglish
+              ? "Could not check the saved session."
+              : "Não foi possível confirmar a sessão guardada.",
+        );
+      });
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      const currentUser = session?.user ?? null;
+
+      setAuthUser(currentUser);
+      setAuthAccessToken(session?.access_token ?? null);
+      setIsAuthLoading(false);
+
+      if (currentUser) {
+        void syncAccountWorkspace(currentUser);
+        return;
+      }
+
+      setAccountWorkspace(null);
+      setAuthStatus(null);
+    });
+
+    return () => {
+      isMounted = false;
+      window.clearTimeout(sessionCheckTimeout);
+      listener.subscription.unsubscribe();
+    };
+  }, [isEnglish, supabase, syncAccountWorkspace]);
+
+  async function handleAuthSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!supabase) {
+      setAuthError(
+        isEnglish
+          ? "Supabase is not configured. Check .env.local."
+          : "O Supabase não está configurado. Confirma o .env.local.",
+      );
+      return;
+    }
+
+    setIsAuthSubmitting(true);
+    setAuthError(null);
+    setAuthStatus(null);
+
+    try {
+      const credentials = {
+        email: authEmail.trim(),
+        password: authPassword,
+      };
+      const result =
+        authMode === "sign-in"
+          ? await supabase.auth.signInWithPassword(credentials)
+          : await supabase.auth.signUp({
+              ...credentials,
+              options: {
+                emailRedirectTo: window.location.origin,
+              },
+            });
+
+      if (result.error) {
+        throw result.error;
+      }
+
+      const nextUser = result.data.session?.user ?? null;
+      setAuthUser(nextUser);
+      setAuthAccessToken(result.data.session?.access_token ?? null);
+      setAuthPassword("");
+
+      if (nextUser) {
+        await syncAccountWorkspace(nextUser);
+      }
+
+      if (authMode === "sign-up" && !result.data.session) {
+        setAuthStatus(
+          isEnglish
+            ? "Account created. Check your email to confirm the login."
+            : "Conta criada. Confirma o login no teu email.",
+        );
+      }
+    } catch (error) {
+      setAuthError(
+        error instanceof Error
+          ? error.message
+          : isEnglish
+            ? "Authentication failed."
+            : "A autenticação falhou.",
+      );
+    } finally {
+      setIsAuthSubmitting(false);
+    }
+  }
+
+  async function handleSignOut() {
+    if (!supabase) {
+      return;
+    }
+
+    setIsAuthSubmitting(true);
+    setAuthError(null);
+
+    const { error } = await supabase.auth.signOut();
+
+    if (error) {
+      setAuthError(error.message);
+    } else {
+      setAuthUser(null);
+      setAuthAccessToken(null);
+      setAccountWorkspace(null);
+      applyWorkspaceSnapshot(defaultSnapshot);
+      setAuthStatus(isEnglish ? "Signed out." : "Sessão terminada.");
+    }
+
+    setIsAuthSubmitting(false);
+  }
+
+  useEffect(() => {
+    if (supabase) {
+      return undefined;
+    }
+
     const controller = new AbortController();
 
     async function loadWorkspace() {
@@ -525,9 +798,7 @@ export default function Home() {
         }
 
         const snapshot = (await response.json()) as WorkspaceSnapshot;
-        setWorkspace(snapshot);
-        setSelectedArticleId(snapshot.selectedArticleId);
-        setGraphSelectedArticleId(snapshot.selectedArticleId);
+        applyWorkspaceSnapshot(snapshot);
       } catch (error) {
         if ((error as Error).name !== "AbortError") {
           const savedLanguage = window.localStorage.getItem("papergraph-language");
@@ -543,34 +814,36 @@ export default function Home() {
     void loadWorkspace();
 
     return () => controller.abort();
-  }, []);
+  }, [applyWorkspaceSnapshot, supabase]);
 
   const selectedArticle = useMemo(
     () =>
-      (workspace?.articles ?? articles).find(
+      workspace.articles.find(
         (article) => article.id === selectedArticleId,
-      ) ?? (workspace?.articles ?? articles)[0],
-    [selectedArticleId, workspace],
+      ) ?? workspace.articles[0] ?? null,
+    [selectedArticleId, workspace.articles],
   );
 
-  const currentWorkspaceTags = workspace?.workspaceTags ?? workspaceTags;
-  const currentGraphNodes = workspace?.graphNodes ?? graphNodes;
-  const currentArticles = workspace?.articles ?? articles;
+  const currentWorkspaceTags = workspace.workspaceTags;
+  const currentGraphNodes = workspace.graphNodes;
+  const currentArticles = workspace.articles;
   const currentIgnoredUnlinkedMentionKeys = useMemo(
-    () => workspace?.ignoredUnlinkedMentionKeys ?? [],
-    [workspace?.ignoredUnlinkedMentionKeys],
+    () => workspace.ignoredUnlinkedMentionKeys,
+    [workspace.ignoredUnlinkedMentionKeys],
   );
   const currentImageAssets = useMemo(
-    () => workspace?.imageAssets ?? [],
-    [workspace?.imageAssets],
+    () => workspace.imageAssets,
+    [workspace.imageAssets],
   );
   const selectedArticleImageAssets = useMemo(
     () =>
-      currentImageAssets.filter(
-        (imageAsset) =>
-          imageAsset.articleId === selectedArticle.id ||
-          (!imageAsset.articleId && articleUsesImageAsset(selectedArticle, imageAsset)),
-      ),
+      selectedArticle
+        ? currentImageAssets.filter(
+            (imageAsset) =>
+              imageAsset.articleId === selectedArticle.id ||
+              (!imageAsset.articleId && articleUsesImageAsset(selectedArticle, imageAsset)),
+          )
+        : [],
     [currentImageAssets, selectedArticle],
   );
   const draftArticles = useMemo(
@@ -586,8 +859,8 @@ export default function Home() {
   const activeGraphArticle =
     submittedArticles.find((article) => article.id === graphSelectedArticleId) ?? null;
   const currentRelations = useMemo(
-    () => rebuildExplicitRelations(submittedArticles, workspace?.relations ?? []),
-    [submittedArticles, workspace?.relations],
+    () => rebuildExplicitRelations(submittedArticles, workspace.relations),
+    [submittedArticles, workspace.relations],
   );
   const currentUnlinkedMentions = useMemo(
     () => findUnlinkedMentions(submittedArticles, currentRelations, currentIgnoredUnlinkedMentionKeys),
@@ -608,15 +881,15 @@ export default function Home() {
     Boolean(activeGraphArticle) &&
     activeArticleUnlinkedMentions.length > 0 &&
     dismissedUnlinkedToastKey !== activeUnlinkedToastKey;
-  const currentActivityFeed = workspace?.activityFeed ?? createInitialActivityFeed(currentArticles, currentRelations);
-  const currentAppStats = createInitialAppStats(currentArticles, currentRelations, selectedArticle);
+  const currentActivityFeed = workspace.activityFeed;
+  const currentAppStats = createInitialAppStats(currentArticles, currentRelations, selectedArticle ?? undefined);
   const currentArticlePositions = useMemo(
-    () => mergeArticlePositions(currentArticles, workspace?.articlePositions),
-    [currentArticles, workspace?.articlePositions],
+    () => mergeArticlePositions(currentArticles, workspace.articlePositions),
+    [currentArticles, workspace.articlePositions],
   );
   const hasPendingEditorResubmission =
     activeTab === "editor" && pendingEditorResubmission?.articleId === selectedArticleId;
-  const selectedArticleCanBeEdited = !isImportedPdfArticle(selectedArticle);
+  const selectedArticleCanBeEdited = selectedArticle ? !isImportedPdfArticle(selectedArticle) : false;
   useEffect(() => {
     if (!hasPendingEditorResubmission) {
       return undefined;
@@ -742,30 +1015,31 @@ export default function Home() {
 
     const runSave = async () => {
       try {
-        const response = await fetch(apiPath, {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(snapshot),
-        });
+        await mirrorWorkspaceLocally(snapshot);
 
-        if (!response.ok) {
-          throw new Error(`Workspace save failed: ${response.status}`);
+        if (supabase && accountWorkspace) {
+          await saveWorkspaceSnapshotToSupabase(
+            supabase,
+            {
+              id: accountWorkspace.id,
+              language: appLanguage,
+            },
+            snapshot,
+          );
         }
 
-        const savedSnapshot = (await response.json()) as WorkspaceSnapshot;
-
         if (saveRequestId === saveRequestIdRef.current) {
-          setWorkspace(savedSnapshot);
+          setWorkspace(snapshot);
           setLoadError(null);
         }
-      } catch {
+      } catch (error) {
         if (saveRequestId === saveRequestIdRef.current) {
           setLoadError(
-            isEnglish
-              ? "Could not save the workspace state through the API."
-              : "Não foi possível guardar o estado da área de trabalho na API.",
+            error instanceof Error
+              ? error.message
+              : isEnglish
+                ? "Could not save the workspace."
+                : "Não foi possível guardar a workspace.",
           );
         }
       }
@@ -822,13 +1096,13 @@ export default function Home() {
     submitArticle(pendingEditorResubmission, nextTab);
   }
 
-  function updatePendingEditorResubmission(nextPendingResubmission: PendingEditorResubmission | null) {
+  const updatePendingEditorResubmission = useCallback((nextPendingResubmission: PendingEditorResubmission | null) => {
     setPendingEditorResubmission(nextPendingResubmission);
 
     if (nextPendingResubmission) {
       setConnectionValidationError(null);
     }
-  }
+  }, []);
 
   function updateSelectedArticle(articleId: string) {
     setConnectionValidationError(null);
@@ -866,7 +1140,7 @@ export default function Home() {
       ? `Untitled research note ${nextIndex}`
       : `Nota de investigação sem título ${nextIndex}`;
     const nextArticle: WorkspaceArticle = {
-      id: `art-${String(nextIndex).padStart(3, "0")}`,
+      id: crypto.randomUUID(),
       title: nextArticleTitle,
       author: "PaperGraph",
       status: "Draft",
@@ -1391,7 +1665,7 @@ export default function Home() {
   }
 
   async function importPdfArticle(pdfFile: File) {
-    const importedArticleId = `art-${crypto.randomUUID()}`;
+    const importedArticleId = crypto.randomUUID();
     const importedArticleTitle = getTitleFromPdfFileName(pdfFile.name, appLanguage);
     const formData = new FormData();
 
@@ -1408,10 +1682,15 @@ export default function Home() {
       throw new Error(payload?.error ?? (isEnglish ? "Could not import the PDF." : "Não foi possível importar o PDF."));
     }
 
-    const uploadedPdfAsset = {
+    let uploadedPdfAsset: WorkspaceImageAsset = {
       ...((await response.json()) as WorkspaceImageAsset),
       articleId: importedArticleId,
     };
+
+    if (supabase && authUser) {
+      uploadedPdfAsset = await uploadWorkspaceAssetToSupabase(supabase, authUser.id, uploadedPdfAsset, pdfFile);
+    }
+
     const importedArticle: WorkspaceArticle = {
       id: importedArticleId,
       title: importedArticleTitle,
@@ -1497,9 +1776,26 @@ export default function Home() {
   }
 
   async function deleteStoredImageAssetFile(imageAsset: WorkspaceImageAsset) {
-    const response = await fetch(`/api/images/${encodeURIComponent(imageAsset.storedName)}`, {
+    if (imageAsset.storagePath && supabase && authUser) {
+      const { error } = await supabase.storage.from(paperGraphAssetBucket).remove([imageAsset.storagePath]);
+
+      if (error) {
+        throw new Error(error.message);
+      }
+    }
+
+    const storagePath = imageAsset.storagePath ?? imageAsset.storedName;
+    const response = await fetch(
+      `/api/images/${encodeURIComponent(imageAsset.storedName)}?path=${encodeURIComponent(storagePath)}`,
+      {
       method: "DELETE",
-    });
+      headers: authAccessToken
+        ? {
+            Authorization: `Bearer ${authAccessToken}`,
+          }
+        : undefined,
+      },
+    );
 
     if (!response.ok && response.status !== 404) {
       const payload = (await response.json().catch(() => null)) as { error?: string } | null;
@@ -1548,15 +1844,11 @@ export default function Home() {
       );
     }
 
-    if (currentArticles.length <= 1) {
-      throw new Error(
-        isEnglish
-          ? "You cannot remove the last article in the workspace."
-          : "Não podes remover o último artigo da área de trabalho.",
-      );
-    }
-
-    const articleImageAssets = currentImageAssets.filter((imageAsset) => imageAsset.articleId === articleId);
+    const articleImageAssets = currentImageAssets.filter(
+      (imageAsset) =>
+        imageAsset.articleId === articleId ||
+        (!imageAsset.articleId && articleUsesImageAsset(articleToDelete, imageAsset)),
+    );
 
     await Promise.all(articleImageAssets.map(deleteStoredImageAssetFile));
 
@@ -1579,14 +1871,14 @@ export default function Home() {
     });
     const nextSelectedArticleId =
       selectedArticleId === articleId
-        ? nextSubmittedArticles[0]?.id ?? nextArticles[0].id
+        ? nextSubmittedArticles[0]?.id ?? nextArticles[0]?.id ?? ""
         : selectedArticleId;
     const nextGraphSelectedArticleId =
       graphSelectedArticleId === articleId
         ? nextSubmittedArticles[0]?.id ?? null
         : graphSelectedArticleId;
     const nextSelectedArticle =
-      nextArticles.find((article) => article.id === nextSelectedArticleId) ?? nextArticles[0];
+      nextArticles.find((article) => article.id === nextSelectedArticleId) ?? nextArticles[0] ?? undefined;
     const nextImageAssets = currentImageAssets.filter((imageAsset) => imageAsset.articleId !== articleId);
     const snapshot: WorkspaceSnapshot = {
       selectedArticleId: nextSelectedArticleId,
@@ -1663,6 +1955,31 @@ export default function Home() {
 
     setWorkspace(snapshot);
     void saveWorkspace(snapshot);
+  }
+
+  if (!authUser) {
+    return (
+      <AuthLanding
+        authMode={authMode}
+        email={authEmail}
+        password={authPassword}
+        error={authError}
+        isLoading={isAuthLoading}
+        isSubmitting={isAuthSubmitting}
+        language={appLanguage}
+        status={authStatus}
+        supabaseConfigured={Boolean(supabase)}
+        onEmailChange={setAuthEmail}
+        onLanguageChange={setAppLanguage}
+        onModeChange={(mode) => {
+          setAuthMode(mode);
+          setAuthError(null);
+          setAuthStatus(null);
+        }}
+        onPasswordChange={setAuthPassword}
+        onSubmit={handleAuthSubmit}
+      />
+    );
   }
 
   return (
@@ -1793,19 +2110,45 @@ export default function Home() {
 
           {activeTab === "editor" ? (
             <div className="flex min-h-0 flex-1 overflow-hidden">
-              <EditorPane
-                key={selectedArticle.id}
-                article={selectedArticle}
-                onSaveArticle={updateArticleDetails}
-                onSubmitArticle={submitArticle}
-                submissionIssue={connectionValidationError}
-                language={appLanguage}
-                onSubmissionIssueClear={() => setConnectionValidationError(null)}
-                onPendingResubmissionChange={updatePendingEditorResubmission}
-                imageAssets={selectedArticleImageAssets}
-                onImageUploaded={addImageAsset}
-                onImageDeleted={deleteImageAsset}
-              />
+              {selectedArticle ? (
+                <EditorPane
+                  key={selectedArticle.id}
+                  article={selectedArticle}
+                  onSaveArticle={updateArticleDetails}
+                  onSubmitArticle={submitArticle}
+                  submissionIssue={connectionValidationError}
+                  language={appLanguage}
+                  onSubmissionIssueClear={() => setConnectionValidationError(null)}
+                  onPendingResubmissionChange={updatePendingEditorResubmission}
+                  imageAssets={selectedArticleImageAssets}
+                  onImageUploaded={addImageAsset}
+                  onImageDeleted={deleteImageAsset}
+                  authAccessToken={authAccessToken}
+                />
+              ) : (
+                <div className="flex flex-1 items-center justify-center rounded-[28px] border border-[var(--border)] bg-[var(--surface-strong)] p-6 text-center">
+                  <div className="max-w-md">
+                    <p className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
+                      {isEnglish ? "Editor" : "Editor"}
+                    </p>
+                    <h2 className="mt-2 text-xl font-semibold text-white">
+                      {isEnglish ? "No article selected" : "Nenhum artigo selecionado"}
+                    </h2>
+                    <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+                      {isEnglish
+                        ? "Create a draft to start writing in the workspace."
+                        : "Cria um rascunho para começar a escrever na workspace."}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={createNewArticle}
+                      className="mt-5 rounded-full border border-[var(--accent)] bg-[var(--accent)] px-5 py-3 text-sm font-semibold text-[#041016] transition-transform hover:-translate-y-0.5"
+                    >
+                      {isEnglish ? "New article" : "Novo artigo"}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           ) : null}
 
@@ -2004,61 +2347,208 @@ export default function Home() {
                         {isEnglish ? "Account" : "Conta"}
                       </p>
                       <h2 className="mt-2 text-xl font-semibold text-white">
-                        {isEnglish ? "Local session for now" : "Sessão local por agora"}
+                        {isEnglish ? "Supabase account" : "Conta Supabase"}
                       </h2>
                       <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
                         {isEnglish
-                          ? "The current workspace runs locally. This area is ready for external auth and database-backed sync."
-                          : "A workspace atual corre localmente. Esta zona fica preparada para autenticação externa e sincronização com base de dados."}
+                          ? "Sign in to prepare cloud workspaces backed by the Supabase database."
+                          : "Inicia sessão para preparar workspaces cloud guardadas na base de dados Supabase."}
                       </p>
                     </div>
 
+                    {!supabase ? (
+                      <div className="rounded-[20px] border border-red-300/30 bg-red-500/10 p-4 text-sm leading-6 text-red-100">
+                        {isEnglish
+                          ? "Supabase is not configured. Check NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY in .env.local."
+                          : "O Supabase não está configurado. Confirma NEXT_PUBLIC_SUPABASE_URL e NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY no .env.local."}
+                      </div>
+                    ) : null}
+
                     <div className="grid gap-3 md:grid-cols-2">
-                      <div className="rounded-[20px] border border-[var(--border)] bg-black/15 p-4">
+                      <section className="rounded-[20px] border border-[var(--border)] bg-black/15 p-4">
                         <p className="text-xs uppercase tracking-[0.22em] text-[var(--muted)]">
                           {isEnglish ? "Current session" : "Sessão atual"}
                         </p>
-                        <p className="mt-2 text-base font-semibold text-white">
-                          {isEnglish ? "Local workspace" : "Workspace local"}
-                        </p>
-                        <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-                          {isEnglish
-                            ? "No account is connected yet."
-                            : "Ainda não há conta ligada."}
-                        </p>
-                      </div>
 
-                      <div className="rounded-[20px] border border-[var(--border)] bg-black/15 p-4">
+                        {isAuthLoading ? (
+                          <p className="mt-3 text-sm leading-6 text-[var(--muted)]">
+                            {isEnglish ? "Checking session..." : "A confirmar sessão..."}
+                          </p>
+                        ) : authUser ? (
+                          <div className="mt-3 space-y-3">
+                            <div>
+                              <p className="text-base font-semibold text-white">
+                                {authUser.email ?? (isEnglish ? "Connected account" : "Conta ligada")}
+                              </p>
+                              <p className="mt-1 truncate text-xs text-[var(--muted)]">{authUser.id}</p>
+                            </div>
+
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                disabled={isAuthSubmitting}
+                                onClick={() => {
+                                  void syncAccountWorkspace(authUser);
+                                }}
+                                className="rounded-full border border-[var(--border)] bg-white/5 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                {isEnglish ? "Refresh workspace" : "Atualizar workspace"}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isAuthSubmitting}
+                                onClick={() => {
+                                  void handleSignOut();
+                                }}
+                                className="rounded-full border border-red-300/30 bg-red-500/15 px-4 py-2 text-xs font-semibold text-red-100 transition-colors hover:bg-red-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                {isAuthSubmitting
+                                  ? isEnglish
+                                    ? "Signing out..."
+                                    : "A sair..."
+                                  : isEnglish
+                                    ? "Sign out"
+                                    : "Terminar sessão"}
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <form className="mt-3 space-y-3" onSubmit={handleAuthSubmit}>
+                            <div className="grid grid-cols-2 gap-2">
+                              {(["sign-in", "sign-up"] as const).map((mode) => {
+                                const isActiveMode = authMode === mode;
+
+                                return (
+                                  <button
+                                    key={mode}
+                                    type="button"
+                                    onClick={() => {
+                                      setAuthMode(mode);
+                                      setAuthError(null);
+                                      setAuthStatus(null);
+                                    }}
+                                    className={`rounded-full border px-3 py-2 text-xs font-semibold transition-colors ${
+                                      isActiveMode
+                                        ? "border-[var(--accent)] bg-[rgba(142,231,255,0.14)] text-white"
+                                        : "border-[var(--border)] bg-white/5 text-[var(--muted)] hover:bg-white/10 hover:text-white"
+                                    }`}
+                                  >
+                                    {mode === "sign-in"
+                                      ? isEnglish
+                                        ? "Sign in"
+                                        : "Entrar"
+                                      : isEnglish
+                                        ? "Create account"
+                                        : "Criar conta"}
+                                  </button>
+                                );
+                              })}
+                            </div>
+
+                            <label className="block">
+                              <span className="text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
+                                Email
+                              </span>
+                              <input
+                                type="email"
+                                value={authEmail}
+                                onChange={(event) => setAuthEmail(event.target.value)}
+                                required
+                                placeholder={isEnglish ? "you@example.com" : "tu@example.com"}
+                                className="mt-2 w-full rounded-[16px] border border-[var(--border)] bg-black/20 px-4 py-3 text-sm text-white outline-none transition-colors placeholder:text-white/35 focus:border-[var(--accent)]"
+                              />
+                            </label>
+
+                            <label className="block">
+                              <span className="text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
+                                {isEnglish ? "Password" : "Password"}
+                              </span>
+                              <input
+                                type="password"
+                                value={authPassword}
+                                onChange={(event) => setAuthPassword(event.target.value)}
+                                required
+                                minLength={6}
+                                placeholder={isEnglish ? "At least 6 characters" : "Pelo menos 6 caracteres"}
+                                className="mt-2 w-full rounded-[16px] border border-[var(--border)] bg-black/20 px-4 py-3 text-sm text-white outline-none transition-colors placeholder:text-white/35 focus:border-[var(--accent)]"
+                              />
+                            </label>
+
+                            <button
+                              type="submit"
+                              disabled={isAuthSubmitting || !supabase}
+                              className="w-full rounded-full border border-[var(--accent)] bg-[var(--accent)] px-4 py-3 text-sm font-semibold text-[#041016] transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {isAuthSubmitting
+                                ? isEnglish
+                                  ? "Working..."
+                                  : "A processar..."
+                                : authMode === "sign-in"
+                                  ? isEnglish
+                                    ? "Sign in"
+                                    : "Entrar"
+                                  : isEnglish
+                                    ? "Create account"
+                                    : "Criar conta"}
+                            </button>
+                          </form>
+                        )}
+                      </section>
+
+                      <section className="rounded-[20px] border border-[var(--border)] bg-black/15 p-4">
                         <p className="text-xs uppercase tracking-[0.22em] text-[var(--muted)]">
-                          {isEnglish ? "Future backend" : "Backend futuro"}
+                          {isEnglish ? "Cloud workspace" : "Workspace cloud"}
                         </p>
                         <p className="mt-2 text-base font-semibold text-white">
-                          {isEnglish ? "External database sync" : "Sincronização com base de dados externa"}
+                          {accountWorkspace?.name ?? "PaperGraph"}
                         </p>
                         <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-                          {isEnglish
-                            ? "Later, articles, assets and relations can be scoped by account/workspace id."
-                            : "Mais tarde, artigos, ficheiros e relações podem ficar associados a um user/workspace id."}
+                          {accountWorkspace
+                            ? isEnglish
+                              ? `Connected as ${accountWorkspace.role}.`
+                              : `Ligada como ${accountWorkspace.role}.`
+                            : authUser
+                              ? isEnglish
+                                ? "The account is connected. The cloud workspace will appear here after bootstrap."
+                                : "A conta está ligada. A workspace cloud aparece aqui depois do bootstrap."
+                              : isEnglish
+                                ? "Sign in to create or load your cloud workspace."
+                                : "Inicia sessão para criar ou carregar a tua workspace cloud."}
                         </p>
-                      </div>
+
+                        {accountWorkspace ? (
+                          <div className="mt-4 space-y-2 text-xs text-[var(--muted)]">
+                            <p>
+                              <span className="font-semibold text-white">ID:</span> {accountWorkspace.id}
+                            </p>
+                            <p>
+                              <span className="font-semibold text-white">
+                                {isEnglish ? "Language" : "Idioma"}:
+                              </span>{" "}
+                              {accountWorkspace.language.toUpperCase()}
+                            </p>
+                          </div>
+                        ) : null}
+                      </section>
                     </div>
 
-                    <div className="flex flex-wrap gap-3">
-                      <button
-                        type="button"
-                        disabled
-                        className="rounded-full border border-[var(--border)] bg-white/5 px-4 py-3 text-sm font-semibold text-white opacity-50"
-                      >
-                        {isEnglish ? "Switch account soon" : "Trocar conta em breve"}
-                      </button>
-                      <button
-                        type="button"
-                        disabled
-                        className="rounded-full border border-[var(--accent)] bg-[rgba(142,231,255,0.14)] px-4 py-3 text-sm font-semibold text-[var(--accent)] opacity-50"
-                      >
-                        {isEnglish ? "Connect backend soon" : "Ligar backend em breve"}
-                      </button>
-                    </div>
+                    {authStatus ? (
+                      <p className="rounded-[18px] border border-[rgba(142,231,255,0.25)] bg-[rgba(142,231,255,0.08)] px-4 py-3 text-sm leading-6 text-[var(--accent)]">
+                        {authStatus}
+                      </p>
+                    ) : null}
+
+                    {authError ? (
+                      <p className="rounded-[18px] border border-red-300/30 bg-red-500/10 px-4 py-3 text-sm leading-6 text-red-100">
+                        {authError}
+                      </p>
+                    ) : null}
+
+                    <p className="rounded-[18px] border border-[var(--border)] bg-white/[0.03] px-4 py-3 text-sm leading-6 text-[var(--muted)]">
+                      {isEnglish
+                        ? "When this account is connected, articles, relations, graph layout and uploaded files are synced to Supabase. Files are also mirrored locally for compilation."
+                        : "Quando esta conta está ligada, artigos, relações, layout do mapa e ficheiros carregados sincronizam com o Supabase. Os ficheiros também ficam espelhados localmente para a compilação."}
+                    </p>
                   </div>
                 ) : null}
 

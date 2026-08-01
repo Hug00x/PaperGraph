@@ -4,6 +4,8 @@ import { type ChangeEvent, useCallback, useEffect, useRef, useState } from "reac
 import Image from "next/image";
 import deleteButtonImage from "@/imagens/Delete_button.png";
 import { getArticleStatusLabel, type AppLanguage } from "@/lib/portuguese-labels";
+import { getSupabaseBrowserClient } from "@/lib/supabase-client";
+import { uploadWorkspaceAssetToSupabase } from "@/lib/supabase-storage";
 import type { WorkspaceArticle, WorkspaceImageAsset } from "@/lib/workspace-data";
 
 type EditorPaneProps = {
@@ -17,6 +19,7 @@ type EditorPaneProps = {
   onImageUploaded: (imageAsset: WorkspaceImageAsset) => void;
   onImageDeleted: (imageAsset: WorkspaceImageAsset) => void | Promise<void>;
   language: AppLanguage;
+  authAccessToken?: string | null;
 };
 
 const latexImageDirectory = "papergraph-images";
@@ -38,7 +41,9 @@ function escapeLatexText(value: string) {
 }
 
 function getImageUrl(imageAsset: WorkspaceImageAsset) {
-  return `/api/images/${encodeURIComponent(imageAsset.storedName)}`;
+  const storagePath = imageAsset.storagePath ?? imageAsset.storedName;
+
+  return `/api/images/${encodeURIComponent(imageAsset.storedName)}?path=${encodeURIComponent(storagePath)}`;
 }
 
 function isPdfAsset(imageAsset: WorkspaceImageAsset) {
@@ -120,6 +125,7 @@ export function EditorPane({
   onImageUploaded,
   onImageDeleted,
   language,
+  authAccessToken,
 }: EditorPaneProps) {
   const [title, setTitle] = useState(article.title);
   const [source, setSource] = useState(article.source);
@@ -199,8 +205,14 @@ export function EditorPane({
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...(authAccessToken ? { Authorization: `Bearer ${authAccessToken}` } : {}),
         },
-        body: JSON.stringify({ articleId: article.id, title: documentTitle, source: documentSource }),
+        body: JSON.stringify({
+          articleId: article.id,
+          imageAssets,
+          title: documentTitle,
+          source: documentSource,
+        }),
       });
 
       if (!response.ok) {
@@ -219,7 +231,7 @@ export function EditorPane({
       setCompileState("error");
       setCompileError((error as Error).message);
     }
-  }, [article.id, isEnglish]);
+  }, [article.id, authAccessToken, imageAssets, isEnglish]);
 
   useEffect(() => {
     if (autoCompileStartedRef.current) {
@@ -427,7 +439,22 @@ export function EditorPane({
         throw new Error(payload?.error ?? (isEnglish ? "Could not upload the file." : "Não foi possível carregar o ficheiro."));
       }
 
-      const imageAsset = (await response.json()) as WorkspaceImageAsset;
+      let imageAsset = (await response.json()) as WorkspaceImageAsset;
+
+      if (authAccessToken) {
+        const supabase = getSupabaseBrowserClient();
+        const { data: sessionData, error: sessionError } = supabase
+          ? await supabase.auth.getSession()
+          : { data: { session: null }, error: null };
+        const userId = sessionData.session?.user.id;
+
+        if (sessionError || !supabase || !userId) {
+          throw new Error(sessionError?.message ?? (isEnglish ? "Could not validate the session." : "Não foi possível validar a sessão."));
+        }
+
+        imageAsset = await uploadWorkspaceAssetToSupabase(supabase, userId, imageAsset, uploadedFile);
+      }
+
       onImageUploaded(imageAsset);
       insertImageSnippet(imageAsset);
     } catch (error) {
@@ -511,7 +538,7 @@ export function EditorPane({
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/png,image/jpeg,application/pdf,.pdf"
+            accept="image/png,image/jpeg,image/webp,application/pdf,.pdf"
             className="hidden"
             onChange={handleImageUploadChange}
           />

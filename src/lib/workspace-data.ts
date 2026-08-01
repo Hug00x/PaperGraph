@@ -39,6 +39,7 @@ export type WorkspaceImageAsset = {
   articleId?: string;
   originalName: string;
   storedName: string;
+  storagePath?: string;
   mimeType: string;
   size: number;
   uploadedAt: string;
@@ -76,81 +77,13 @@ export type WorkspaceSnapshot = {
   imageAssets: WorkspaceImageAsset[];
 };
 
-export const articles: WorkspaceArticle[] = [
-  {
-    id: "art-001",
-    title: "Extração de tópicos baseada em grafos em bibliotecas de investigação",
-    author: "Ana Ribeiro",
-    status: "Published",
-    updatedAt: "2m ago",
-    tags: ["grafo", "PNL", "metadados"],
-    source: [
-      "\\documentclass[12pt]{article}",
-      "\\usepackage{amsmath, amssymb}",
-      "\\begin{document}",
-      "\\section{Extração de tópicos baseada em grafos em bibliotecas de investigação}",
-      "Este rascunho liga citações, tópicos e notas numa única área de trabalho.",
-      "\\begin{equation}",
-      "G = (V, E)",
-      "\\end{equation}",
-      "\\end{document}",
-    ].join("\n"),
-  },
-  {
-    id: "art-002",
-    title: "Fluxos LaTeX para equipas académicas distribuídas",
-    author: "Miguel Costa",
-    status: "Review",
-    updatedAt: "18m ago",
-    tags: ["latex", "colaboração", "fluxo"],
-    source: [
-      "\\documentclass[12pt]{article}",
-      "\\usepackage{amsmath, amssymb}",
-      "\\begin{document}",
-      "\\section{Fluxos LaTeX para equipas académicas distribuídas}",
-      "Este rascunho liga citações, tópicos e notas numa única área de trabalho.",
-      "\\begin{equation}",
-      "G = (V, E)",
-      "\\end{equation}",
-      "\\end{document}",
-    ].join("\n"),
-  },
-  {
-    id: "art-003",
-    title: "Ligação semântica entre notas científicas",
-    author: "PaperGraph",
-    status: "Draft",
-    updatedAt: "1h ago",
-    tags: ["semântica", "grafo de conhecimento", "ligações"],
-    source: [
-      "\\documentclass[12pt]{article}",
-      "\\usepackage{amsmath, amssymb}",
-      "\\begin{document}",
-      "\\section{Ligação semântica entre notas científicas}",
-      "Este rascunho liga citações, tópicos e notas numa única área de trabalho.",
-      "\\begin{equation}",
-      "G = (V, E)",
-      "\\end{equation}",
-      "\\end{document}",
-    ].join("\n"),
-  },
-];
+export const articles: WorkspaceArticle[] = [];
 
-export const graphNodes: GraphNode[] = [
-  { id: "n1", label: "LaTeX", type: "Formato", weight: 9 },
-  { id: "n2", label: "PNL", type: "Tópico", weight: 7 },
-  { id: "n3", label: "Citações", type: "Ligação", weight: 6 },
-  { id: "n4", label: "Grafo de conhecimento", type: "Grupo", weight: 10 },
-  { id: "n5", label: "Notas de investigação", type: "Nó", weight: 5 },
-];
+export const graphNodes: GraphNode[] = [];
 
-export const workspaceTags = ["LaTeX", "grafos", "citações", "pesquisa semântica", "sincronização"];
+export const workspaceTags: string[] = [];
 
-export const articlePositions: Record<string, ArticlePosition> = {
-  "art-001": { x: 24, y: 30 },
-  "art-002": { x: 44, y: 18 },
-  "art-003": { x: 66, y: 28 },
-};
+export const articlePositions: Record<string, ArticlePosition> = {};
 
 export function createInitialActivityFeed(workspaceArticles: WorkspaceArticle[], relations: WorkspaceRelation[] = []): ActivityItem[] {
   const manualRelations = relations.filter((relation) => relation.relationType === "manual");
@@ -217,14 +150,14 @@ export function createInitialAppStats(
 }
 
 export const defaultSnapshot: WorkspaceSnapshot = {
-  selectedArticleId: articles[0].id,
+  selectedArticleId: "",
   articles,
   relations: [],
   articlePositions,
   graphNodes,
   workspaceTags,
   activityFeed: createInitialActivityFeed(articles, []),
-  appStats: createInitialAppStats(articles, [], articles[0]),
+  appStats: createInitialAppStats(articles, [], undefined),
   ignoredUnlinkedMentionKeys: [],
   imageAssets: [],
 };

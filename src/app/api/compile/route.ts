@@ -5,11 +5,13 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import { NextResponse } from "next/server";
+import { getSupabaseServerStorageClient } from "@/lib/supabase-client";
 
 export const runtime = "nodejs";
 
 const execFileAsync = promisify(execFile);
 const imageDirectoryName = "papergraph-images";
+const storageBucket = "papergraph-assets";
 const missingImageFileName = "papergraph-missing-image.png";
 const uploadedImagesDirectory = join(process.cwd(), "data", "images");
 const placeholderImagePath = join(process.cwd(), "public", "papergraph-icon.png");
@@ -17,6 +19,7 @@ const workspacePath = join(process.cwd(), "data", "workspace.json");
 
 type CompileRequestBody = {
   articleId?: string;
+  imageAssets?: WorkspaceImageAsset[];
   title?: string;
   source?: string;
 };
@@ -25,6 +28,7 @@ type WorkspaceImageAsset = {
   articleId?: string;
   originalName: string;
   storedName: string;
+  storagePath?: string;
 };
 
 function resolveTectonicPath() {
@@ -72,6 +76,17 @@ function getSafeFileName(value: string) {
   const safeName = basename(value).replace(/[<>:"/\\|?*\x00-\x1f]/g, "-").trim();
 
   return safeName || null;
+}
+
+function getBearerToken(request: Request) {
+  const authorizationHeader = request.headers.get("authorization") ?? "";
+  const [scheme, token] = authorizationHeader.split(" ");
+
+  if (scheme.toLowerCase() !== "bearer" || !token) {
+    return undefined;
+  }
+
+  return token;
 }
 
 function resolveCompileImagePath(compileDirectory: string, imagePath: string) {
@@ -138,7 +153,11 @@ function rewriteMissingPdfIncludes(source: string, compileDirectory: string) {
   );
 }
 
-async function readWorkspaceImageAssets() {
+async function readWorkspaceImageAssets(requestImageAssets?: WorkspaceImageAsset[]) {
+  if (requestImageAssets) {
+    return requestImageAssets;
+  }
+
   try {
     const workspace = JSON.parse(await readFile(workspacePath, "utf8")) as {
       imageAssets?: WorkspaceImageAsset[];
@@ -150,7 +169,37 @@ async function readWorkspaceImageAssets() {
   }
 }
 
-async function copyUploadedImagesToCompileDirectory(compileDirectory: string, articleId?: string) {
+async function downloadStorageAssetToLocalFile(imageAsset: WorkspaceImageAsset, localFilePath: string, accessToken?: string) {
+  const storagePath = imageAsset.storagePath;
+
+  if (!storagePath) {
+    return false;
+  }
+
+  const supabase = getSupabaseServerStorageClient(accessToken);
+
+  if (!supabase) {
+    return false;
+  }
+
+  const { data, error } = await supabase.storage.from(storageBucket).download(storagePath);
+
+  if (error || !data) {
+    return false;
+  }
+
+  await mkdir(uploadedImagesDirectory, { recursive: true });
+  await writeFile(localFilePath, Buffer.from(await data.arrayBuffer()));
+
+  return true;
+}
+
+async function copyUploadedImagesToCompileDirectory(
+  compileDirectory: string,
+  articleId?: string,
+  accessToken?: string,
+  requestImageAssets?: WorkspaceImageAsset[],
+) {
   const compileImageDirectory = join(compileDirectory, imageDirectoryName);
 
   await mkdir(compileImageDirectory, { recursive: true });
@@ -162,7 +211,7 @@ async function copyUploadedImagesToCompileDirectory(compileDirectory: string, ar
     });
   }
 
-  const imageAssets = (await readWorkspaceImageAssets()).filter(
+  const imageAssets = (await readWorkspaceImageAssets(requestImageAssets)).filter(
     (imageAsset) => !articleId || !imageAsset.articleId || imageAsset.articleId === articleId,
   );
 
@@ -178,10 +227,15 @@ async function copyUploadedImagesToCompileDirectory(compileDirectory: string, ar
       const uploadedImagePath = join(uploadedImagesDirectory, storedName);
 
       if (!existsSync(uploadedImagePath)) {
-        return;
+        const wasDownloaded = await downloadStorageAssetToLocalFile(imageAsset, uploadedImagePath, accessToken);
+
+        if (!wasDownloaded) {
+          return;
+        }
       }
 
       await Promise.all([
+        cp(uploadedImagePath, join(compileImageDirectory, storedName), { force: true }),
         cp(uploadedImagePath, join(compileDirectory, originalName), { force: true }),
         cp(uploadedImagePath, join(compileImageDirectory, originalName), { force: true }),
       ]);
@@ -198,13 +252,19 @@ async function writeMissingImagePlaceholder(compileDirectory: string) {
   return true;
 }
 
-async function compileLatexToPdf(source: string, tectonicPath: string, articleId?: string) {
+async function compileLatexToPdf(
+  source: string,
+  tectonicPath: string,
+  articleId?: string,
+  accessToken?: string,
+  requestImageAssets?: WorkspaceImageAsset[],
+) {
   const compileDirectory = await mkdtemp(join(tmpdir(), "papergraph-latex-"));
   const texPath = join(compileDirectory, "article.tex");
   const pdfPath = join(compileDirectory, "article.pdf");
 
   try {
-    await copyUploadedImagesToCompileDirectory(compileDirectory, articleId);
+    await copyUploadedImagesToCompileDirectory(compileDirectory, articleId, accessToken, requestImageAssets);
     const hasMissingImagePlaceholder = await writeMissingImagePlaceholder(compileDirectory);
     const sourceWithImagePlaceholders = rewriteMissingImageReferences(
       source,
@@ -239,6 +299,7 @@ export async function POST(request: Request) {
     const body = (await request.json()) as CompileRequestBody;
     const articleId = body.articleId?.trim();
     const source = body.source?.trim();
+    const accessToken = getBearerToken(request);
 
     if (!source) {
       return NextResponse.json({ error: "Falta o código LaTeX." }, { status: 400 });
@@ -255,7 +316,13 @@ export async function POST(request: Request) {
       );
     }
 
-    const pdfBuffer = await compileLatexToPdf(createLatexSourceForCompile(source), tectonicPath, articleId);
+    const pdfBuffer = await compileLatexToPdf(
+      createLatexSourceForCompile(source),
+      tectonicPath,
+      articleId,
+      accessToken,
+      body.imageAssets,
+    );
 
     return new NextResponse(new Uint8Array(pdfBuffer), {
       status: 200,
