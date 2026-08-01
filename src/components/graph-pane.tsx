@@ -1,0 +1,1387 @@
+"use client";
+
+import { type ChangeEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  getArticleStatusLabel,
+  getArticleTagLabel,
+  getRelationNoteLabel,
+  type AppLanguage,
+} from "@/lib/portuguese-labels";
+import type { Article, ArticlePosition, UnlinkedMention, WorkspaceRelation } from "@/lib/workspace-data";
+
+type GraphPaneProps = {
+  activeArticle: Article | null;
+  articles: Article[];
+  language: AppLanguage;
+  relations: WorkspaceRelation[];
+  unlinkedMentions: UnlinkedMention[];
+  articlePositions: Record<string, ArticlePosition>;
+  onSelectArticle: (articleId: string | null) => void;
+  onArticlePositionsChange: (positions: Record<string, ArticlePosition>) => void;
+  onCreateRelation: (fromArticleId: string, toArticleId: string) => void;
+  onRemoveRelation: (
+    fromArticleId: string,
+    toArticleId: string,
+    relationType: WorkspaceRelation["relationType"],
+  ) => void;
+  onCreateWikilinkFromMention: (mentionId: string) => void;
+  onIgnoreUnlinkedMention: (mentionId: string) => void;
+  onEditArticle: (articleId: string) => void;
+  onExportArticlePdf: (articleId: string) => void | Promise<void>;
+  onImportPdfArticle: (file: File) => void | Promise<void>;
+  onDeleteArticle: (articleId: string) => void | Promise<void>;
+};
+
+type ArticleRelationEntry = {
+  relation: WorkspaceRelation;
+  article: Article;
+};
+
+function clamp(value: number, minimum: number, maximum: number) {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function relationPairKey(fromArticleId: string, toArticleId: string) {
+  return [fromArticleId, toArticleId].sort().join("::");
+}
+
+function defaultArticlePosition(articleIndex: number) {
+  const angle = (articleIndex / 8) * Math.PI * 2;
+  const radius = 28;
+
+  return {
+    x: clamp(50 + Math.cos(angle) * radius, 8, 92),
+    y: clamp(50 + Math.sin(angle) * radius, 8, 92),
+  };
+}
+
+function getArticleInitials(title: string) {
+  const words = title
+    .replace(/[^a-zA-Z0-9À-ÿ\s]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+
+  return words
+    .slice(0, 2)
+    .map((word) => word[0])
+    .join("")
+    .toUpperCase() || "PG";
+}
+
+function getRelationTypeLabel(relationType: WorkspaceRelation["relationType"], language: AppLanguage) {
+  switch (relationType) {
+    case "manual":
+      return "Manual";
+    case "explicit":
+      return "Wikilink";
+    case "auto":
+      return language === "en" ? "Automatic" : "Automática";
+    case "suggested":
+      return language === "en" ? "Suggestion" : "Sugestão";
+  }
+}
+
+function getRelationBadgeClass(relationType: WorkspaceRelation["relationType"]) {
+  if (relationType === "manual") {
+    return "border-[rgba(142,231,255,0.5)] bg-[rgba(142,231,255,0.16)] text-[var(--accent)]";
+  }
+
+  if (relationType === "explicit") {
+    return "border-white/20 bg-white/10 text-white/80";
+  }
+
+  return "border-amber-200/25 bg-amber-300/10 text-amber-100";
+}
+
+function isImportedPdfArticle(article: Article) {
+  const normalizedTags = article.tags.map((tag) => tag.toLowerCase());
+
+  return normalizedTags.includes("pdf") && (normalizedTags.includes("importado") || normalizedTags.includes("imported"));
+}
+
+export function GraphPane({
+  activeArticle,
+  articles,
+  language,
+  relations,
+  unlinkedMentions,
+  articlePositions,
+  onSelectArticle,
+  onArticlePositionsChange,
+  onCreateRelation,
+  onRemoveRelation,
+  onCreateWikilinkFromMention,
+  onIgnoreUnlinkedMention,
+  onEditArticle,
+  onExportArticlePdf,
+  onImportPdfArticle,
+  onDeleteArticle,
+}: GraphPaneProps) {
+  const isEnglish = language === "en";
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const pdfImportInputRef = useRef<HTMLInputElement | null>(null);
+  const [draftPositions, setDraftPositions] = useState<Record<string, ArticlePosition> | null>(null);
+  const [draggingArticleId, setDraggingArticleId] = useState<string | null>(null);
+  const [viewport, setViewport] = useState({ x: 0, y: 0, scale: 1 });
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const [manualConnectionSourceId, setManualConnectionSourceId] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ articleId: string; x: number; y: number } | null>(null);
+  const [librarySearch, setLibrarySearch] = useState("");
+  const [isImportingPdf, setIsImportingPdf] = useState(false);
+  const [importPdfError, setImportPdfError] = useState<string | null>(null);
+  const [deleteCandidateArticleId, setDeleteCandidateArticleId] = useState<string | null>(null);
+  const [isDeletingArticle, setIsDeletingArticle] = useState(false);
+  const [deleteArticleError, setDeleteArticleError] = useState<string | null>(null);
+  const positionsRef = useRef(articlePositions);
+  const viewportRef = useRef(viewport);
+  const hasAutoCenteredRef = useRef(false);
+  const onArticlePositionsChangeRef = useRef(onArticlePositionsChange);
+  const panStartRef = useRef<{ clientX: number; clientY: number; x: number; y: number } | null>(null);
+  const dragStartRef = useRef<{ clientX: number; clientY: number; started: boolean } | null>(null);
+  const viewportAnimationRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    positionsRef.current = articlePositions;
+  }, [articlePositions]);
+
+  useEffect(() => {
+    viewportRef.current = viewport;
+  }, [viewport]);
+
+  useEffect(() => {
+    onArticlePositionsChangeRef.current = onArticlePositionsChange;
+  }, [onArticlePositionsChange]);
+
+  const worldSize = 3000;
+
+  const stopViewportAnimation = useCallback(() => {
+    if (viewportAnimationRef.current === null) {
+      return;
+    }
+
+    window.cancelAnimationFrame(viewportAnimationRef.current);
+    viewportAnimationRef.current = null;
+  }, []);
+
+  const animateViewportTo = useCallback((targetViewport: { x: number; y: number; scale: number }) => {
+    stopViewportAnimation();
+
+    const startViewport = viewportRef.current;
+    const startedAt = performance.now();
+    const durationMs = 680;
+
+    const animate = (timestamp: number) => {
+      const progress = clamp((timestamp - startedAt) / durationMs, 0, 1);
+      const easedProgress = 1 - Math.pow(1 - progress, 3);
+      const nextViewport = {
+        x: startViewport.x + (targetViewport.x - startViewport.x) * easedProgress,
+        y: startViewport.y + (targetViewport.y - startViewport.y) * easedProgress,
+        scale: startViewport.scale + (targetViewport.scale - startViewport.scale) * easedProgress,
+      };
+
+      viewportRef.current = nextViewport;
+      setViewport(nextViewport);
+
+      if (progress < 1) {
+        viewportAnimationRef.current = window.requestAnimationFrame(animate);
+        return;
+      }
+
+      viewportAnimationRef.current = null;
+    };
+
+    viewportAnimationRef.current = window.requestAnimationFrame(animate);
+  }, [stopViewportAnimation]);
+
+  useEffect(() => stopViewportAnimation, [stopViewportAnimation]);
+
+  const displayedPositions = useMemo(() => {
+    const nextPositions: Record<string, ArticlePosition> = {
+      ...(draftPositions ?? articlePositions),
+    };
+
+    articles.forEach((article, index) => {
+      if (!nextPositions[article.id]) {
+        nextPositions[article.id] = defaultArticlePosition(index);
+      }
+    });
+
+    return nextPositions;
+  }, [articlePositions, articles, draftPositions]);
+
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+
+    if (!container) {
+      return undefined;
+    }
+
+    const updateContainerSize = () => {
+      setContainerSize({
+        width: container.clientWidth,
+        height: container.clientHeight,
+      });
+    };
+
+    updateContainerSize();
+
+    const observer = new ResizeObserver(updateContainerSize);
+    observer.observe(container);
+
+    return () => observer.disconnect();
+  }, []);
+
+  const centerViewportOnNodes = useCallback((positions: Record<string, ArticlePosition>) => {
+    const container = containerRef.current;
+    const containerBounds = container?.getBoundingClientRect();
+    const entries = articles
+      .map((article) => positions[article.id])
+      .filter((position): position is ArticlePosition => Boolean(position))
+      .map((position) => ({
+        x: (position.x / 100) * worldSize,
+        y: (position.y / 100) * worldSize,
+      }));
+
+    if (entries.length === 0) {
+      return { x: 0, y: 0, scale: 1 };
+    }
+
+    const minX = Math.min(...entries.map((position) => position.x));
+    const maxX = Math.max(...entries.map((position) => position.x));
+    const minY = Math.min(...entries.map((position) => position.y));
+    const maxY = Math.max(...entries.map((position) => position.y));
+    const graphWidth = Math.max(maxX - minX, 520);
+    const graphHeight = Math.max(maxY - minY, 360);
+    const availableWidth = Math.max((containerBounds?.width ?? 960) - 560, 420);
+    const availableHeight = Math.max((containerBounds?.height ?? 640) - 260, 360);
+    const nextScale = clamp(
+      Math.min(availableWidth / graphWidth, availableHeight / graphHeight, 1),
+      0.16,
+      1,
+    );
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
+    const inspectorOffset = (containerBounds?.width ?? 0) > 960 ? 120 : 0;
+
+    return {
+      x: -(centerX - worldSize / 2) * nextScale + inspectorOffset,
+      y: -(centerY - worldSize / 2) * nextScale,
+      scale: nextScale,
+    };
+  }, [articles, worldSize]);
+
+  const centerViewportOnArticle = useCallback((articleId: string) => {
+    const position = displayedPositions[articleId];
+
+    if (!position) {
+      return;
+    }
+
+    const worldX = (position.x / 100) * worldSize;
+    const worldY = (position.y / 100) * worldSize;
+    const currentViewport = viewportRef.current;
+
+    animateViewportTo({
+      ...currentViewport,
+      x: -(worldX - worldSize / 2) * currentViewport.scale,
+      y: -(worldY - worldSize / 2) * currentViewport.scale,
+    });
+  }, [animateViewportTo, displayedPositions, worldSize]);
+
+  useLayoutEffect(() => {
+    if (hasAutoCenteredRef.current) {
+      return;
+    }
+
+    if (articles.length === 0) {
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      setViewport(centerViewportOnNodes(displayedPositions));
+      hasAutoCenteredRef.current = true;
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [articles.length, centerViewportOnNodes, displayedPositions]);
+
+  const manualConnectionSource = articles.find((article) => article.id === manualConnectionSourceId) ?? null;
+  const activeManualConnectionSourceId = manualConnectionSource?.id ?? null;
+  const articleById = useMemo(
+    () => new Map(articles.map((article) => [article.id, article])),
+    [articles],
+  );
+  const filteredLibraryArticles = useMemo(() => {
+    const normalizedSearch = librarySearch.trim().toLowerCase();
+
+    return articles.filter((article) => {
+      const matchesSearch =
+        normalizedSearch.length === 0 ||
+        [article.title, article.author, article.status, getArticleStatusLabel(article.status, language), ...article.tags]
+          .join(" ")
+          .toLowerCase()
+          .includes(normalizedSearch);
+
+      return matchesSearch;
+    });
+  }, [articles, language, librarySearch]);
+  const activeOutgoingRelations = useMemo(
+    () => {
+      if (!activeArticle) {
+        return [];
+      }
+
+      return relations
+        .filter((relation) => relation.fromArticleId === activeArticle.id)
+        .map((relation) => ({
+          relation,
+          article: articleById.get(relation.toArticleId),
+        }))
+        .filter(
+          (entry): entry is ArticleRelationEntry =>
+            Boolean(entry.article),
+        );
+    },
+    [activeArticle, articleById, relations],
+  );
+  const activeIncomingRelations = useMemo(
+    () => {
+      if (!activeArticle) {
+        return [];
+      }
+
+      return relations
+        .filter(
+          (relation) =>
+            relation.toArticleId === activeArticle.id &&
+            relation.fromArticleId !== activeArticle.id,
+        )
+        .map((relation) => ({
+          relation,
+          article: articleById.get(relation.fromArticleId),
+        }))
+        .filter(
+          (entry): entry is ArticleRelationEntry =>
+            Boolean(entry.article),
+        );
+    },
+    [activeArticle, articleById, relations],
+  );
+  const activeRelationCount = activeIncomingRelations.length + activeOutgoingRelations.length;
+
+  const screenPositions = useMemo(() => {
+    const nextScreenPositions: Record<string, { x: number; y: number }> = {};
+
+    articles.forEach((article) => {
+      const position = displayedPositions[article.id];
+
+      if (!position) {
+        return;
+      }
+
+      nextScreenPositions[article.id] = {
+        x: containerSize.width / 2 + viewport.x + ((position.x / 100) * worldSize - worldSize / 2) * viewport.scale,
+        y: containerSize.height / 2 + viewport.y + ((position.y / 100) * worldSize - worldSize / 2) * viewport.scale,
+      };
+    });
+
+    return nextScreenPositions;
+  }, [articles, containerSize.height, containerSize.width, displayedPositions, viewport, worldSize]);
+
+  const relationEntries = useMemo(
+    () =>
+      relations
+        .map((relation) => {
+          const fromPosition = screenPositions[relation.fromArticleId];
+          const toPosition = screenPositions[relation.toArticleId];
+
+          if (!fromPosition || !toPosition) {
+            return null;
+          }
+
+          return {
+            relation,
+            key: `${relation.id}-${relationPairKey(relation.fromArticleId, relation.toArticleId)}`,
+            fromPosition,
+            toPosition,
+          };
+        })
+        .filter(
+          (
+            entry,
+          ): entry is {
+            relation: WorkspaceRelation;
+            key: string;
+            fromPosition: { x: number; y: number };
+            toPosition: { x: number; y: number };
+          } => Boolean(entry),
+        ),
+    [relations, screenPositions],
+  );
+
+  const contextMenuRemovableRelations = useMemo(() => {
+    if (!contextMenu) {
+      return [];
+    }
+
+    const removableRelations = relations.filter(
+      (relation) => relation.relationType === "manual" || relation.relationType === "explicit",
+    );
+
+    if (activeArticle && contextMenu.articleId !== activeArticle.id) {
+      const contextPairKey = relationPairKey(activeArticle.id, contextMenu.articleId);
+      const activePairRelation = removableRelations.find(
+        (relation) => relationPairKey(relation.fromArticleId, relation.toArticleId) === contextPairKey,
+      );
+
+      return activePairRelation ? [activePairRelation] : [];
+    }
+
+    return removableRelations.filter(
+      (relation) =>
+        relation.fromArticleId === contextMenu.articleId ||
+        relation.toArticleId === contextMenu.articleId,
+    );
+  }, [activeArticle, contextMenu, relations]);
+  const contextMenuArticle = contextMenu ? articleById.get(contextMenu.articleId) ?? null : null;
+  const canEditContextMenuArticle = contextMenuArticle ? !isImportedPdfArticle(contextMenuArticle) : false;
+  const canEditActiveArticle = activeArticle ? !isImportedPdfArticle(activeArticle) : false;
+  const deleteCandidateArticle = deleteCandidateArticleId
+    ? articleById.get(deleteCandidateArticleId) ?? null
+    : null;
+
+  async function confirmArticleDelete() {
+    if (!deleteCandidateArticleId) {
+      return;
+    }
+
+    setIsDeletingArticle(true);
+    setDeleteArticleError(null);
+
+    try {
+      await onDeleteArticle(deleteCandidateArticleId);
+
+      if (manualConnectionSourceId === deleteCandidateArticleId) {
+        setManualConnectionSourceId(null);
+      }
+
+      setDeleteCandidateArticleId(null);
+    } catch (error) {
+      setDeleteArticleError(
+        error instanceof Error
+          ? error.message
+          : isEnglish
+            ? "Could not remove the article."
+            : "Não foi possível remover o artigo.",
+      );
+    } finally {
+      setIsDeletingArticle(false);
+    }
+  }
+
+  function updatePositionFromClientPoint(clientX: number, clientY: number, articleId: string) {
+    const container = containerRef.current;
+
+    if (!container) {
+      return positionsRef.current;
+    }
+
+    const bounds = container.getBoundingClientRect();
+    const centerX = bounds.left + bounds.width / 2;
+    const centerY = bounds.top + bounds.height / 2;
+    const worldX = ((clientX - centerX - viewportRef.current.x) / viewportRef.current.scale) + worldSize / 2;
+    const worldY = ((clientY - centerY - viewportRef.current.y) / viewportRef.current.scale) + worldSize / 2;
+    const nextPosition = {
+      x: clamp((worldX / worldSize) * 100, 2, 98),
+      y: clamp((worldY / worldSize) * 100, 2, 98),
+    };
+
+    const nextPositions = {
+      ...positionsRef.current,
+      [articleId]: nextPosition,
+    };
+
+    positionsRef.current = nextPositions;
+    setDraftPositions(nextPositions);
+
+    return nextPositions;
+  }
+
+  useEffect(() => {
+    const container = containerRef.current;
+
+    if (!container) {
+      return undefined;
+    }
+
+    const handleWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      stopViewportAnimation();
+
+      const bounds = container.getBoundingClientRect();
+      const cursorX = event.clientX - bounds.left - bounds.width / 2;
+      const cursorY = event.clientY - bounds.top - bounds.height / 2;
+      const zoomStep = event.deltaY > 0 ? 0.92 : 1.08;
+      const currentViewport = viewportRef.current;
+      const nextScale = clamp(currentViewport.scale * zoomStep, 0.55, 2.1);
+      const scaleRatio = nextScale / currentViewport.scale;
+      const nextViewport = {
+        x: cursorX - (cursorX - currentViewport.x) * scaleRatio,
+        y: cursorY - (cursorY - currentViewport.y) * scaleRatio,
+        scale: nextScale,
+      };
+
+      viewportRef.current = nextViewport;
+      setViewport(nextViewport);
+    };
+
+    container.addEventListener("wheel", handleWheel, { passive: false });
+
+    return () => {
+      container.removeEventListener("wheel", handleWheel);
+    };
+  }, [stopViewportAnimation]);
+
+  useEffect(() => {
+    if (!draggingArticleId) {
+      return undefined;
+    }
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const dragStart = dragStartRef.current;
+
+      if (dragStart && !dragStart.started) {
+        const distance = Math.hypot(event.clientX - dragStart.clientX, event.clientY - dragStart.clientY);
+
+        if (distance < 6) {
+          return;
+        }
+
+        dragStart.started = true;
+        stopViewportAnimation();
+      }
+
+      updatePositionFromClientPoint(event.clientX, event.clientY, draggingArticleId);
+    };
+
+    const handlePointerUp = (event: PointerEvent) => {
+      const dragStart = dragStartRef.current;
+      const clickedArticleId = draggingArticleId;
+
+      if (!dragStart?.started) {
+        setDraggingArticleId(null);
+        setDraftPositions(null);
+        dragStartRef.current = null;
+
+        if (clickedArticleId) {
+          const nextArticleId = activeArticle?.id === clickedArticleId ? null : clickedArticleId;
+
+          if (nextArticleId === null) {
+            setManualConnectionSourceId(null);
+          }
+
+          onSelectArticle(nextArticleId);
+        }
+
+        return;
+      }
+
+      const nextPositions = updatePositionFromClientPoint(event.clientX, event.clientY, draggingArticleId);
+      setDraggingArticleId(null);
+      setDraftPositions(null);
+      onArticlePositionsChangeRef.current(nextPositions);
+      dragStartRef.current = null;
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [activeArticle?.id, draggingArticleId, onSelectArticle, stopViewportAnimation]);
+
+  useEffect(() => {
+    if (!isPanning) {
+      return undefined;
+    }
+
+    const handlePointerMove = (event: PointerEvent) => {
+      const panStart = panStartRef.current;
+
+      if (!panStart) {
+        return;
+      }
+
+      const deltaX = event.clientX - panStart.clientX;
+      const deltaY = event.clientY - panStart.clientY;
+
+      setViewport({
+        ...viewportRef.current,
+        x: panStart.x + deltaX,
+        y: panStart.y + deltaY,
+      });
+    };
+
+    const handlePointerUp = () => {
+      setIsPanning(false);
+      panStartRef.current = null;
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [isPanning]);
+
+  const renderRelationGroup = (
+    title: string,
+    entries: ArticleRelationEntry[],
+    emptyText: string,
+  ) => (
+    <section className="rounded-[18px] border border-[var(--border)] bg-black/15 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">{title}</h3>
+        <span className="rounded-full border border-[var(--border)] bg-black/20 px-2 py-0.5 text-[10px] text-[var(--muted)]">
+          {entries.length}
+        </span>
+      </div>
+
+      <div className="mt-3 space-y-2">
+        {entries.map(({ relation, article }) => {
+          const isManualRelation = relation.relationType === "manual";
+          const isRemovableRelation = isManualRelation || relation.relationType === "explicit";
+
+          return (
+            <article
+              key={`${title}-${relation.id}-${article.id}`}
+              className="rounded-[14px] border border-white/10 bg-white/[0.04] p-3"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-white">{article.title}</p>
+                  <p className="mt-1 truncate text-xs text-[var(--muted)]">
+                    {getRelationNoteLabel(relation.note, language)}
+                  </p>
+                </div>
+                <span
+                  className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${getRelationBadgeClass(
+                    relation.relationType,
+                  )}`}
+                >
+                  {getRelationTypeLabel(relation.relationType, language)}
+                </span>
+              </div>
+
+              <div className="mt-3 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onSelectArticle(article.id);
+                    centerViewportOnArticle(article.id);
+                  }}
+                  className="flex-1 rounded-full border border-[var(--border)] bg-white/5 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-white/10"
+                >
+                  {isEnglish ? "Focus" : "Focar"}
+                </button>
+
+                {isRemovableRelation ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onRemoveRelation(relation.fromArticleId, relation.toArticleId, relation.relationType)
+                    }
+                    className="flex-1 rounded-full border border-red-300/30 bg-red-500/15 px-3 py-2 text-xs font-semibold text-red-100 transition-colors hover:bg-red-500/25"
+                  >
+                    {isManualRelation
+                      ? isEnglish
+                        ? "Remove"
+                        : "Remover"
+                      : isEnglish
+                        ? "Remove wikilink"
+                        : "Remover wikilink"}
+                  </button>
+                ) : null}
+              </div>
+            </article>
+          );
+        })}
+
+        {entries.length === 0 ? (
+          <p className="rounded-[14px] border border-white/10 bg-white/[0.03] p-3 text-sm leading-6 text-[var(--muted)]">
+            {emptyText}
+          </p>
+        ) : null}
+      </div>
+    </section>
+  );
+
+  const renderUnlinkedMentionGroup = () => {
+    if (unlinkedMentions.length === 0) {
+      return null;
+    }
+
+    return (
+      <section className="rounded-[18px] border border-[rgba(142,231,255,0.28)] bg-[rgba(142,231,255,0.08)] p-3">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
+            {isEnglish ? "Unlinked mentions" : "Menções não ligadas"}
+          </h3>
+          <span className="rounded-full border border-[rgba(142,231,255,0.28)] bg-black/20 px-2 py-0.5 text-[10px] text-[var(--accent)]">
+            {unlinkedMentions.length}
+          </span>
+        </div>
+
+        <div className="mt-3 space-y-2">
+          {unlinkedMentions.map((mention) => (
+            <article
+              key={mention.id}
+              className="rounded-[14px] border border-[rgba(142,231,255,0.18)] bg-black/15 p-3"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-white">{mention.targetTitle}</p>
+                  <p className="mt-1 text-xs leading-5 text-[var(--muted)]">{mention.preview}</p>
+                </div>
+                <span className="shrink-0 rounded-full border border-[rgba(142,231,255,0.3)] bg-[rgba(142,231,255,0.12)] px-2 py-0.5 text-[10px] font-semibold text-[var(--accent)]">
+                  {mention.occurrenceCount}x
+                </span>
+              </div>
+
+              <div className="mt-3 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => onCreateWikilinkFromMention(mention.id)}
+                  className="flex-1 rounded-full border border-[var(--accent)] bg-[var(--accent)] px-3 py-2 text-xs font-semibold text-[#041016] transition-transform hover:-translate-y-0.5"
+                >
+                  {isEnglish ? "Create wikilink" : "Criar wikilink"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onIgnoreUnlinkedMention(mention.id)}
+                  className="flex-1 rounded-full border border-[var(--border)] bg-white/5 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-white/10"
+                >
+                  {isEnglish ? "Ignore" : "Ignorar"}
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+    );
+  };
+
+  async function handlePdfImportChange(event: ChangeEvent<HTMLInputElement>) {
+    const pdfFile = event.target.files?.[0];
+
+    if (!pdfFile) {
+      return;
+    }
+
+    if (pdfFile.type !== "application/pdf" && !pdfFile.name.toLowerCase().endsWith(".pdf")) {
+      setImportPdfError(isEnglish ? "Choose a PDF file." : "Escolhe um ficheiro PDF.");
+      event.target.value = "";
+      return;
+    }
+
+    setIsImportingPdf(true);
+    setImportPdfError(null);
+
+    try {
+      await onImportPdfArticle(pdfFile);
+    } catch (error) {
+      setImportPdfError(
+        error instanceof Error
+          ? error.message
+          : isEnglish
+            ? "Could not import the PDF."
+            : "Não foi possível importar o PDF.",
+      );
+    } finally {
+      setIsImportingPdf(false);
+      event.target.value = "";
+    }
+  }
+
+  const graphVisualScale = clamp(viewport.scale, 0.52, 1.38);
+  const relationStrokeScale = clamp(viewport.scale, 0.58, 1.28);
+
+  return (
+    <section className="relative isolate min-h-0 w-full flex-1 overflow-hidden bg-[linear-gradient(180deg,rgba(4,10,16,0.95),rgba(9,19,29,0.98))]">
+      <aside className="absolute bottom-5 left-5 top-5 z-50 flex max-h-[calc(100%_-_2.5rem)] w-[20rem] flex-col overflow-hidden rounded-[24px] border border-[var(--border)] bg-[rgba(9,19,29,0.78)] p-4 shadow-[0_18px_50px_rgba(0,0,0,0.32)] backdrop-blur-xl">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
+              {isEnglish ? "Library" : "Biblioteca"}
+            </p>
+            <h2 className="mt-1 text-lg font-semibold text-white">
+              {isEnglish ? "Submitted articles" : "Artigos submetidos"}
+            </h2>
+          </div>
+          <span className="rounded-full border border-[var(--border)] bg-black/20 px-2.5 py-1 text-[11px] text-[var(--muted)]">
+            {articles.length}
+          </span>
+        </div>
+
+        <button
+          type="button"
+          disabled={articles.length < 2 || !activeArticle}
+          onClick={() => {
+            if (!activeArticle) {
+              return;
+            }
+
+            setManualConnectionSourceId((currentSourceId) => {
+              setContextMenu(null);
+              return currentSourceId ? null : activeArticle.id;
+            });
+          }}
+          className={`mt-4 rounded-full border px-4 py-3 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
+            manualConnectionSource
+              ? "border-[var(--accent)] bg-[rgba(142,231,255,0.18)] text-white"
+              : "border-[var(--border)] bg-[var(--accent)] text-[#041016]"
+          }`}
+        >
+          {manualConnectionSource
+            ? isEnglish
+              ? "Cancel manual link"
+              : "Cancelar ligação manual"
+            : isEnglish
+              ? "Manual link"
+              : "Ligação manual"}
+        </button>
+
+        <input
+          ref={pdfImportInputRef}
+          type="file"
+          accept="application/pdf,.pdf"
+          className="hidden"
+          onChange={handlePdfImportChange}
+        />
+        <button
+          type="button"
+          disabled={isImportingPdf}
+          onClick={() => pdfImportInputRef.current?.click()}
+          className="mt-2 rounded-full border border-[var(--border)] bg-white/5 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {isImportingPdf
+            ? isEnglish
+              ? "Importing PDF..."
+              : "A importar PDF..."
+            : isEnglish
+              ? "Import PDF"
+              : "Importar PDF"}
+        </button>
+
+        {importPdfError ? (
+          <p className="mt-2 rounded-[14px] border border-red-300/30 bg-red-500/10 px-3 py-2 text-xs leading-5 text-red-100">
+            {importPdfError}
+          </p>
+        ) : null}
+
+        {manualConnectionSource ? (
+          <p className="mt-3 text-xs uppercase tracking-[0.2em] text-[var(--muted)]">
+            {isEnglish ? "From" : "A partir de"} {manualConnectionSource.title}
+          </p>
+        ) : null}
+
+        <label className="mt-4 block">
+          <span className="sr-only">
+            {isEnglish ? "Search submitted articles" : "Pesquisar artigos submetidos"}
+          </span>
+          <input
+            value={librarySearch}
+            onChange={(event) => setLibrarySearch(event.target.value)}
+            placeholder={isEnglish ? "Search articles, tags, status" : "Pesquisar artigos, tags, estado"}
+            className="w-full rounded-[18px] border border-[var(--border)] bg-black/20 px-4 py-3 text-sm text-white outline-none transition-colors placeholder:text-white/35 focus:border-[var(--accent)]"
+          />
+        </label>
+
+        <div className="mt-4 min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain pr-1">
+          {filteredLibraryArticles.map((article) => {
+            const isActive = article.id === activeArticle?.id;
+
+            return (
+              <button
+                key={article.id}
+                type="button"
+                onClick={() => {
+                  const nextArticleId = isActive ? null : article.id;
+
+                  setContextMenu(null);
+
+                  if (nextArticleId === null) {
+                    setManualConnectionSourceId(null);
+                    onSelectArticle(null);
+                    return;
+                  }
+
+                  onSelectArticle(nextArticleId);
+                  centerViewportOnArticle(nextArticleId);
+                }}
+                className={`w-full rounded-[18px] border p-3 text-left transition-colors ${
+                  isActive
+                    ? "border-[var(--accent)] bg-[rgba(142,231,255,0.14)]"
+                    : "border-[var(--border)] bg-black/15 hover:bg-white/8"
+                }`}
+              >
+                <p className="text-sm font-medium leading-5 text-white">{article.title}</p>
+                <p className="mt-2 text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
+                  {getArticleStatusLabel(article.status, language)} •{" "}
+                  {article.tags.slice(0, 2).map((tag) => getArticleTagLabel(tag, language)).join(" • ")}
+                </p>
+              </button>
+            );
+          })}
+
+          {filteredLibraryArticles.length === 0 ? (
+            <div className="rounded-[18px] border border-[var(--border)] bg-black/15 p-4 text-sm leading-6 text-[var(--muted)]">
+              {isEnglish
+                ? "No submitted article matches the current search."
+                : "Nenhum artigo submetido corresponde à pesquisa atual."}
+            </div>
+          ) : null}
+        </div>
+      </aside>
+
+      <div
+        ref={containerRef}
+        className="absolute inset-0 z-0"
+        style={{ touchAction: "none" }}
+        onPointerDown={(event) => {
+          const target = event.target as HTMLElement | null;
+
+          if (target?.closest("[data-graph-node]") || target?.closest("button")) {
+            return;
+          }
+
+          setContextMenu(null);
+          stopViewportAnimation();
+          setIsPanning(true);
+          panStartRef.current = {
+            clientX: event.clientX,
+            clientY: event.clientY,
+            x: viewportRef.current.x,
+            y: viewportRef.current.y,
+          };
+          containerRef.current?.setPointerCapture(event.pointerId);
+        }}
+        onPointerUp={(event) => {
+          if (isPanning) {
+            setIsPanning(false);
+          }
+
+          try {
+            containerRef.current?.releasePointerCapture(event.pointerId);
+          } catch {
+            // Ignora erros de captura quando o ponteiro não foi capturado.
+          }
+        }}
+      >
+        <div className="absolute inset-0 z-0 bg-[radial-gradient(circle_at_center,rgba(142,231,255,0.12),transparent_32%),radial-gradient(circle_at_20%_20%,rgba(255,255,255,0.05),transparent_20%),linear-gradient(180deg,rgba(6,12,18,0.86),rgba(10,20,30,0.98))]" />
+
+        <svg className="pointer-events-none absolute inset-0 z-10 h-full w-full">
+          <defs>
+            <filter id="glow">
+              <feGaussianBlur stdDeviation="2.2" result="blur" />
+              <feMerge>
+                <feMergeNode in="blur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
+
+          {relationEntries.map((entry) => {
+            const isManualRelation = entry.relation.relationType === "manual";
+            const isExplicitRelation = entry.relation.relationType === "explicit";
+            const isSuggestedRelation = entry.relation.relationType === "auto" || entry.relation.relationType === "suggested";
+            const isActiveRelation =
+              activeArticle !== null &&
+              (entry.relation.fromArticleId === activeArticle.id ||
+                entry.relation.toArticleId === activeArticle.id);
+            const strokeColor = isManualRelation
+              ? "rgba(142,231,255,0.72)"
+              : isExplicitRelation
+                ? "rgba(255,255,255,0.5)"
+                : "rgba(255,255,255,0.26)";
+            const baseStrokeWidth = isActiveRelation
+              ? 2.4
+              : isManualRelation
+                ? 2.1
+                : isExplicitRelation
+                  ? 1.55
+                  : 1.15;
+
+            return (
+              <line
+                key={entry.key}
+                x1={entry.fromPosition.x}
+                y1={entry.fromPosition.y}
+                x2={entry.toPosition.x}
+                y2={entry.toPosition.y}
+                stroke={strokeColor}
+                strokeOpacity={activeArticle === null ? 0.7 : isActiveRelation ? 1 : 0.38}
+                strokeWidth={baseStrokeWidth * relationStrokeScale}
+                strokeLinecap="round"
+                strokeDasharray={isSuggestedRelation ? "6 8" : undefined}
+                filter={isManualRelation || isActiveRelation ? "url(#glow)" : undefined}
+              />
+            );
+          })}
+        </svg>
+
+        {articles.map((article, index) => {
+            const fallbackPosition = displayedPositions[article.id] ?? defaultArticlePosition(index);
+            const position = screenPositions[article.id] ?? {
+              x: containerSize.width / 2 + viewport.x + ((fallbackPosition.x / 100) * worldSize - worldSize / 2) * viewport.scale,
+              y: containerSize.height / 2 + viewport.y + ((fallbackPosition.y / 100) * worldSize - worldSize / 2) * viewport.scale,
+            };
+            const isActive = article.id === activeArticle?.id;
+            const isDragging = draggingArticleId === article.id;
+            const nodeVisualScale = graphVisualScale * (isActive ? 1.1 : 1);
+
+            return (
+              <button
+                key={article.id}
+                data-graph-node
+                data-article-id={article.id}
+                type="button"
+                onPointerDown={(event) => {
+                  if (event.button !== 0) {
+                    return;
+                  }
+
+                  event.preventDefault();
+                  stopViewportAnimation();
+                  setContextMenu(null);
+
+                  if (activeManualConnectionSourceId) {
+                    if (activeManualConnectionSourceId !== article.id) {
+                      onCreateRelation(activeManualConnectionSourceId, article.id);
+                      setManualConnectionSourceId(null);
+                      centerViewportOnArticle(article.id);
+                    }
+
+                    return;
+                  }
+
+                  dragStartRef.current = {
+                    clientX: event.clientX,
+                    clientY: event.clientY,
+                    started: false,
+                  };
+                  setDraggingArticleId(article.id);
+                  setIsPanning(false);
+                }}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  setContextMenu({
+                    articleId: article.id,
+                    x: clamp(position.x + 128, 12, Math.max(containerSize.width - 180, 12)),
+                    y: clamp(position.y - 32, 12, Math.max(containerSize.height - 88, 12)),
+                  });
+                }}
+                className={`group absolute z-40 flex w-[9rem] flex-col items-center gap-2 text-center transition-transform ${
+                  activeManualConnectionSourceId ? "cursor-crosshair" : isDragging ? "cursor-grabbing" : "cursor-grab"
+                }`}
+                style={{
+                  left: `${position.x}px`,
+                  top: `${position.y}px`,
+                  touchAction: "none",
+                  transform: `translate(-50%, -50%) scale(${nodeVisualScale})`,
+                  transformOrigin: "center",
+                }}
+              >
+                <span
+                  className={`relative flex h-16 w-16 items-center justify-center rounded-full border text-lg font-semibold shadow-[0_18px_38px_rgba(0,0,0,0.38)] transition-colors ${
+                    isActive
+                      ? "border-[var(--accent)] bg-[rgba(142,231,255,0.24)] text-white shadow-[0_0_32px_rgba(142,231,255,0.2)]"
+                      : "border-white/15 bg-[rgba(15,24,36,0.94)] text-white/90 group-hover:border-[rgba(142,231,255,0.62)]"
+                  } ${
+                    activeManualConnectionSourceId === article.id
+                      ? "ring-2 ring-[rgba(142,231,255,0.45)]"
+                      : ""
+                  }`}
+                >
+                  {getArticleInitials(article.title)}
+                  <span
+                    aria-label={getArticleStatusLabel(article.status, language)}
+                    className={`absolute -right-0.5 -top-0.5 h-3.5 w-3.5 rounded-full border-2 border-[#07111b] ${
+                      article.status === "Published" ? "bg-emerald-300" : "bg-amber-300"
+                    }`}
+                  />
+                </span>
+                <span
+                  className={`max-w-[8.5rem] truncate rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
+                    isActive
+                      ? "border-[rgba(142,231,255,0.45)] bg-[rgba(142,231,255,0.14)] text-white"
+                      : "border-white/10 bg-black/30 text-white/70"
+                  }`}
+                >
+                  {article.title}
+                </span>
+              </button>
+            );
+          })}
+
+        {contextMenu ? (
+          <div
+            className="absolute z-50 w-[11.5rem] rounded-[18px] border border-[var(--border)] bg-[rgba(9,19,29,0.9)] p-2 shadow-[0_16px_40px_rgba(0,0,0,0.35)] backdrop-blur-xl"
+            style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }}
+          >
+            {canEditContextMenuArticle ? (
+              <button
+                type="button"
+                onClick={() => {
+                  onEditArticle(contextMenu.articleId);
+                  setContextMenu(null);
+                }}
+                className="w-full rounded-[14px] bg-[var(--accent)] px-3 py-2 text-sm font-semibold text-[#041016] transition-transform hover:-translate-y-0.5"
+              >
+                {isEnglish ? "Edit article" : "Editar artigo"}
+              </button>
+            ) : null}
+
+            <button
+              type="button"
+              onClick={() => {
+                void onExportArticlePdf(contextMenu.articleId);
+                setContextMenu(null);
+              }}
+              className={`${canEditContextMenuArticle ? "mt-2 " : ""}w-full rounded-[14px] border border-[var(--border)] bg-white/5 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-white/10`}
+            >
+              {isEnglish ? "Export PDF" : "Exportar PDF"}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setDeleteCandidateArticleId(contextMenu.articleId);
+                setDeleteArticleError(null);
+                setContextMenu(null);
+              }}
+              className="mt-2 w-full rounded-[14px] border border-red-300/30 bg-red-500/15 px-3 py-2 text-sm font-semibold text-red-100 transition-colors hover:bg-red-500/25"
+            >
+              {isEnglish ? "Remove article" : "Remover artigo"}
+            </button>
+
+            {contextMenuRemovableRelations.map((relation) => {
+              const otherArticleId =
+                relation.fromArticleId === contextMenu.articleId
+                  ? relation.toArticleId
+                  : relation.fromArticleId;
+              const otherArticle = articleById.get(otherArticleId);
+              const removeLabel =
+                contextMenuRemovableRelations.length === 1
+                  ? relation.relationType === "explicit"
+                    ? isEnglish
+                      ? "Remove wikilink"
+                      : "Remover wikilink"
+                    : isEnglish
+                      ? "Remove connection"
+                      : "Remover conexão"
+                  : `${isEnglish ? "Remove" : "Remover"} ${
+                      relation.relationType === "explicit" ? "wikilink" : isEnglish ? "connection" : "conexão"
+                    } ${isEnglish ? "with" : "com"} ${
+                      otherArticle?.title ?? (isEnglish ? "article" : "artigo")
+                    }`;
+
+              return (
+                <button
+                  key={relation.id}
+                  type="button"
+                  onClick={() => {
+                    onRemoveRelation(relation.fromArticleId, relation.toArticleId, relation.relationType);
+                    setContextMenu(null);
+                  }}
+                  className="mt-2 w-full rounded-[14px] border border-red-300/30 bg-red-500/15 px-3 py-2 text-sm font-semibold text-red-100 transition-colors hover:bg-red-500/25"
+                >
+                  {removeLabel}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+
+      </div>
+
+      {activeArticle ? (
+        <aside
+          data-graph-control
+          className="absolute bottom-5 right-5 z-50 w-[min(23rem,calc(100%_-_2.5rem))] max-h-[calc(100%_-_2.5rem)] overflow-hidden rounded-[24px] border border-[var(--border)] bg-[rgba(9,19,29,0.82)] p-4 shadow-[0_18px_50px_rgba(0,0,0,0.35)] backdrop-blur-xl"
+        >
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <p className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
+                {isEnglish ? "Details" : "Detalhes"}
+              </p>
+              <h2 className="mt-1 truncate text-lg font-semibold text-white">{activeArticle.title}</h2>
+            </div>
+            <span className="shrink-0 rounded-full border border-[var(--border)] bg-black/20 px-2.5 py-1 text-[11px] text-[var(--muted)]">
+              {activeRelationCount === 1
+                ? isEnglish
+                  ? "1 link"
+                  : "1 ligação"
+                : isEnglish
+                  ? `${activeRelationCount} links`
+                  : `${activeRelationCount} ligações`}
+            </span>
+          </div>
+
+          <div className="mt-3 flex flex-wrap gap-2">
+            <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-white/80">
+              {getArticleStatusLabel(activeArticle.status, language)}
+            </span>
+            {activeArticle.tags.map((tag) => (
+              <span
+                key={tag}
+                className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] text-[var(--muted)]"
+              >
+                {getArticleTagLabel(tag, language)}
+              </span>
+            ))}
+          </div>
+
+          <div className={`mt-4 grid gap-2 ${canEditActiveArticle ? "grid-cols-3" : "grid-cols-2"}`}>
+            <button
+              type="button"
+              onClick={() => centerViewportOnArticle(activeArticle.id)}
+              className="rounded-full border border-[var(--border)] bg-white/5 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-white/10"
+            >
+              {isEnglish ? "Focus" : "Focar"}
+            </button>
+            {canEditActiveArticle ? (
+              <button
+                type="button"
+                onClick={() => onEditArticle(activeArticle.id)}
+                className="rounded-full border border-[var(--border)] bg-white/5 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-white/10"
+              >
+                {isEnglish ? "Edit" : "Editar"}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              disabled={articles.length < 2}
+              onClick={() => {
+                setContextMenu(null);
+                setManualConnectionSourceId((currentSourceId) =>
+                  currentSourceId === activeArticle.id ? null : activeArticle.id,
+                );
+              }}
+              className={`rounded-full border px-3 py-2 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
+                activeManualConnectionSourceId === activeArticle.id
+                  ? "border-[var(--accent)] bg-[rgba(142,231,255,0.18)] text-white"
+                  : "border-[var(--accent)] bg-[var(--accent)] text-[#041016]"
+              }`}
+            >
+              {activeManualConnectionSourceId === activeArticle.id
+                ? isEnglish
+                  ? "Cancel"
+                  : "Cancelar"
+                : isEnglish
+                  ? "Link"
+                  : "Ligar"}
+            </button>
+          </div>
+
+          {manualConnectionSource ? (
+            <p className="mt-3 rounded-[14px] border border-[rgba(142,231,255,0.28)] bg-[rgba(142,231,255,0.1)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+              {isEnglish ? "Linking from" : "A ligar de"}{" "}
+              <span className="font-semibold text-white">{manualConnectionSource.title}</span>.
+              {isEnglish
+                ? " Click another article to create the link."
+                : " Clica noutro artigo para criar a ligação."}
+            </p>
+          ) : null}
+
+          <div className="scrollbar-hidden mt-4 max-h-[22rem] space-y-3 overflow-y-auto overscroll-contain pr-1">
+            {renderUnlinkedMentionGroup()}
+            {renderRelationGroup(
+              isEnglish ? "Outgoing" : "Saída",
+              activeOutgoingRelations,
+              isEnglish
+                ? "This article does not point to other articles yet."
+                : "Este artigo ainda não aponta para outros artigos.",
+            )}
+            {renderRelationGroup(
+              isEnglish ? "Incoming" : "Entrada",
+              activeIncomingRelations,
+              isEnglish
+                ? "No articles point to this one yet."
+                : "Ainda não há artigos a apontar para este.",
+            )}
+          </div>
+        </aside>
+      ) : null}
+
+      {deleteCandidateArticle ? (
+        <div
+          data-graph-control
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 px-4 backdrop-blur-sm"
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-article-title"
+            className="w-full max-w-md rounded-[24px] border border-[var(--border)] bg-[rgba(9,19,29,0.96)] p-5 shadow-[0_24px_70px_rgba(0,0,0,0.45)]"
+          >
+            <p className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
+              {isEnglish ? "Confirm removal" : "Confirmar remoção"}
+            </p>
+            <h2 id="delete-article-title" className="mt-2 text-xl font-semibold text-white">
+              {isEnglish ? "Remove article?" : "Remover artigo?"}
+            </h2>
+            <p className="mt-3 text-sm leading-6 text-[var(--muted)]">
+              {isEnglish ? "You are about to remove" : "Vais remover"}{" "}
+              <span className="font-semibold text-white">{deleteCandidateArticle.title}</span>
+              {isEnglish
+                ? " from the graph, including its links and uploaded files."
+                : " do mapa, incluindo as ligações e os ficheiros carregados para este artigo."}
+            </p>
+
+            {deleteArticleError ? (
+              <p className="mt-4 rounded-[14px] border border-red-300/30 bg-red-500/10 px-3 py-2 text-xs leading-5 text-red-100">
+                {deleteArticleError}
+              </p>
+            ) : null}
+
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                disabled={isDeletingArticle}
+                onClick={() => {
+                  setDeleteCandidateArticleId(null);
+                  setDeleteArticleError(null);
+                }}
+                className="rounded-full border border-[var(--border)] bg-white/5 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isEnglish ? "Cancel" : "Cancelar"}
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingArticle}
+                onClick={() => {
+                  void confirmArticleDelete();
+                }}
+                className="rounded-full border border-red-300/30 bg-red-500/15 px-4 py-3 text-sm font-semibold text-red-100 transition-colors hover:bg-red-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isDeletingArticle
+                  ? isEnglish
+                    ? "Removing..."
+                    : "A remover..."
+                  : isEnglish
+                    ? "Remove article"
+                    : "Remover artigo"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}

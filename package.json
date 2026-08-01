@@ -9,7 +9,10 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@node-latex-compiler/bin-win32-x64": "^1.0.5",
     "next": "16.2.12",
+    "node-latex-compiler": "^1.0.5",
+    "pdfjs-dist": "^6.2.108",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },

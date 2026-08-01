@@ -29,6 +29,15 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+.codex-dev*.log
+.codex-dev*.err.log
+
+# local temporary files
+.utmp/
+
+# local app data
+data/workspace.json
+data/images/
 
 # env files (can opt-in for committing if needed)
 .env*
