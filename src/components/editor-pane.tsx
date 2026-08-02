@@ -22,6 +22,8 @@ type EditorPaneProps = {
     userId: string;
     userName: string;
   }>;
+  collaborationClientId?: string;
+  collaborationUserName?: string;
   onSaveArticle: (article: { title: string; source: string }) => void;
   onSubmitArticle: (article: { articleId: string; title: string; source: string }) => void;
   submissionIssue: string | null;
@@ -142,6 +144,8 @@ function getCollaboratorColor(value: string) {
 export function EditorPane({
   article,
   articleCollaborators = [],
+  collaborationClientId,
+  collaborationUserName,
   onSaveArticle,
   onSubmitArticle,
   submissionIssue,
@@ -328,7 +332,7 @@ export function EditorPane({
 
         canvas.width = Math.floor(viewport.width);
         canvas.height = Math.floor(viewport.height);
-        canvas.className = "rounded-lg bg-[#f7fbff] shadow-[0_14px_34px_rgba(0,0,0,0.28)] ring-1 ring-[rgba(142,231,255,0.18)]";
+        canvas.className = "papergraph-pdf-page rounded-lg bg-[#f7fbff] shadow-[0_14px_34px_rgba(0,0,0,0.28)] ring-1 ring-[rgba(142,231,255,0.18)]";
         canvas.style.width = `${Math.floor(viewport.width)}px`;
         canvas.style.height = `${Math.floor(viewport.height)}px`;
 
@@ -766,6 +770,8 @@ export function EditorPane({
               ref={editorRef}
               articleId={article.id}
               className="min-h-[18rem] w-full flex-1 overflow-hidden rounded-[24px] border border-[var(--border)] bg-[#f7fbff] shadow-inner xl:min-h-0"
+              collaborationClientId={collaborationClientId}
+              collaborationUserName={collaborationUserName}
               language={language}
               onChange={handleSourceChange}
               onSelectionChange={updateLastTextSelection}
@@ -777,8 +783,8 @@ export function EditorPane({
         </div>
 
         <div className="flex min-h-[24rem] flex-col gap-4 overflow-hidden xl:min-h-0 xl:pl-4">
-          <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[24px] border border-[var(--border)] bg-[#23272d] shadow-[0_18px_40px_rgba(0,0,0,0.22)]">
-            <div className="absolute right-4 top-4 z-10 rounded-full border border-white/10 bg-black/45 px-3 py-1 text-[10px] uppercase tracking-[0.3em] text-white/60 backdrop-blur-xl">
+          <div className="papergraph-pdf-preview-shell relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[24px] border border-[var(--border)] shadow-[0_18px_40px_rgba(0,0,0,0.18)]">
+            <div className="papergraph-pdf-preview-status absolute right-4 top-4 z-10 rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.3em] backdrop-blur-xl">
               {compileState === "rendering"
                 ? isEnglish
                   ? "updating"
@@ -792,9 +798,9 @@ export function EditorPane({
                     : "pronto"}
             </div>
 
-            <div className="relative flex min-h-0 flex-1 flex-col bg-[linear-gradient(180deg,rgba(142,231,255,0.08),rgba(7,16,24,0.72))]">
+            <div className="papergraph-pdf-preview-stage relative flex min-h-0 flex-1 flex-col">
               {pdfBuffer ? (
-                <div ref={previewScrollerRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-[linear-gradient(180deg,rgba(142,231,255,0.08),rgba(7,16,24,0.72))] p-6">
+                <div ref={previewScrollerRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-6">
                   <div ref={previewContainerRef} className="flex w-full min-w-0 flex-col items-center" />
                 </div>
               ) : (

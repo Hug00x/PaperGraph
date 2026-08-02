@@ -12,6 +12,18 @@
   --shadow: 0 28px 80px rgba(0, 0, 0, 0.45);
 }
 
+html[data-papergraph-theme="light"] {
+  --background: #edf5fb;
+  --foreground: #102132;
+  --muted: #5f7287;
+  --surface: rgba(241, 247, 252, 0.86);
+  --surface-strong: rgba(248, 252, 255, 0.96);
+  --border: rgba(75, 97, 120, 0.18);
+  --accent: #0ea5e9;
+  --accent-soft: rgba(14, 165, 233, 0.12);
+  --shadow: 0 28px 80px rgba(28, 52, 76, 0.18);
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -42,9 +54,200 @@ body {
   overflow: hidden;
 }
 
+html[data-papergraph-theme="light"] body {
+  background-image:
+    radial-gradient(circle at top left, rgba(14, 165, 233, 0.2), transparent 28%),
+    radial-gradient(circle at top right, rgba(20, 184, 166, 0.14), transparent 24%),
+    linear-gradient(180deg, #edf5fb 0%, #f8fcff 52%, #e9f3fb 100%);
+}
+
 body::selection {
   background: rgba(142, 231, 255, 0.28);
   color: #f7fbff;
+}
+
+html[data-papergraph-theme="light"] body::selection {
+  background: rgba(14, 165, 233, 0.22);
+  color: #102132;
+}
+
+html[data-papergraph-theme="light"] .papergraph-app .text-white,
+html[data-papergraph-theme="light"] .papergraph-app .text-white\/90,
+html[data-papergraph-theme="light"] .papergraph-app .text-white\/80,
+html[data-papergraph-theme="light"] .papergraph-app .text-white\/70 {
+  color: #102132 !important;
+}
+
+html[data-papergraph-theme="light"] .papergraph-app .text-white\/60 {
+  color: rgba(16, 33, 50, 0.64) !important;
+}
+
+html[data-papergraph-theme="light"] .papergraph-app .text-white\/35,
+html[data-papergraph-theme="light"] .papergraph-app .placeholder\:text-white\/35::placeholder,
+html[data-papergraph-theme="light"] .papergraph-app .placeholder\:text-white\/30::placeholder {
+  color: rgba(16, 33, 50, 0.38) !important;
+}
+
+html[data-papergraph-theme="light"] .papergraph-app .bg-black\/15,
+html[data-papergraph-theme="light"] .papergraph-app .bg-black\/20,
+html[data-papergraph-theme="light"] .papergraph-app .bg-black\/30,
+html[data-papergraph-theme="light"] .papergraph-app .bg-black\/45 {
+  background-color: rgba(255, 255, 255, 0.58) !important;
+}
+
+html[data-papergraph-theme="light"] .papergraph-app .bg-white\/5,
+html[data-papergraph-theme="light"] .papergraph-app .bg-white\/8,
+html[data-papergraph-theme="light"] .papergraph-app .bg-white\/10,
+html[data-papergraph-theme="light"] .papergraph-app .bg-white\/15,
+html[data-papergraph-theme="light"] .papergraph-app .bg-white\/\[0\.03\],
+html[data-papergraph-theme="light"] .papergraph-app .bg-white\/\[0\.04\] {
+  background-color: rgba(255, 255, 255, 0.68) !important;
+}
+
+html[data-papergraph-theme="light"] .papergraph-app .border-white\/10,
+html[data-papergraph-theme="light"] .papergraph-app .border-white\/15,
+html[data-papergraph-theme="light"] .papergraph-app .border-white\/20 {
+  border-color: rgba(75, 97, 120, 0.18) !important;
+}
+
+html[data-papergraph-theme="light"] .papergraph-app input,
+html[data-papergraph-theme="light"] .papergraph-app textarea {
+  color: #102132;
+}
+
+html[data-papergraph-theme="light"] .papergraph-app input:not([type="file"]) {
+  background-color: rgba(255, 255, 255, 0.72) !important;
+}
+
+html[data-papergraph-theme="light"] .papergraph-app .text-red-50,
+html[data-papergraph-theme="light"] .papergraph-app .text-red-100,
+html[data-papergraph-theme="light"] .papergraph-app .text-red-200 {
+  color: #991b1b !important;
+}
+
+html[data-papergraph-theme="light"] .papergraph-app .border-red-300\/30 {
+  border-color: rgba(185, 28, 28, 0.28) !important;
+}
+
+html[data-papergraph-theme="light"] .papergraph-app .bg-red-500\/10 {
+  background-color: rgba(220, 38, 38, 0.09) !important;
+}
+
+html[data-papergraph-theme="light"] .papergraph-app .bg-red-500\/15 {
+  background-color: rgba(220, 38, 38, 0.14) !important;
+}
+
+html[data-papergraph-theme="light"] .papergraph-app .hover\:bg-red-500\/25:hover {
+  background-color: rgba(220, 38, 38, 0.2) !important;
+}
+
+html[data-papergraph-theme="light"] .papergraph-app .backdrop-blur-xl {
+  backdrop-filter: blur(18px);
+}
+
+.papergraph-graph-pane {
+  --graph-shell-background: linear-gradient(180deg, rgba(4, 10, 16, 0.95), rgba(9, 19, 29, 0.98));
+  --graph-canvas-background:
+    radial-gradient(circle at center, rgba(142, 231, 255, 0.12), transparent 32%),
+    radial-gradient(circle at 20% 20%, rgba(255, 255, 255, 0.05), transparent 20%),
+    linear-gradient(180deg, rgba(6, 12, 18, 0.86), rgba(10, 20, 30, 0.98));
+  --graph-panel-background: rgba(9, 19, 29, 0.78);
+  --graph-menu-background: rgba(9, 19, 29, 0.9);
+  --graph-dialog-background: rgba(9, 19, 29, 0.96);
+  --graph-node-background: rgba(15, 24, 36, 0.94);
+  --graph-node-active-background: rgba(142, 231, 255, 0.24);
+  --graph-node-label-background: rgba(0, 0, 0, 0.3);
+  --graph-node-ring: #07111b;
+  --graph-link-manual: rgba(142, 231, 255, 0.72);
+  --graph-link-explicit: rgba(255, 255, 255, 0.5);
+  --graph-link-muted: rgba(255, 255, 255, 0.26);
+  background: var(--graph-shell-background);
+}
+
+html[data-papergraph-theme="light"] .papergraph-app .papergraph-graph-pane {
+  --graph-shell-background: linear-gradient(180deg, #eaf4fb 0%, #f8fcff 52%, #e5f0f8 100%);
+  --graph-canvas-background:
+    radial-gradient(circle at center, rgba(14, 165, 233, 0.18), transparent 34%),
+    radial-gradient(circle at 20% 20%, rgba(20, 184, 166, 0.12), transparent 22%),
+    radial-gradient(circle at 82% 70%, rgba(251, 191, 36, 0.11), transparent 24%),
+    linear-gradient(180deg, rgba(248, 252, 255, 0.9), rgba(226, 239, 249, 0.96));
+  --graph-panel-background: rgba(248, 252, 255, 0.88);
+  --graph-menu-background: rgba(248, 252, 255, 0.94);
+  --graph-dialog-background: rgba(248, 252, 255, 0.98);
+  --graph-node-background: rgba(255, 255, 255, 0.96);
+  --graph-node-active-background: rgba(14, 165, 233, 0.18);
+  --graph-node-label-background: rgba(255, 255, 255, 0.82);
+  --graph-node-ring: #f8fcff;
+  --graph-link-manual: rgba(2, 132, 199, 0.76);
+  --graph-link-explicit: rgba(51, 65, 85, 0.44);
+  --graph-link-muted: rgba(100, 116, 139, 0.3);
+}
+
+.papergraph-graph-backdrop {
+  background: var(--graph-canvas-background);
+}
+
+.papergraph-graph-panel {
+  background: var(--graph-panel-background);
+}
+
+.papergraph-graph-menu {
+  background: var(--graph-menu-background);
+}
+
+.papergraph-graph-dialog {
+  background: var(--graph-dialog-background);
+}
+
+.papergraph-graph-node-core {
+  background: var(--graph-node-background);
+}
+
+.papergraph-graph-node-core.is-active {
+  background: var(--graph-node-active-background);
+}
+
+.papergraph-graph-node-label {
+  background: var(--graph-node-label-background);
+}
+
+.papergraph-graph-node-label.is-active {
+  background: var(--graph-node-active-background);
+}
+
+.papergraph-pdf-preview-shell {
+  --pdf-preview-shell-background: #23272d;
+  --pdf-preview-stage-background:
+    linear-gradient(180deg, rgba(142, 231, 255, 0.08), rgba(7, 16, 24, 0.72));
+  --pdf-preview-status-background: rgba(0, 0, 0, 0.45);
+  --pdf-preview-status-color: rgba(255, 255, 255, 0.6);
+  --pdf-preview-status-border: rgba(255, 255, 255, 0.1);
+  background: var(--pdf-preview-shell-background);
+}
+
+html[data-papergraph-theme="light"] .papergraph-app .papergraph-pdf-preview-shell {
+  --pdf-preview-shell-background: rgba(248, 252, 255, 0.96);
+  --pdf-preview-stage-background:
+    radial-gradient(circle at top, rgba(14, 165, 233, 0.12), transparent 34%),
+    linear-gradient(180deg, rgba(234, 244, 251, 0.86), rgba(248, 252, 255, 0.96));
+  --pdf-preview-status-background: rgba(255, 255, 255, 0.8);
+  --pdf-preview-status-color: rgba(16, 33, 50, 0.54);
+  --pdf-preview-status-border: rgba(75, 97, 120, 0.18);
+}
+
+.papergraph-pdf-preview-stage {
+  background: var(--pdf-preview-stage-background);
+}
+
+.papergraph-pdf-preview-status {
+  background: var(--pdf-preview-status-background);
+  border-color: var(--pdf-preview-status-border);
+  color: var(--pdf-preview-status-color);
+}
+
+html[data-papergraph-theme="light"] .papergraph-app .papergraph-pdf-page {
+  box-shadow: 0 14px 34px rgba(28, 52, 76, 0.16) !important;
+  --tw-ring-color: rgba(75, 97, 120, 0.16) !important;
 }
 
 .scrollbar-hidden {

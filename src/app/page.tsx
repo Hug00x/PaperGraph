@@ -57,6 +57,7 @@ type PendingEditorResubmission = { articleId: string; title: string; source: str
 type PendingEditorNavigation = { type: "tab"; tab: WorkspaceTab };
 type ArticleSubmission = { articleId?: string; title: string; source: string };
 type AuthMode = "sign-in" | "sign-up";
+type AppTheme = "dark" | "light";
 type UserProfileRow = {
   display_name: string | null;
 };
@@ -237,6 +238,22 @@ function formatInviteStatus(status: WorkspaceInvite["status"], language: AppLang
   return language === "en" ? "Pending" : "Pendente";
 }
 
+function getDisplayInitials(value: string | null | undefined) {
+  const normalizedValue = normalizeDisplayName(value ?? "");
+
+  if (!normalizedValue) {
+    return "PG";
+  }
+
+  const initials = normalizedValue
+    .split(" ")
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join("");
+
+  return initials.toUpperCase();
+}
+
 function isWorkspacePresence(value: unknown): value is WorkspacePresence {
   if (!value || typeof value !== "object") {
     return false;
@@ -286,6 +303,12 @@ function getPresenceModeLabel(mode: WorkspacePresenceMode, language: AppLanguage
     case "browsing":
       return language === "en" ? "Browsing" : "A navegar";
   }
+}
+
+function createPresenceClientId() {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `client-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 function relationPairKey(fromArticleId: string, toArticleId: string) {
@@ -747,6 +770,15 @@ export default function Home() {
 
     return savedLanguage === "pt" || savedLanguage === "en" ? savedLanguage : "pt";
   });
+  const [appTheme, setAppTheme] = useState<AppTheme>(() => {
+    if (typeof window === "undefined") {
+      return "dark";
+    }
+
+    const savedTheme = window.localStorage.getItem("papergraph-theme");
+
+    return savedTheme === "light" ? "light" : "dark";
+  });
   const [pendingEditorResubmission, setPendingEditorResubmission] = useState<PendingEditorResubmission | null>(null);
   const [pendingEditorNavigation, setPendingEditorNavigation] = useState<PendingEditorNavigation | null>(null);
   const [connectionValidationError, setConnectionValidationError] = useState<string | null>(null);
@@ -782,7 +814,7 @@ export default function Home() {
   const saveQueueRef = useRef(Promise.resolve());
   const isEnglish = appLanguage === "en";
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
-  const presenceClientIdRef = useRef<string | null>(null);
+  const [presenceClientId] = useState(createPresenceClientId);
   const presenceChannelRef = useRef<ReturnType<NonNullable<typeof supabase>["channel"]> | null>(null);
   const currentPresencePayloadRef = useRef<WorkspacePresence | null>(null);
   const presenceLocationKeyRef = useRef<string | null>(null);
@@ -791,6 +823,15 @@ export default function Home() {
   useEffect(() => {
     window.localStorage.setItem("papergraph-language", appLanguage);
   }, [appLanguage]);
+
+  useEffect(() => {
+    window.localStorage.setItem("papergraph-theme", appTheme);
+    document.documentElement.dataset.papergraphTheme = appTheme;
+
+    return () => {
+      delete document.documentElement.dataset.papergraphTheme;
+    };
+  }, [appTheme]);
 
   const applyWorkspaceSnapshot = useCallback((
     snapshot: WorkspaceSnapshot,
@@ -1422,15 +1463,10 @@ export default function Home() {
   const onlinePresenceCount = workspacePresence.length + (authUserId && accountWorkspaceId ? 1 : 0);
 
   const getPresenceClientId = useCallback(() => {
-    if (!presenceClientIdRef.current) {
-      presenceClientIdRef.current =
-        typeof crypto !== "undefined" && "randomUUID" in crypto
-          ? crypto.randomUUID()
-          : `client-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    }
-
-    return presenceClientIdRef.current;
-  }, []);
+    return presenceClientId;
+  }, [presenceClientId]);
+  const collaborationClientId = authUserId && accountWorkspaceId ? presenceClientId : undefined;
+  const collaborationUserName = visibleAccountName ?? authUserEmail ?? (isEnglish ? "Collaborator" : "Colaborador");
 
   useEffect(() => {
     if (!supabase || !authUserId || !accountWorkspaceId) {
@@ -1508,7 +1544,7 @@ export default function Home() {
       tab: activeTab,
       updatedAt: now,
       userId: authUserId,
-      userName: visibleAccountName ?? authUserEmail ?? (isEnglish ? "Collaborator" : "Colaborador"),
+      userName: collaborationUserName,
     };
 
     currentPresencePayloadRef.current = payload;
@@ -1528,8 +1564,7 @@ export default function Home() {
     currentEditorSelection?.start,
     currentPresenceMode,
     getPresenceClientId,
-    isEnglish,
-    visibleAccountName,
+    collaborationUserName,
   ]);
 
   useEffect(() => {
@@ -3070,7 +3105,7 @@ export default function Home() {
   }
 
   return (
-    <div className="h-screen overflow-hidden text-[var(--foreground)]">
+    <div data-theme={appTheme} className="papergraph-app h-screen overflow-hidden text-[var(--foreground)]">
       <main className="flex h-full min-h-0 w-full flex-col overflow-hidden border border-transparent bg-[var(--surface)] shadow-[var(--shadow)] backdrop-blur-xl">
         <header className="flex flex-col gap-4 border-b border-[var(--border)] px-6 py-4 lg:flex-row lg:items-center lg:justify-between lg:px-8">
           <div className="relative h-[4.4rem] w-[17rem] overflow-hidden" aria-label="PaperGraph">
@@ -3246,6 +3281,8 @@ export default function Home() {
                   key={selectedArticle.id}
                   article={selectedArticle}
                   articleCollaborators={articlePresence}
+                  collaborationClientId={collaborationClientId}
+                  collaborationUserName={collaborationUserName}
                   onSaveArticle={updateArticleDetails}
                   onSubmitArticle={submitArticle}
                   submissionIssue={connectionValidationError}
@@ -3411,6 +3448,66 @@ export default function Home() {
                         );
                       })}
                     </div>
+
+                    <section className="space-y-3 rounded-[22px] border border-[var(--border)] bg-black/15 p-4">
+                      <div>
+                        <h3 className="text-base font-semibold text-white">
+                          {isEnglish ? "Theme" : "Tema"}
+                        </h3>
+                        <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
+                          {isEnglish
+                            ? "Dark is the default PaperGraph look. Light keeps the academic workspace brighter."
+                            : "O escuro e o visual padrao do PaperGraph. O claro deixa a workspace academica mais luminosa."}
+                        </p>
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        {(["dark", "light"] as const).map((theme) => {
+                          const isActiveTheme = appTheme === theme;
+
+                          return (
+                            <button
+                              key={theme}
+                              type="button"
+                              onClick={() => setAppTheme(theme)}
+                              className={`rounded-[20px] border p-4 text-left transition-colors ${
+                                isActiveTheme
+                                  ? "border-[var(--accent)] bg-[rgba(142,231,255,0.14)]"
+                                  : "border-[var(--border)] bg-white/5 hover:bg-white/8"
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-3">
+                                <p className="text-sm font-semibold text-white">
+                                  {theme === "dark"
+                                    ? isEnglish
+                                      ? "Dark"
+                                      : "Escuro"
+                                    : isEnglish
+                                      ? "Light"
+                                      : "Claro"}
+                                </p>
+                                <span
+                                  className={`h-4 w-4 rounded-full border ${
+                                    theme === "dark"
+                                      ? "border-slate-400 bg-[#0a0f14]"
+                                      : "border-sky-300 bg-[#edf5fb]"
+                                  }`}
+                                />
+                              </div>
+                              <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
+                                {theme === "dark"
+                                  ? isEnglish
+                                    ? "Current default theme for graph-heavy work."
+                                    : "Tema padrao atual para trabalho focado no mapa."
+                                  : isEnglish
+                                    ? "Brighter theme for reading and review."
+                                    : "Tema mais claro para leitura e revisao."}
+                              </p>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </section>
                   </div>
                 ) : null}
 
@@ -3561,10 +3658,14 @@ export default function Home() {
                                     return (
                                       <article
                                         key={member.userId}
-                                        className="rounded-[16px] border border-[var(--border)] bg-white/[0.03] p-3"
+                                        className="rounded-[18px] border border-white/10 bg-white/[0.04] p-3.5 shadow-[0_12px_30px_rgba(0,0,0,0.12)]"
                                       >
-                                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                                          <div className="min-w-0">
+                                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                          <div className="flex min-w-0 items-center gap-3">
+                                            <div className="grid h-11 w-11 shrink-0 place-items-center rounded-full border border-[rgba(142,231,255,0.28)] bg-[rgba(142,231,255,0.12)] text-sm font-semibold text-[var(--accent)]">
+                                              {getDisplayInitials(member.displayName ?? member.email ?? member.userId)}
+                                            </div>
+                                            <div className="min-w-0">
                                             <p className="truncate text-sm font-semibold text-white">
                                               {member.displayName ?? member.email ?? member.userId}
                                             </p>
@@ -3574,7 +3675,7 @@ export default function Home() {
                                             <p className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-[var(--muted)]">
                                               <span
                                                 className={`inline-flex h-2 w-2 rounded-full ${
-                                                  isMemberOnline ? "bg-emerald-300" : "bg-white/20"
+                                                  isMemberOnline ? "bg-emerald-300 shadow-[0_0_12px_rgba(110,231,183,0.65)]" : "bg-white/20"
                                                 }`}
                                               />
                                               <span>
@@ -3593,34 +3694,41 @@ export default function Home() {
                                                 </span>
                                               ) : null}
                                             </p>
+                                            </div>
                                           </div>
 
                                           {canManageMember ? (
-                                            <div className="flex shrink-0 flex-wrap gap-2 sm:justify-end">
-                                              <select
-                                                value={getEditableWorkspaceMemberRole(member.role)}
-                                                disabled={Boolean(memberActionUserId)}
-                                                onChange={(event) => {
-                                                  void handleWorkspaceMemberRoleChange(
-                                                    member,
-                                                    event.target.value as EditableWorkspaceMemberRole,
+                                            <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
+                                              <div className="inline-grid grid-cols-2 rounded-full border border-white/10 bg-black/20 p-1">
+                                                {editableWorkspaceMemberRoles.map((role) => {
+                                                  const isSelectedRole = getEditableWorkspaceMemberRole(member.role) === role;
+
+                                                  return (
+                                                    <button
+                                                      key={role}
+                                                      type="button"
+                                                      disabled={Boolean(memberActionUserId) || isSelectedRole}
+                                                      onClick={() => {
+                                                        void handleWorkspaceMemberRoleChange(member, role);
+                                                      }}
+                                                      className={`rounded-full px-3 py-1.5 text-[11px] font-semibold transition-colors disabled:cursor-not-allowed ${
+                                                        isSelectedRole
+                                                          ? "bg-[var(--accent)] text-[#041016]"
+                                                          : "text-[var(--muted)] hover:bg-white/8 hover:text-white disabled:opacity-60"
+                                                      }`}
+                                                    >
+                                                      {formatWorkspaceRole(role, appLanguage)}
+                                                    </button>
                                                   );
-                                                }}
-                                                className="rounded-full border border-[var(--border)] bg-black/20 px-3 py-1 text-[11px] font-semibold text-white outline-none transition-colors focus:border-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
-                                              >
-                                                {editableWorkspaceMemberRoles.map((role) => (
-                                                  <option key={role} value={role}>
-                                                    {formatWorkspaceRole(role, appLanguage)}
-                                                  </option>
-                                                ))}
-                                              </select>
+                                                })}
+                                              </div>
                                               <button
                                                 type="button"
                                                 disabled={Boolean(memberActionUserId)}
                                                 onClick={() => {
                                                   void handleRemoveWorkspaceMember(member);
                                                 }}
-                                                className="rounded-full border border-red-300/30 bg-red-500/15 px-3 py-1 text-[11px] font-semibold text-red-100 transition-colors hover:bg-red-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+                                                className="rounded-full border border-red-300/30 bg-red-500/15 px-3.5 py-2 text-[11px] font-semibold text-red-100 transition-colors hover:bg-red-500/25 disabled:cursor-not-allowed disabled:opacity-50"
                                               >
                                                 {isMemberActionRunning
                                                   ? isEnglish
@@ -3669,7 +3777,7 @@ export default function Home() {
 
                               {accountWorkspace.role === "owner" ? (
                                 <>
-                                  <form className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_12rem_auto]" onSubmit={handleCreateWorkspaceInvite}>
+                                  <form className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end" onSubmit={handleCreateWorkspaceInvite}>
                                     <label className="min-w-0">
                                       <span className="text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
                                         Email
@@ -3682,28 +3790,36 @@ export default function Home() {
                                         className="mt-2 w-full rounded-[16px] border border-[var(--border)] bg-black/20 px-4 py-3 text-sm text-white outline-none transition-colors placeholder:text-white/35 focus:border-[var(--accent)]"
                                       />
                                     </label>
-                                    <label className="min-w-0">
-                                      <span className="text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
+                                    <fieldset className="min-w-0 lg:col-span-2">
+                                      <legend className="text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
                                         {isEnglish ? "Role" : "Cargo"}
-                                      </span>
-                                      <select
-                                        value={workspaceInviteRole}
-                                        onChange={(event) => {
-                                          setWorkspaceInviteRole(event.target.value as EditableWorkspaceMemberRole);
-                                        }}
-                                        className="mt-2 w-full rounded-[16px] border border-[var(--border)] bg-black/20 px-4 py-3 text-sm text-white outline-none transition-colors focus:border-[var(--accent)]"
-                                      >
-                                        {editableWorkspaceMemberRoles.map((role) => (
-                                          <option key={role} value={role}>
-                                            {formatWorkspaceRole(role, appLanguage)}
-                                          </option>
-                                        ))}
-                                      </select>
-                                    </label>
+                                      </legend>
+                                      <div className="mt-2 inline-grid w-full grid-cols-2 rounded-full border border-white/10 bg-black/20 p-1 sm:w-auto">
+                                        {editableWorkspaceMemberRoles.map((role) => {
+                                          const isSelectedRole = workspaceInviteRole === role;
+
+                                          return (
+                                            <button
+                                              key={role}
+                                              type="button"
+                                              aria-pressed={isSelectedRole}
+                                              onClick={() => setWorkspaceInviteRole(role)}
+                                              className={`rounded-full px-5 py-2.5 text-sm font-semibold transition-colors ${
+                                                isSelectedRole
+                                                  ? "bg-[var(--accent)] text-[#041016]"
+                                                  : "text-[var(--muted)] hover:bg-white/8 hover:text-white"
+                                              }`}
+                                            >
+                                              {formatWorkspaceRole(role, appLanguage)}
+                                            </button>
+                                          );
+                                        })}
+                                      </div>
+                                    </fieldset>
                                     <button
                                       type="submit"
                                       disabled={isInviteActionRunning}
-                                      className="self-end rounded-full border border-[var(--accent)] bg-[var(--accent)] px-4 py-3 text-sm font-semibold text-[#041016] transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50"
+                                      className="self-end rounded-full border border-[var(--accent)] bg-[var(--accent)] px-5 py-3 text-sm font-semibold text-[#041016] transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50 lg:col-start-2 lg:row-start-1"
                                     >
                                       {isInviteActionRunning
                                         ? isEnglish
@@ -3720,9 +3836,9 @@ export default function Home() {
                                       {workspaceInvites.map((invite) => (
                                         <article
                                           key={invite.id}
-                                          className="rounded-[16px] border border-[var(--border)] bg-white/[0.03] p-3"
+                                          className="rounded-[18px] border border-white/10 bg-white/[0.04] p-3.5 shadow-[0_12px_30px_rgba(0,0,0,0.12)]"
                                         >
-                                          <div className="flex items-start justify-between gap-3">
+                                          <div className="flex items-center justify-between gap-3">
                                             <div className="min-w-0">
                                               <p className="truncate text-sm font-semibold text-white">{invite.invitedEmail}</p>
                                               <p className="mt-1 text-xs text-[var(--muted)]">

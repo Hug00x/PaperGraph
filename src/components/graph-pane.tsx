@@ -861,8 +861,8 @@ export function GraphPane({
   const relationStrokeScale = clamp(viewport.scale, 0.58, 1.28);
 
   return (
-    <section className="relative isolate min-h-0 w-full flex-1 overflow-hidden bg-[linear-gradient(180deg,rgba(4,10,16,0.95),rgba(9,19,29,0.98))]">
-      <aside className="absolute bottom-5 left-5 top-5 z-50 flex max-h-[calc(100%_-_2.5rem)] w-[20rem] flex-col overflow-hidden rounded-[24px] border border-[var(--border)] bg-[rgba(9,19,29,0.78)] p-4 shadow-[0_18px_50px_rgba(0,0,0,0.32)] backdrop-blur-xl">
+    <section className="papergraph-graph-pane relative isolate min-h-0 w-full flex-1 overflow-hidden">
+      <aside className="papergraph-graph-panel absolute bottom-5 left-5 top-5 z-50 flex max-h-[calc(100%_-_2.5rem)] w-[20rem] flex-col overflow-hidden rounded-[24px] border border-[var(--border)] p-4 shadow-[0_18px_50px_rgba(0,0,0,0.18)] backdrop-blur-xl">
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
@@ -1040,7 +1040,7 @@ export function GraphPane({
           }
         }}
       >
-        <div className="absolute inset-0 z-0 bg-[radial-gradient(circle_at_center,rgba(142,231,255,0.12),transparent_32%),radial-gradient(circle_at_20%_20%,rgba(255,255,255,0.05),transparent_20%),linear-gradient(180deg,rgba(6,12,18,0.86),rgba(10,20,30,0.98))]" />
+        <div className="papergraph-graph-backdrop absolute inset-0 z-0" />
 
         <svg className="pointer-events-none absolute inset-0 z-10 h-full w-full">
           <defs>
@@ -1062,10 +1062,10 @@ export function GraphPane({
               (entry.relation.fromArticleId === activeArticle.id ||
                 entry.relation.toArticleId === activeArticle.id);
             const strokeColor = isManualRelation
-              ? "rgba(142,231,255,0.72)"
+              ? "var(--graph-link-manual)"
               : isExplicitRelation
-                ? "rgba(255,255,255,0.5)"
-                : "rgba(255,255,255,0.26)";
+                ? "var(--graph-link-explicit)"
+                : "var(--graph-link-muted)";
             const baseStrokeWidth = isActiveRelation
               ? 2.4
               : isManualRelation
@@ -1181,10 +1181,10 @@ export function GraphPane({
                 }}
               >
                 <span
-                  className={`relative flex h-16 w-16 items-center justify-center rounded-full border text-lg font-semibold shadow-[0_18px_38px_rgba(0,0,0,0.38)] transition-colors ${
+                  className={`papergraph-graph-node-core relative flex h-16 w-16 items-center justify-center rounded-full border text-lg font-semibold shadow-[0_18px_38px_rgba(0,0,0,0.24)] transition-colors ${
                     isActive
-                      ? "border-[var(--accent)] bg-[rgba(142,231,255,0.24)] text-white shadow-[0_0_32px_rgba(142,231,255,0.2)]"
-                      : "border-white/15 bg-[rgba(15,24,36,0.94)] text-white/90 group-hover:border-[rgba(142,231,255,0.62)]"
+                      ? "is-active border-[var(--accent)] text-white shadow-[0_0_32px_rgba(142,231,255,0.2)]"
+                      : "border-[var(--border)] text-white/90 group-hover:border-[var(--accent)]"
                   } ${
                     activeManualConnectionSourceId === article.id
                       ? "ring-2 ring-[rgba(142,231,255,0.45)]"
@@ -1194,21 +1194,21 @@ export function GraphPane({
                   {getArticleInitials(article.title)}
                   <span
                     aria-label={getArticleStatusLabel(article.status, language)}
-                    className={`absolute -right-0.5 -top-0.5 h-3.5 w-3.5 rounded-full border-2 border-[#07111b] ${
+                    className={`absolute -right-0.5 -top-0.5 h-3.5 w-3.5 rounded-full border-2 border-[var(--graph-node-ring)] ${
                       article.status === "Published" ? "bg-emerald-300" : "bg-amber-300"
                     }`}
                   />
                   {nodePresence.length > 0 ? (
-                    <span className="absolute -left-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full border-2 border-[#07111b] bg-emerald-300 px-1 text-[10px] font-bold text-[#041016]">
+                    <span className="absolute -left-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full border-2 border-[var(--graph-node-ring)] bg-emerald-300 px-1 text-[10px] font-bold text-[#041016]">
                       {nodePresence.length}
                     </span>
                   ) : null}
                 </span>
                 <span
-                  className={`max-w-[8.5rem] truncate rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
+                  className={`papergraph-graph-node-label max-w-[8.5rem] truncate rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
                     isActive
-                      ? "border-[rgba(142,231,255,0.45)] bg-[rgba(142,231,255,0.14)] text-white"
-                      : "border-white/10 bg-black/30 text-white/70"
+                      ? "is-active border-[rgba(142,231,255,0.45)] text-white"
+                      : "border-[var(--border)] text-white/70"
                   }`}
                 >
                   {article.title}
@@ -1219,7 +1219,7 @@ export function GraphPane({
 
         {contextMenu ? (
           <div
-            className="absolute z-50 w-[11.5rem] rounded-[18px] border border-[var(--border)] bg-[rgba(9,19,29,0.9)] p-2 shadow-[0_16px_40px_rgba(0,0,0,0.35)] backdrop-blur-xl"
+            className="papergraph-graph-menu absolute z-50 w-[11.5rem] rounded-[18px] border border-[var(--border)] p-2 shadow-[0_16px_40px_rgba(0,0,0,0.24)] backdrop-blur-xl"
             style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }}
           >
             {canEditContextMenuArticle ? (
@@ -1303,7 +1303,7 @@ export function GraphPane({
       {activeArticle ? (
         <aside
           data-graph-control
-          className="absolute bottom-5 right-5 z-50 w-[min(23rem,calc(100%_-_2.5rem))] max-h-[calc(100%_-_2.5rem)] overflow-hidden rounded-[24px] border border-[var(--border)] bg-[rgba(9,19,29,0.82)] p-4 shadow-[0_18px_50px_rgba(0,0,0,0.35)] backdrop-blur-xl"
+          className="papergraph-graph-panel absolute bottom-5 right-5 z-50 w-[min(23rem,calc(100%_-_2.5rem))] max-h-[calc(100%_-_2.5rem)] overflow-hidden rounded-[24px] border border-[var(--border)] p-4 shadow-[0_18px_50px_rgba(0,0,0,0.2)] backdrop-blur-xl"
         >
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
@@ -1442,7 +1442,7 @@ export function GraphPane({
             role="dialog"
             aria-modal="true"
             aria-labelledby="delete-article-title"
-            className="w-full max-w-md rounded-[24px] border border-[var(--border)] bg-[rgba(9,19,29,0.96)] p-5 shadow-[0_24px_70px_rgba(0,0,0,0.45)]"
+            className="papergraph-graph-dialog w-full max-w-md rounded-[24px] border border-[var(--border)] p-5 shadow-[0_24px_70px_rgba(0,0,0,0.26)]"
           >
             <p className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
               {isEnglish ? "Confirm removal" : "Confirmar remoção"}

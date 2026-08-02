@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { basicSetup } from "codemirror";
 import { StreamLanguage } from "@codemirror/language";
 import { stex } from "@codemirror/legacy-modes/mode/stex";
@@ -22,12 +22,23 @@ type RemoteCursor = {
   userName: string;
 };
 
+type RealtimeRemoteCursor = RemoteCursor & {
+  updatedAt: number;
+};
+
+type CursorSelection = {
+  end: number;
+  start: number;
+};
+
 type CollaborativeLatexEditorProps = {
   articleId: string;
   className?: string;
+  collaborationClientId?: string;
+  collaborationUserName?: string;
   language: "pt" | "en";
   onChange: (value: string) => void;
-  onSelectionChange?: (selection: { end: number; start: number }) => void;
+  onSelectionChange?: (selection: CursorSelection) => void;
   remoteCursors?: RemoteCursor[];
   value: string;
   workspaceId?: string | null;
@@ -35,7 +46,7 @@ type CollaborativeLatexEditorProps = {
 
 export type CollaborativeLatexEditorHandle = {
   focus: () => void;
-  getSelection: () => { end: number; start: number } | null;
+  getSelection: () => CursorSelection | null;
   setSelection: (start: number, end: number) => void;
 };
 
@@ -47,6 +58,17 @@ const setRemoteCursorsEffect = StateEffect.define<RemoteCursor[]>();
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
+}
+
+function getCursorColor(value: string) {
+  const colors = ["#8ee7ff", "#6ee7b7", "#fbbf24", "#fda4af", "#c4b5fd", "#93c5fd"];
+  let hash = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) | 0;
+  }
+
+  return colors[Math.abs(hash) % colors.length];
 }
 
 function encodeUint8Array(value: Uint8Array) {
@@ -220,6 +242,8 @@ export const CollaborativeLatexEditor = forwardRef<
   {
     articleId,
     className,
+    collaborationClientId,
+    collaborationUserName,
     language,
     onChange,
     onSelectionChange,
@@ -229,6 +253,7 @@ export const CollaborativeLatexEditor = forwardRef<
   },
   ref,
 ) {
+  const [realtimeRemoteCursors, setRealtimeRemoteCursors] = useState<RealtimeRemoteCursor[]>([]);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const editorViewRef = useRef<EditorView | null>(null);
   const yDocRef = useRef<Y.Doc | null>(null);
@@ -237,11 +262,31 @@ export const CollaborativeLatexEditor = forwardRef<
   const applyingYjsUpdateRef = useRef(false);
   const latestValueRef = useRef(value);
   const currentValueRef = useRef(value);
+  const latestSelectionRef = useRef<CursorSelection>({ end: 0, start: 0 });
+  const collaborationClientIdRef = useRef(collaborationClientId);
+  const collaborationUserNameRef = useRef(collaborationUserName);
+  const broadcastCursorRef = useRef<(selection: CursorSelection) => void>(() => undefined);
   const onChangeRef = useRef(onChange);
   const onSelectionChangeRef = useRef(onSelectionChange);
   const persistTimeoutRef = useRef<number | null>(null);
 
   currentValueRef.current = value;
+  collaborationClientIdRef.current = collaborationClientId;
+  collaborationUserNameRef.current = collaborationUserName;
+
+  const visibleRemoteCursors = useMemo(() => {
+    const cursorsByClientId = new Map<string, RemoteCursor>();
+
+    remoteCursors.forEach((cursor) => {
+      cursorsByClientId.set(cursor.clientId, cursor);
+    });
+
+    realtimeRemoteCursors.forEach((cursor) => {
+      cursorsByClientId.set(cursor.clientId, cursor);
+    });
+
+    return [...cursorsByClientId.values()];
+  }, [realtimeRemoteCursors, remoteCursors]);
 
   useEffect(() => {
     onChangeRef.current = onChange;
@@ -250,6 +295,18 @@ export const CollaborativeLatexEditor = forwardRef<
   useEffect(() => {
     onSelectionChangeRef.current = onSelectionChange;
   }, [onSelectionChange]);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      const staleBefore = Date.now() - 15000;
+
+      setRealtimeRemoteCursors((currentCursors) =>
+        currentCursors.filter((cursor) => cursor.updatedAt >= staleBefore),
+      );
+    }, 5000);
+
+    return () => window.clearInterval(intervalId);
+  }, []);
 
   useImperativeHandle(ref, () => ({
     focus() {
@@ -286,6 +343,7 @@ export const CollaborativeLatexEditor = forwardRef<
     }
 
     let cancelled = false;
+    let isYTextObserved = false;
     const yDoc = new Y.Doc();
     const yText = yDoc.getText("source");
     yDocRef.current = yDoc;
@@ -298,6 +356,17 @@ export const CollaborativeLatexEditor = forwardRef<
 
       latestValueRef.current = nextValue;
       onChangeRef.current(nextValue);
+    };
+
+    const emitSelection = (selection: { from: number; to: number }) => {
+      const nextSelection = {
+        end: selection.to,
+        start: selection.from,
+      };
+
+      latestSelectionRef.current = nextSelection;
+      onSelectionChangeRef.current?.(nextSelection);
+      broadcastCursorRef.current(nextSelection);
     };
 
     const schedulePersist = () => {
@@ -330,7 +399,7 @@ export const CollaborativeLatexEditor = forwardRef<
       const selection = update.state.selection.main;
 
       if (update.selectionSet || update.docChanged) {
-        onSelectionChangeRef.current?.({ end: selection.to, start: selection.from });
+        emitSelection(selection);
       }
 
       if (!update.docChanged) {
@@ -371,6 +440,20 @@ export const CollaborativeLatexEditor = forwardRef<
 
       emitValue(nextValue);
     });
+    const cursorEmitHandlers = EditorView.domEventHandlers({
+      focus(_event, view) {
+        emitSelection(view.state.selection.main);
+        return false;
+      },
+      keyup(_event, view) {
+        emitSelection(view.state.selection.main);
+        return false;
+      },
+      mouseup(_event, view) {
+        window.requestAnimationFrame(() => emitSelection(view.state.selection.main));
+        return false;
+      },
+    });
 
     const editorView = new EditorView({
       parent,
@@ -383,10 +466,12 @@ export const CollaborativeLatexEditor = forwardRef<
           paperGraphEditorTheme,
           EditorView.lineWrapping,
           updateListener,
+          cursorEmitHandlers,
         ],
       }),
     });
     editorViewRef.current = editorView;
+    emitSelection(editorView.state.selection.main);
 
     const replaceEditorDocument = (nextValue: string) => {
       const currentValue = editorView.state.doc.toString();
@@ -422,6 +507,15 @@ export const CollaborativeLatexEditor = forwardRef<
       applyingYjsUpdateRef.current = true;
       editorView.dispatch({ changes });
       applyingYjsUpdateRef.current = false;
+    };
+
+    const observeYText = () => {
+      if (isYTextObserved) {
+        return;
+      }
+
+      yText.observe(yTextObserver);
+      isYTextObserved = true;
     };
 
     async function initializeCollaboration() {
@@ -460,7 +554,7 @@ export const CollaborativeLatexEditor = forwardRef<
         }
 
         collaborationReadyRef.current = true;
-        yText.observe(yTextObserver);
+        observeYText();
 
         if (!supabase || !currentWorkspaceId) {
           return;
@@ -489,6 +583,25 @@ export const CollaborativeLatexEditor = forwardRef<
             type: "broadcast",
           });
         };
+        const sendCursor = (selection: CursorSelection) => {
+          const currentClientId = collaborationClientIdRef.current ?? clientId;
+          const userName =
+            collaborationUserNameRef.current ?? (language === "en" ? "Collaborator" : "Colaborador");
+
+          void channel.send({
+            event: "cursor",
+            payload: {
+              clientId: currentClientId,
+              color: getCursorColor(currentClientId),
+              selectionEnd: selection.end,
+              selectionStart: selection.start,
+              userName,
+            },
+            type: "broadcast",
+          });
+        };
+
+        broadcastCursorRef.current = sendCursor;
 
         const yDocUpdateHandler = (update: Uint8Array, origin: unknown) => {
           if (origin !== remoteOrigin && origin !== initialOrigin) {
@@ -509,6 +622,41 @@ export const CollaborativeLatexEditor = forwardRef<
             }
 
             Y.applyUpdate(yDoc, decodeUint8Array(message.update), remoteOrigin);
+          })
+          .on("broadcast", { event: "cursor" }, ({ payload }) => {
+            const message = payload as {
+              clientId?: string;
+              color?: string;
+              selectionEnd?: number;
+              selectionStart?: number;
+              userName?: string;
+            };
+            const currentClientId = collaborationClientIdRef.current ?? clientId;
+
+            if (
+              !message.clientId ||
+              message.clientId === currentClientId ||
+              typeof message.selectionStart !== "number"
+            ) {
+              return;
+            }
+
+            const remoteClientId = message.clientId;
+            const documentLength = editorView.state.doc.length;
+            const selectionStart = clamp(message.selectionStart, 0, documentLength);
+            const selectionEnd = clamp(message.selectionEnd ?? message.selectionStart, 0, documentLength);
+
+            setRealtimeRemoteCursors((currentCursors) => [
+              ...currentCursors.filter((cursor) => cursor.clientId !== remoteClientId),
+              {
+                clientId: remoteClientId,
+                color: message.color ?? getCursorColor(remoteClientId),
+                selectionEnd,
+                selectionStart,
+                updatedAt: Date.now(),
+                userName: message.userName ?? (language === "en" ? "Collaborator" : "Colaborador"),
+              },
+            ]);
           })
           .on("broadcast", { event: "yjs-sync-request" }, ({ payload }) => {
             const message = payload as { clientId?: string };
@@ -535,10 +683,12 @@ export const CollaborativeLatexEditor = forwardRef<
                 payload: { clientId },
                 type: "broadcast",
               });
+              sendCursor(latestSelectionRef.current);
             }
           });
 
         return () => {
+          broadcastCursorRef.current = () => undefined;
           yDoc.off("update", yDocUpdateHandler);
           void supabase.removeChannel(channel);
         };
@@ -554,7 +704,7 @@ export const CollaborativeLatexEditor = forwardRef<
         }
 
         collaborationReadyRef.current = true;
-        yText.observe(yTextObserver);
+        observeYText();
       }
     }
 
@@ -570,8 +720,11 @@ export const CollaborativeLatexEditor = forwardRef<
         window.clearTimeout(persistTimeoutRef.current);
       }
 
+      broadcastCursorRef.current = () => undefined;
       cleanupRealtime?.();
-      yText.unobserve(yTextObserver);
+      if (isYTextObserved) {
+        yText.unobserve(yTextObserver);
+      }
       editorView.destroy();
       yDoc.destroy();
       editorViewRef.current = null;
@@ -579,7 +732,7 @@ export const CollaborativeLatexEditor = forwardRef<
       yTextRef.current = null;
       collaborationReadyRef.current = false;
     };
-  }, [articleId, workspaceId]);
+  }, [articleId, language, workspaceId]);
 
   useEffect(() => {
     const editorView = editorViewRef.current;
@@ -602,9 +755,9 @@ export const CollaborativeLatexEditor = forwardRef<
 
   useEffect(() => {
     editorViewRef.current?.dispatch({
-      effects: setRemoteCursorsEffect.of(remoteCursors),
+      effects: setRemoteCursorsEffect.of(visibleRemoteCursors),
     });
-  }, [remoteCursors]);
+  }, [visibleRemoteCursors]);
 
   return (
     <div className={className}>
