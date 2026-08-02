@@ -1,6 +1,7 @@
 "use client";
 
 import { ArticleLibrary } from "@/components/article-library";
+import { ArticleViewerPane } from "@/components/article-viewer-pane";
 import { AuthLanding } from "@/components/auth-landing";
 import { EditorPane } from "@/components/editor-pane";
 import { GraphPane } from "@/components/graph-pane";
@@ -17,9 +18,25 @@ import {
   type WorkspaceRelation,
 } from "@/lib/workspace-data";
 import {
+  acceptWorkspaceInviteInSupabase,
+  createUserWorkspaceInSupabase,
+  createWorkspaceInviteInSupabase,
+  ensureUserWorkspace,
+  listMyPendingWorkspaceInvitesFromSupabase,
+  listUserWorkspacesFromSupabase,
+  listWorkspaceInvitesFromSupabase,
+  listWorkspaceMembersFromSupabase,
   loadWorkspaceSnapshotFromSupabase,
+  removeWorkspaceMemberFromSupabase,
+  revokeWorkspaceInviteInSupabase,
   saveWorkspaceSnapshotToSupabase,
+  updateWorkspaceMemberRoleInSupabase,
+  type AccountWorkspace,
+  type WorkspaceInvite,
+  type WorkspaceMember,
+  type WorkspaceMemberRole,
 } from "@/lib/supabase-workspace";
+import { deleteArticleCollaborationStateFromSupabase } from "@/lib/supabase-collaboration";
 import { getSupabaseBrowserClient } from "@/lib/supabase-client";
 import { paperGraphAssetBucket, uploadWorkspaceAssetToSupabase } from "@/lib/supabase-storage";
 import Image from "next/image";
@@ -27,23 +44,248 @@ import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } fro
 import type { User } from "@supabase/supabase-js";
 
 const apiPath = "/api/workspace";
+const activeWorkspaceStorageKey = "papergraph-active-workspace-id";
+const localWorkspaceUiStorageId = "local";
+const workspaceUiStorageKeyPrefix = "papergraph-workspace-ui";
 const tabs = ["drafts", "editor", "graph", "settings"] as const;
-const settingsSections = ["general", "help", "account", "data"] as const;
+const settingsSections = ["general", "workspaces", "help", "account", "data"] as const;
+const editableWorkspaceMemberRoles = ["editor", "viewer"] as const;
 type WorkspaceTab = (typeof tabs)[number];
 type SettingsSection = (typeof settingsSections)[number];
+type EditableWorkspaceMemberRole = (typeof editableWorkspaceMemberRoles)[number];
 type PendingEditorResubmission = { articleId: string; title: string; source: string };
 type PendingEditorNavigation = { type: "tab"; tab: WorkspaceTab };
 type ArticleSubmission = { articleId?: string; title: string; source: string };
 type AuthMode = "sign-in" | "sign-up";
-type AccountWorkspace = {
-  id: string;
-  name: string;
-  language: AppLanguage;
-  role: string;
+type UserProfileRow = {
+  display_name: string | null;
+};
+type WorkspacePresenceMode = "editing" | "viewing" | "browsing" | "settings";
+type WorkspacePresence = {
+  articleId: string | null;
+  articleTitle: string | null;
+  clientId: string;
+  enteredAt: string;
+  email: string | null;
+  mode: WorkspacePresenceMode;
+  selectionEnd?: number | null;
+  selectionStart?: number | null;
+  tab: WorkspaceTab;
+  updatedAt: string;
+  userId: string;
+  userName: string;
 };
 
+type WorkspaceUiState = {
+  activeTab?: WorkspaceTab;
+  graphSelectedArticleId?: string | null;
+  selectedArticleId?: string;
+};
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
+}
+
+function normalizeDisplayName(value: string) {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+function getAuthUserFallbackDisplayName(user: User | null) {
+  if (!user) {
+    return null;
+  }
+
+  const userMetadata = user.user_metadata as Record<string, unknown>;
+  const metadataName =
+    typeof userMetadata.display_name === "string"
+      ? userMetadata.display_name
+      : typeof userMetadata.full_name === "string"
+        ? userMetadata.full_name
+        : typeof userMetadata.name === "string"
+          ? userMetadata.name
+          : "";
+  const normalizedMetadataName = normalizeDisplayName(metadataName);
+
+  if (normalizedMetadataName) {
+    return normalizedMetadataName;
+  }
+
+  return user.email?.split("@")[0] ?? null;
+}
+
+function getStoredActiveWorkspaceId() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  return window.localStorage.getItem(activeWorkspaceStorageKey);
+}
+
+function rememberActiveWorkspaceId(workspaceId: string | null) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  if (workspaceId) {
+    window.localStorage.setItem(activeWorkspaceStorageKey, workspaceId);
+    return;
+  }
+
+  window.localStorage.removeItem(activeWorkspaceStorageKey);
+}
+
+function isWorkspaceTab(value: string | null): value is WorkspaceTab {
+  return tabs.some((tab) => tab === value);
+}
+
+function getWorkspaceUiStorageKey(workspaceId: string | null) {
+  return `${workspaceUiStorageKeyPrefix}:${workspaceId ?? localWorkspaceUiStorageId}`;
+}
+
+function getStoredWorkspaceUiState(workspaceId: string | null): WorkspaceUiState {
+  if (typeof window === "undefined") {
+    return {};
+  }
+
+  const rawState = window.localStorage.getItem(getWorkspaceUiStorageKey(workspaceId));
+
+  if (!rawState) {
+    return {};
+  }
+
+  try {
+    const parsedState = JSON.parse(rawState) as Partial<WorkspaceUiState>;
+
+    return {
+      activeTab: isWorkspaceTab(parsedState.activeTab ?? null) ? parsedState.activeTab : undefined,
+      graphSelectedArticleId:
+        typeof parsedState.graphSelectedArticleId === "string"
+          ? parsedState.graphSelectedArticleId
+          : parsedState.graphSelectedArticleId === null
+            ? null
+            : undefined,
+      selectedArticleId:
+        typeof parsedState.selectedArticleId === "string" && parsedState.selectedArticleId
+          ? parsedState.selectedArticleId
+          : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function rememberWorkspaceUiState(workspaceId: string | null, updates: WorkspaceUiState) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const currentState = getStoredWorkspaceUiState(workspaceId);
+  const nextState = { ...currentState, ...updates };
+
+  window.localStorage.setItem(getWorkspaceUiStorageKey(workspaceId), JSON.stringify(nextState));
+}
+
+function normalizeWorkspaceName(value: string) {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+function formatWorkspaceDate(value: string | null, language: AppLanguage) {
+  if (!value) {
+    return language === "en" ? "No date yet" : "Sem data";
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return language === "en" ? "No date yet" : "Sem data";
+  }
+
+  return new Intl.DateTimeFormat(language === "en" ? "en-GB" : "pt-PT", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+}
+
+function formatWorkspaceRole(role: string, language: AppLanguage) {
+  if (role === "owner") {
+    return language === "en" ? "Owner" : "Dono";
+  }
+
+  if (role === "editor" || role === "member") {
+    return language === "en" ? "Editor" : "Editor";
+  }
+
+  if (role === "viewer") {
+    return language === "en" ? "Viewer" : "Visualizador";
+  }
+
+  return language === "en" ? "Member" : "Membro";
+}
+
+function getEditableWorkspaceMemberRole(role: WorkspaceMemberRole): EditableWorkspaceMemberRole {
+  return role === "viewer" ? "viewer" : "editor";
+}
+
+function formatInviteStatus(status: WorkspaceInvite["status"], language: AppLanguage) {
+  if (status === "accepted") {
+    return language === "en" ? "Accepted" : "Aceite";
+  }
+
+  if (status === "revoked") {
+    return language === "en" ? "Revoked" : "Revogado";
+  }
+
+  return language === "en" ? "Pending" : "Pendente";
+}
+
+function isWorkspacePresence(value: unknown): value is WorkspacePresence {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const presence = value as Partial<WorkspacePresence>;
+
+  return (
+    typeof presence.clientId === "string" &&
+    typeof presence.userId === "string" &&
+    typeof presence.userName === "string" &&
+    typeof presence.tab === "string" &&
+    typeof presence.mode === "string"
+  );
+}
+
+function flattenPresenceState(presenceState: Record<string, unknown>, currentClientId: string) {
+  const presenceByClientId = new Map<string, WorkspacePresence>();
+
+  Object.values(presenceState).forEach((presenceItems) => {
+    if (!Array.isArray(presenceItems)) {
+      return;
+    }
+
+    presenceItems.forEach((presenceItem) => {
+      if (!isWorkspacePresence(presenceItem) || presenceItem.clientId === currentClientId) {
+        return;
+      }
+
+      presenceByClientId.set(presenceItem.clientId, presenceItem);
+    });
+  });
+
+  return [...presenceByClientId.values()].sort((firstPresence, secondPresence) =>
+    firstPresence.userName.localeCompare(secondPresence.userName),
+  );
+}
+
+function getPresenceModeLabel(mode: WorkspacePresenceMode, language: AppLanguage) {
+  switch (mode) {
+    case "editing":
+      return language === "en" ? "Editing" : "A editar";
+    case "viewing":
+      return language === "en" ? "Viewing" : "A visualizar";
+    case "settings":
+      return language === "en" ? "Settings" : "Definições";
+    case "browsing":
+      return language === "en" ? "Browsing" : "A navegar";
+  }
 }
 
 function relationPairKey(fromArticleId: string, toArticleId: string) {
@@ -494,7 +736,7 @@ export default function Home() {
   const [selectedArticleId, setSelectedArticleId] = useState(defaultSnapshot.selectedArticleId);
   const [graphSelectedArticleId, setGraphSelectedArticleId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<WorkspaceTab>("graph");
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>(() => getStoredWorkspaceUiState(null).activeTab ?? "graph");
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
   const [appLanguage, setAppLanguage] = useState<AppLanguage>(() => {
     if (typeof window === "undefined") {
@@ -510,6 +752,9 @@ export default function Home() {
   const [connectionValidationError, setConnectionValidationError] = useState<string | null>(null);
   const [dismissedUnlinkedToastKey, setDismissedUnlinkedToastKey] = useState<string | null>(null);
   const [authMode, setAuthMode] = useState<AuthMode>("sign-in");
+  const [authName, setAuthName] = useState("");
+  const [authDisplayName, setAuthDisplayName] = useState<string | null>(null);
+  const [profileNameDraft, setProfileNameDraft] = useState("");
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authUser, setAuthUser] = useState<User | null>(null);
@@ -519,24 +764,53 @@ export default function Home() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [authStatus, setAuthStatus] = useState<string | null>(null);
   const [accountWorkspace, setAccountWorkspace] = useState<AccountWorkspace | null>(null);
+  const [accountWorkspaces, setAccountWorkspaces] = useState<AccountWorkspace[]>([]);
+  const [newWorkspaceName, setNewWorkspaceName] = useState("");
+  const [isWorkspaceActionRunning, setIsWorkspaceActionRunning] = useState(false);
+  const [workspaceMembers, setWorkspaceMembers] = useState<WorkspaceMember[]>([]);
+  const [workspaceInvites, setWorkspaceInvites] = useState<WorkspaceInvite[]>([]);
+  const [pendingWorkspaceInvites, setPendingWorkspaceInvites] = useState<WorkspaceInvite[]>([]);
+  const [workspaceInviteEmail, setWorkspaceInviteEmail] = useState("");
+  const [workspaceInviteRole, setWorkspaceInviteRole] = useState<EditableWorkspaceMemberRole>("editor");
+  const [isInviteActionRunning, setIsInviteActionRunning] = useState(false);
+  const [memberActionUserId, setMemberActionUserId] = useState<string | null>(null);
+  const [workspacePresence, setWorkspacePresence] = useState<WorkspacePresence[]>([]);
+  const [editorSelection, setEditorSelection] = useState<{ articleId: string; end: number; start: number } | null>(
+    null,
+  );
   const saveRequestIdRef = useRef(0);
   const saveQueueRef = useRef(Promise.resolve());
   const isEnglish = appLanguage === "en";
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
+  const presenceClientIdRef = useRef<string | null>(null);
+  const presenceChannelRef = useRef<ReturnType<NonNullable<typeof supabase>["channel"]> | null>(null);
+  const currentPresencePayloadRef = useRef<WorkspacePresence | null>(null);
+  const presenceLocationKeyRef = useRef<string | null>(null);
+  const presenceEnteredAtRef = useRef<string>(new Date().toISOString());
 
   useEffect(() => {
     window.localStorage.setItem("papergraph-language", appLanguage);
   }, [appLanguage]);
 
-  const applyWorkspaceSnapshot = useCallback((snapshot: WorkspaceSnapshot) => {
-    const selectedArticle =
-      snapshot.articles.find((article) => article.id === snapshot.selectedArticleId) ??
-      snapshot.articles[0] ??
-      null;
-    const selectedSubmittedArticle =
-      selectedArticle && selectedArticle.status !== "Draft"
-        ? selectedArticle
-        : snapshot.articles.find((article) => article.status !== "Draft") ?? null;
+  const applyWorkspaceSnapshot = useCallback((
+    snapshot: WorkspaceSnapshot,
+    workspaceId: string | null = null,
+    restoreUiState = true,
+  ) => {
+    const storedUiState = restoreUiState ? getStoredWorkspaceUiState(workspaceId) : {};
+    const storedSelectedArticle = storedUiState.selectedArticleId
+      ? snapshot.articles.find((article) => article.id === storedUiState.selectedArticleId) ?? null
+      : null;
+    const snapshotSelectedArticle = snapshot.selectedArticleId
+      ? snapshot.articles.find((article) => article.id === snapshot.selectedArticleId) ?? null
+      : null;
+    const selectedArticle = storedSelectedArticle ?? snapshotSelectedArticle;
+    const storedGraphSelectedArticle =
+      storedUiState.graphSelectedArticleId === undefined || storedUiState.graphSelectedArticleId === null
+        ? null
+        : snapshot.articles.find(
+            (article) => article.id === storedUiState.graphSelectedArticleId && isSubmittedArticle(article),
+          ) ?? null;
     const normalizedSnapshot = {
       ...snapshot,
       selectedArticleId: selectedArticle?.id ?? "",
@@ -544,7 +818,12 @@ export default function Home() {
 
     setWorkspace(normalizedSnapshot);
     setSelectedArticleId(normalizedSnapshot.selectedArticleId);
-    setGraphSelectedArticleId(selectedSubmittedArticle?.id ?? null);
+    setGraphSelectedArticleId(storedGraphSelectedArticle?.id ?? null);
+    setEditorSelection(null);
+
+    if (restoreUiState && storedUiState.activeTab) {
+      setActiveTab(storedUiState.activeTab);
+    }
   }, []);
 
   const mirrorWorkspaceLocally = useCallback(async (snapshot: WorkspaceSnapshot) => {
@@ -567,7 +846,7 @@ export default function Home() {
 
       try {
         const snapshot = await loadWorkspaceSnapshotFromSupabase(supabase, workspaceId);
-        applyWorkspaceSnapshot(snapshot);
+        applyWorkspaceSnapshot(snapshot, workspaceId);
         await mirrorWorkspaceLocally(snapshot);
       } catch (error) {
         setLoadError(
@@ -582,49 +861,167 @@ export default function Home() {
     [applyWorkspaceSnapshot, isEnglish, mirrorWorkspaceLocally, supabase],
   );
 
-  const syncAccountWorkspace = useCallback(
+  const loadAuthProfile = useCallback(
     async (currentUser: User | null) => {
       if (!supabase || !currentUser) {
+        setAuthDisplayName(null);
+        return;
+      }
+
+      const fallbackDisplayName = getAuthUserFallbackDisplayName(currentUser);
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("display_name")
+        .eq("id", currentUser.id)
+        .maybeSingle();
+      const profile = data as UserProfileRow | null;
+
+      if (error) {
+        setAuthDisplayName(fallbackDisplayName);
+        setProfileNameDraft(fallbackDisplayName ?? "");
+        return;
+      }
+
+      const nextDisplayName = normalizeDisplayName(profile?.display_name ?? "") || fallbackDisplayName;
+      setAuthDisplayName(nextDisplayName);
+      setProfileNameDraft(nextDisplayName ?? "");
+    },
+    [supabase],
+  );
+
+  const saveAuthProfileDisplayName = useCallback(
+    async (currentUser: User, displayName: string) => {
+      if (!supabase) {
+        return;
+      }
+
+      const normalizedDisplayName = normalizeDisplayName(displayName);
+
+      if (!normalizedDisplayName) {
+        return;
+      }
+
+      const { error } = await supabase.from("profiles").upsert(
+        {
+          id: currentUser.id,
+          display_name: normalizedDisplayName,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "id" },
+      );
+
+      if (error) {
+        throw error;
+      }
+
+      setAuthDisplayName(normalizedDisplayName);
+      setProfileNameDraft(normalizedDisplayName);
+    },
+    [supabase],
+  );
+
+  const loadWorkspaceCollaboration = useCallback(
+    async (currentWorkspace: AccountWorkspace | null) => {
+      if (!supabase) {
+        setWorkspaceMembers([]);
+        setWorkspaceInvites([]);
+        setPendingWorkspaceInvites([]);
+        setWorkspacePresence([]);
+        setEditorSelection(null);
+        return;
+      }
+
+      try {
+        const [pendingInvites, members, invites] = await Promise.all([
+          listMyPendingWorkspaceInvitesFromSupabase(supabase),
+          currentWorkspace
+            ? listWorkspaceMembersFromSupabase(supabase, currentWorkspace.id)
+            : Promise.resolve([]),
+          currentWorkspace?.role === "owner"
+            ? listWorkspaceInvitesFromSupabase(supabase, currentWorkspace.id)
+            : Promise.resolve([]),
+        ]);
+
+        setPendingWorkspaceInvites(pendingInvites);
+        setWorkspaceMembers(members);
+        setWorkspaceInvites(invites);
+      } catch (error) {
+        setWorkspaceMembers([]);
+        setWorkspaceInvites([]);
+        setPendingWorkspaceInvites([]);
+        setAuthError(
+          error instanceof Error
+            ? error.message
+            : isEnglish
+              ? "Could not load workspace collaboration data."
+              : "Não foi possível carregar os dados de colaboração da workspace.",
+        );
+      }
+    },
+    [isEnglish, supabase],
+  );
+
+  const syncAccountWorkspace = useCallback(
+    async (currentUser: User | null, preferredWorkspaceId?: string | null) => {
+      if (!supabase || !currentUser) {
         setAccountWorkspace(null);
+        setAccountWorkspaces([]);
+        setWorkspaceMembers([]);
+        setWorkspaceInvites([]);
+        setPendingWorkspaceInvites([]);
+        setWorkspacePresence([]);
+        setEditorSelection(null);
         return;
       }
 
       setAuthStatus(isEnglish ? "Preparing cloud workspace..." : "A preparar workspace cloud...");
       setAuthError(null);
 
-      const { data, error } = await supabase.rpc("ensure_user_workspace");
+      try {
+        const ensuredWorkspace = await ensureUserWorkspace(supabase);
+        const loadedWorkspaces = await listUserWorkspacesFromSupabase(supabase);
+        const nextWorkspaces =
+          ensuredWorkspace && !loadedWorkspaces.some((workspaceItem) => workspaceItem.id === ensuredWorkspace.id)
+            ? [ensuredWorkspace, ...loadedWorkspaces]
+            : loadedWorkspaces;
+        const storedWorkspaceId = preferredWorkspaceId ?? getStoredActiveWorkspaceId();
+        const nextAccountWorkspace =
+          nextWorkspaces.find((workspaceItem) => workspaceItem.id === storedWorkspaceId) ??
+          nextWorkspaces[0] ??
+          ensuredWorkspace;
 
-      if (error) {
+        if (!nextAccountWorkspace) {
+          setAccountWorkspace(null);
+          setAccountWorkspaces([]);
+          await loadAuthProfile(currentUser);
+          await loadWorkspaceCollaboration(null);
+          setAuthStatus(isEnglish ? "Account connected." : "Conta ligada.");
+          return;
+        }
+
+        setAccountWorkspaces(nextWorkspaces);
+        setAccountWorkspace(nextAccountWorkspace);
+        rememberActiveWorkspaceId(nextAccountWorkspace.id);
+        await loadAuthProfile(currentUser);
+        await loadCloudWorkspace(nextAccountWorkspace.id);
+        await loadWorkspaceCollaboration(nextAccountWorkspace);
+        setAuthStatus(isEnglish ? "Cloud workspace ready." : "Workspace cloud pronta.");
+      } catch (error) {
         setAccountWorkspace(null);
+        setAccountWorkspaces([]);
         setAuthStatus(null);
         setAuthError(
           isEnglish
-            ? `Account connected, but the cloud workspace could not be prepared: ${error.message}. Run supabase/bootstrap-workspace.sql in the SQL Editor.`
-            : `Conta ligada, mas não foi possível preparar a workspace cloud: ${error.message}. Corre supabase/bootstrap-workspace.sql no SQL Editor.`,
+            ? `Account connected, but the cloud workspace could not be prepared: ${
+                error instanceof Error ? error.message : "unknown error"
+              }. Run supabase/bootstrap-workspace.sql in the SQL Editor.`
+            : `Conta ligada, mas não foi possível preparar a workspace cloud: ${
+                error instanceof Error ? error.message : "erro desconhecido"
+              }. Corre supabase/bootstrap-workspace.sql no SQL Editor.`,
         );
-        return;
       }
-
-      const workspaceRow = Array.isArray(data) ? data[0] : null;
-
-      if (!workspaceRow) {
-        setAccountWorkspace(null);
-        setAuthStatus(isEnglish ? "Account connected." : "Conta ligada.");
-        return;
-      }
-
-      const nextAccountWorkspace = {
-        id: String(workspaceRow.workspace_id),
-        name: String(workspaceRow.workspace_name),
-        language: workspaceRow.workspace_language === "en" ? "en" : "pt",
-        role: String(workspaceRow.member_role),
-      } satisfies AccountWorkspace;
-
-      setAccountWorkspace(nextAccountWorkspace);
-      await loadCloudWorkspace(nextAccountWorkspace.id);
-      setAuthStatus(isEnglish ? "Cloud workspace ready." : "Workspace cloud pronta.");
     },
-    [isEnglish, loadCloudWorkspace, supabase],
+    [isEnglish, loadAuthProfile, loadCloudWorkspace, loadWorkspaceCollaboration, supabase],
   );
 
   useEffect(() => {
@@ -685,6 +1082,18 @@ export default function Home() {
       }
 
       setAccountWorkspace(null);
+      setAccountWorkspaces([]);
+      setWorkspaceMembers([]);
+      setWorkspaceInvites([]);
+      setPendingWorkspaceInvites([]);
+      setWorkspacePresence([]);
+      setEditorSelection(null);
+      setWorkspaceInviteEmail("");
+      setWorkspaceInviteRole("editor");
+      rememberActiveWorkspaceId(null);
+      setAuthDisplayName(null);
+      setNewWorkspaceName("");
+      setProfileNameDraft("");
       setAuthStatus(null);
     });
 
@@ -712,6 +1121,12 @@ export default function Home() {
     setAuthStatus(null);
 
     try {
+      const normalizedAuthName = normalizeDisplayName(authName);
+
+      if (authMode === "sign-up" && normalizedAuthName.length < 2) {
+        throw new Error(isEnglish ? "Write your name to create the account." : "Escreve o teu nome para criar a conta.");
+      }
+
       const credentials = {
         email: authEmail.trim(),
         password: authPassword,
@@ -722,6 +1137,11 @@ export default function Home() {
           : await supabase.auth.signUp({
               ...credentials,
               options: {
+                data: {
+                  display_name: normalizedAuthName,
+                  full_name: normalizedAuthName,
+                  name: normalizedAuthName,
+                },
                 emailRedirectTo: window.location.origin,
               },
             });
@@ -737,9 +1157,15 @@ export default function Home() {
 
       if (nextUser) {
         await syncAccountWorkspace(nextUser);
+
+        if (authMode === "sign-up") {
+          await saveAuthProfileDisplayName(nextUser, normalizedAuthName);
+          setAuthName("");
+        }
       }
 
       if (authMode === "sign-up" && !result.data.session) {
+        setAuthName("");
         setAuthStatus(
           isEnglish
             ? "Account created. Check your email to confirm the login."
@@ -753,6 +1179,40 @@ export default function Home() {
           : isEnglish
             ? "Authentication failed."
             : "A autenticação falhou.",
+      );
+    } finally {
+      setIsAuthSubmitting(false);
+    }
+  }
+
+  async function handleProfileNameSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!authUser) {
+      return;
+    }
+
+    const normalizedProfileName = normalizeDisplayName(profileNameDraft);
+
+    if (normalizedProfileName.length < 2) {
+      setAuthError(isEnglish ? "Write a display name." : "Escreve um nome visível.");
+      return;
+    }
+
+    setIsAuthSubmitting(true);
+    setAuthError(null);
+    setAuthStatus(null);
+
+    try {
+      await saveAuthProfileDisplayName(authUser, normalizedProfileName);
+      setAuthStatus(isEnglish ? "Profile name saved." : "Nome de perfil guardado.");
+    } catch (error) {
+      setAuthError(
+        error instanceof Error
+          ? error.message
+          : isEnglish
+            ? "Could not save the profile name."
+            : "Não foi possível guardar o nome de perfil.",
       );
     } finally {
       setIsAuthSubmitting(false);
@@ -774,8 +1234,20 @@ export default function Home() {
     } else {
       setAuthUser(null);
       setAuthAccessToken(null);
+      setAuthDisplayName(null);
+      setAuthName("");
+      setProfileNameDraft("");
       setAccountWorkspace(null);
-      applyWorkspaceSnapshot(defaultSnapshot);
+      setAccountWorkspaces([]);
+      setNewWorkspaceName("");
+      setWorkspaceMembers([]);
+      setWorkspaceInvites([]);
+      setPendingWorkspaceInvites([]);
+      setWorkspacePresence([]);
+      setEditorSelection(null);
+      setWorkspaceInviteEmail("");
+      rememberActiveWorkspaceId(null);
+      applyWorkspaceSnapshot(defaultSnapshot, null, false);
       setAuthStatus(isEnglish ? "Signed out." : "Sessão terminada.");
     }
 
@@ -798,7 +1270,7 @@ export default function Home() {
         }
 
         const snapshot = (await response.json()) as WorkspaceSnapshot;
-        applyWorkspaceSnapshot(snapshot);
+        applyWorkspaceSnapshot(snapshot, null);
       } catch (error) {
         if ((error as Error).name !== "AbortError") {
           const savedLanguage = window.localStorage.getItem("papergraph-language");
@@ -820,13 +1292,16 @@ export default function Home() {
     () =>
       workspace.articles.find(
         (article) => article.id === selectedArticleId,
-      ) ?? workspace.articles[0] ?? null,
+      ) ?? null,
     [selectedArticleId, workspace.articles],
   );
 
   const currentWorkspaceTags = workspace.workspaceTags;
   const currentGraphNodes = workspace.graphNodes;
   const currentArticles = workspace.articles;
+  const canEditCurrentWorkspace =
+    !accountWorkspace || accountWorkspace.role === "owner" || accountWorkspace.role === "editor" || accountWorkspace.role === "member";
+  const isWorkspaceOwner = accountWorkspace?.role === "owner";
   const currentIgnoredUnlinkedMentionKeys = useMemo(
     () => workspace.ignoredUnlinkedMentionKeys,
     [workspace.ignoredUnlinkedMentionKeys],
@@ -878,6 +1353,7 @@ export default function Home() {
     : "";
   const shouldShowUnlinkedToast =
     activeTab === "graph" &&
+    canEditCurrentWorkspace &&
     Boolean(activeGraphArticle) &&
     activeArticleUnlinkedMentions.length > 0 &&
     dismissedUnlinkedToastKey !== activeUnlinkedToastKey;
@@ -889,7 +1365,173 @@ export default function Home() {
   );
   const hasPendingEditorResubmission =
     activeTab === "editor" && pendingEditorResubmission?.articleId === selectedArticleId;
-  const selectedArticleCanBeEdited = selectedArticle ? !isImportedPdfArticle(selectedArticle) : false;
+  const selectedArticleIsImportedPdf = selectedArticle ? isImportedPdfArticle(selectedArticle) : false;
+  const selectedArticleCanBeEdited =
+    canEditCurrentWorkspace && selectedArticle ? !selectedArticleIsImportedPdf : false;
+  const shouldUseArticleViewer = !canEditCurrentWorkspace || selectedArticleIsImportedPdf;
+  const canOpenArticleWorkArea = Boolean(selectedArticle) && (shouldUseArticleViewer || selectedArticleCanBeEdited);
+  const visibleAccountName = authDisplayName ?? getAuthUserFallbackDisplayName(authUser);
+  const authUserId = authUser?.id ?? null;
+  const authUserEmail = authUser?.email ?? null;
+  const accountWorkspaceId = accountWorkspace?.id ?? null;
+  const currentPresenceArticle = activeTab === "editor" && !shouldUseArticleViewer ? selectedArticle : null;
+  const currentEditorSelection =
+    currentPresenceArticle && editorSelection?.articleId === currentPresenceArticle.id ? editorSelection : null;
+  const currentPresenceMode: WorkspacePresenceMode =
+    activeTab === "editor"
+      ? shouldUseArticleViewer
+        ? "viewing"
+        : "editing"
+      : activeTab === "settings"
+        ? "settings"
+        : "browsing";
+  const articlePresence = useMemo(
+    () =>
+      selectedArticle
+        ? workspacePresence.filter(
+            (presence) => presence.mode === "editing" && presence.articleId === selectedArticle.id,
+          )
+        : [],
+    [selectedArticle, workspacePresence],
+  );
+  const workspacePresenceByUserId = useMemo(() => {
+    const presenceByUserId = new Map<string, WorkspacePresence>();
+
+    workspacePresence.forEach((presence) => {
+      presenceByUserId.set(presence.userId, presence);
+    });
+
+    return presenceByUserId;
+  }, [workspacePresence]);
+  const workspacePresenceByArticleId = useMemo(() => {
+    const presenceByArticleId: Record<string, WorkspacePresence[]> = {};
+
+    workspacePresence.forEach((presence) => {
+      if (presence.mode !== "editing" || !presence.articleId) {
+        return;
+      }
+
+      presenceByArticleId[presence.articleId] = [
+        ...(presenceByArticleId[presence.articleId] ?? []),
+        presence,
+      ];
+    });
+
+    return presenceByArticleId;
+  }, [workspacePresence]);
+  const onlinePresenceCount = workspacePresence.length + (authUserId && accountWorkspaceId ? 1 : 0);
+
+  const getPresenceClientId = useCallback(() => {
+    if (!presenceClientIdRef.current) {
+      presenceClientIdRef.current =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `client-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    }
+
+    return presenceClientIdRef.current;
+  }, []);
+
+  useEffect(() => {
+    if (!supabase || !authUserId || !accountWorkspaceId) {
+      presenceChannelRef.current = null;
+      currentPresencePayloadRef.current = null;
+      return undefined;
+    }
+
+    const clientId = getPresenceClientId();
+    const channel = supabase.channel(`papergraph:workspace:${accountWorkspaceId}:presence`, {
+      config: {
+        presence: {
+          key: clientId,
+        },
+      },
+    });
+    const syncPresence = () => {
+      setWorkspacePresence(flattenPresenceState(channel.presenceState() as Record<string, unknown>, clientId));
+    };
+
+    presenceChannelRef.current = channel;
+
+    channel
+      .on("presence", { event: "sync" }, syncPresence)
+      .on("presence", { event: "join" }, syncPresence)
+      .on("presence", { event: "leave" }, syncPresence)
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") {
+          if (currentPresencePayloadRef.current) {
+            void channel.track(currentPresencePayloadRef.current);
+          }
+
+          syncPresence();
+        }
+      });
+
+    return () => {
+      if (presenceChannelRef.current === channel) {
+        presenceChannelRef.current = null;
+      }
+
+      void channel.untrack();
+      void supabase.removeChannel(channel);
+    };
+  }, [accountWorkspaceId, authUserId, getPresenceClientId, supabase]);
+
+  useEffect(() => {
+    if (!authUserId || !accountWorkspaceId) {
+      currentPresencePayloadRef.current = null;
+      return;
+    }
+
+    const presenceLocationKey = [
+      accountWorkspaceId,
+      activeTab,
+      currentPresenceMode,
+      currentPresenceArticle?.id ?? "workspace",
+    ].join(":");
+    const now = new Date().toISOString();
+
+    if (presenceLocationKeyRef.current !== presenceLocationKey) {
+      presenceLocationKeyRef.current = presenceLocationKey;
+      presenceEnteredAtRef.current = now;
+    }
+
+    const payload: WorkspacePresence = {
+      articleId: currentPresenceArticle?.id ?? null,
+      articleTitle: currentPresenceArticle?.title ?? null,
+      clientId: getPresenceClientId(),
+      enteredAt: presenceEnteredAtRef.current,
+      email: authUserEmail,
+      mode: currentPresenceMode,
+      selectionEnd: currentEditorSelection?.end ?? null,
+      selectionStart: currentEditorSelection?.start ?? null,
+      tab: activeTab,
+      updatedAt: now,
+      userId: authUserId,
+      userName: visibleAccountName ?? authUserEmail ?? (isEnglish ? "Collaborator" : "Colaborador"),
+    };
+
+    currentPresencePayloadRef.current = payload;
+
+    if (presenceChannelRef.current) {
+      void presenceChannelRef.current.track(payload);
+    }
+  }, [
+    accountWorkspaceId,
+    activeTab,
+    authUserEmail,
+    authUserId,
+    currentPresenceArticle?.id,
+    currentPresenceArticle?.title,
+    editorSelection?.articleId,
+    currentEditorSelection?.end,
+    currentEditorSelection?.start,
+    currentPresenceMode,
+    getPresenceClientId,
+    isEnglish,
+    visibleAccountName,
+  ]);
+
   useEffect(() => {
     if (!hasPendingEditorResubmission) {
       return undefined;
@@ -911,7 +1553,7 @@ export default function Home() {
         case "drafts":
           return "Drafts";
         case "editor":
-          return "Editor";
+          return shouldUseArticleViewer ? "View" : "Editor";
         case "graph":
           return "Graph";
         case "settings":
@@ -923,7 +1565,7 @@ export default function Home() {
       case "drafts":
         return "Rascunhos";
       case "editor":
-        return "Editor";
+        return shouldUseArticleViewer ? "Visualização" : "Editor";
       case "graph":
         return "Mapa";
       case "settings":
@@ -937,7 +1579,7 @@ export default function Home() {
         case "drafts":
           return "Review drafts before submitting";
         case "editor":
-          return "Write LaTeX with autosave";
+          return shouldUseArticleViewer ? "Read the article PDF" : "Write LaTeX with autosave";
         case "graph":
           return "See how ideas connect";
         case "settings":
@@ -949,7 +1591,7 @@ export default function Home() {
       case "drafts":
         return "Rever rascunhos por submeter";
       case "editor":
-        return "Escrever LaTeX com autosave";
+        return shouldUseArticleViewer ? "Ver o PDF do artigo" : "Escrever LaTeX com autosave";
       case "graph":
         return "Ver como as ideias se ligam";
       case "settings":
@@ -962,6 +1604,8 @@ export default function Home() {
       switch (section) {
         case "general":
           return "General";
+        case "workspaces":
+          return "Workspaces";
         case "help":
           return "Help";
         case "account":
@@ -974,6 +1618,8 @@ export default function Home() {
     switch (section) {
       case "general":
         return "Geral";
+      case "workspaces":
+        return "Workspaces";
       case "help":
         return "Ajuda";
       case "account":
@@ -988,6 +1634,8 @@ export default function Home() {
       switch (section) {
         case "general":
           return "Interface preferences";
+        case "workspaces":
+          return "Maps and collaboration";
         case "help":
           return "How PaperGraph works";
         case "account":
@@ -1000,6 +1648,8 @@ export default function Home() {
     switch (section) {
       case "general":
         return "Preferências da interface";
+      case "workspaces":
+        return "Mapas e colaboração";
       case "help":
         return "Como o PaperGraph funciona";
       case "account":
@@ -1009,7 +1659,23 @@ export default function Home() {
     }
   }
 
+  function getReadOnlyWorkspaceMessage() {
+    return isEnglish
+      ? "This workspace is read-only for your account."
+      : "Esta workspace está em modo só leitura para a tua conta.";
+  }
+
+  function showReadOnlyWorkspaceError() {
+    setLoadError(getReadOnlyWorkspaceMessage());
+  }
+
   function saveWorkspace(snapshot: WorkspaceSnapshot) {
+    if (!canEditCurrentWorkspace) {
+      setWorkspace(snapshot);
+      setLoadError(null);
+      return Promise.resolve();
+    }
+
     const saveRequestId = saveRequestIdRef.current + 1;
     saveRequestIdRef.current = saveRequestId;
 
@@ -1052,8 +1718,26 @@ export default function Home() {
 
   function completePendingEditorNavigation(navigation: PendingEditorNavigation | null) {
     if (navigation?.type === "tab") {
-      setActiveTab(navigation.tab);
+      activateTab(navigation.tab);
     }
+  }
+
+  function activateTab(tab: WorkspaceTab) {
+    setActiveTab(tab);
+    rememberWorkspaceUiState(accountWorkspaceId, { activeTab: tab });
+  }
+
+  function rememberSelectedArticle(articleId: string) {
+    if (!articleId) {
+      return;
+    }
+
+    rememberWorkspaceUiState(accountWorkspaceId, { selectedArticleId: articleId });
+  }
+
+  function selectGraphArticle(articleId: string | null) {
+    setGraphSelectedArticleId(articleId);
+    rememberWorkspaceUiState(accountWorkspaceId, { graphSelectedArticleId: articleId });
   }
 
   function requestTabChange(tab: WorkspaceTab) {
@@ -1061,7 +1745,7 @@ export default function Home() {
       return;
     }
 
-    if (tab === "editor" && !selectedArticleCanBeEdited) {
+    if (tab === "editor" && !canOpenArticleWorkArea) {
       return;
     }
 
@@ -1071,7 +1755,313 @@ export default function Home() {
     }
 
     setConnectionValidationError(null);
-    setActiveTab(tab);
+    activateTab(tab);
+  }
+
+  function confirmWorkspaceChange() {
+    if (!hasPendingEditorResubmission) {
+      return true;
+    }
+
+    return window.confirm(
+      isEnglish
+        ? "You have article edits waiting to be resubmitted. Switch workspace anyway?"
+        : "Tens alterações à espera de resubmissão no editor. Queres mudar de workspace na mesma?",
+    );
+  }
+
+  async function switchAccountWorkspace(nextWorkspace: AccountWorkspace) {
+    if (!authUser || !supabase || nextWorkspace.id === accountWorkspace?.id) {
+      return;
+    }
+
+    if (!confirmWorkspaceChange()) {
+      return;
+    }
+
+    setIsWorkspaceActionRunning(true);
+    setAuthError(null);
+    setAuthStatus(isEnglish ? "Opening workspace..." : "A abrir workspace...");
+
+    try {
+      await saveQueueRef.current.catch(() => undefined);
+      setPendingEditorResubmission(null);
+      setPendingEditorNavigation(null);
+      setConnectionValidationError(null);
+      setAccountWorkspace(nextWorkspace);
+      rememberActiveWorkspaceId(nextWorkspace.id);
+      await loadCloudWorkspace(nextWorkspace.id);
+      await loadWorkspaceCollaboration(nextWorkspace);
+      activateTab("graph");
+      setAuthStatus(
+        isEnglish
+          ? `Workspace "${nextWorkspace.name}" opened.`
+          : `Workspace "${nextWorkspace.name}" aberta.`,
+      );
+    } catch (error) {
+      setAuthError(
+        error instanceof Error
+          ? error.message
+          : isEnglish
+            ? "Could not open the workspace."
+            : "Não foi possível abrir a workspace.",
+      );
+    } finally {
+      setIsWorkspaceActionRunning(false);
+    }
+  }
+
+  async function handleCreateAccountWorkspace(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!authUser || !supabase) {
+      setAuthError(isEnglish ? "Sign in before creating a workspace." : "Inicia sessão antes de criar uma workspace.");
+      return;
+    }
+
+    if (!confirmWorkspaceChange()) {
+      return;
+    }
+
+    const workspaceName = normalizeWorkspaceName(newWorkspaceName);
+
+    if (workspaceName.length < 2) {
+      setAuthError(isEnglish ? "Write a workspace name." : "Escreve um nome para a workspace.");
+      return;
+    }
+
+    setIsWorkspaceActionRunning(true);
+    setAuthError(null);
+    setAuthStatus(isEnglish ? "Creating workspace..." : "A criar workspace...");
+
+    try {
+      await saveQueueRef.current.catch(() => undefined);
+      const createdWorkspace = await createUserWorkspaceInSupabase(supabase, workspaceName);
+      const refreshedWorkspaces = await listUserWorkspacesFromSupabase(supabase);
+      const nextWorkspaces = refreshedWorkspaces.some((workspaceItem) => workspaceItem.id === createdWorkspace.id)
+        ? refreshedWorkspaces
+        : [createdWorkspace, ...refreshedWorkspaces];
+
+      setAccountWorkspaces(nextWorkspaces);
+      setAccountWorkspace(createdWorkspace);
+      rememberActiveWorkspaceId(createdWorkspace.id);
+      setNewWorkspaceName("");
+      setPendingEditorResubmission(null);
+      setPendingEditorNavigation(null);
+      setConnectionValidationError(null);
+      await loadCloudWorkspace(createdWorkspace.id);
+      await loadWorkspaceCollaboration(createdWorkspace);
+      activateTab("graph");
+      setAuthStatus(
+        isEnglish
+          ? `Workspace "${createdWorkspace.name}" created.`
+          : `Workspace "${createdWorkspace.name}" criada.`,
+      );
+    } catch (error) {
+      setAuthError(
+        error instanceof Error
+          ? error.message
+          : isEnglish
+            ? "Could not create the workspace."
+            : "Não foi possível criar a workspace.",
+      );
+    } finally {
+      setIsWorkspaceActionRunning(false);
+    }
+  }
+
+  async function handleCreateWorkspaceInvite(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!authUser || !supabase || !accountWorkspace) {
+      setAuthError(isEnglish ? "Open a workspace before inviting members." : "Abre uma workspace antes de convidar membros.");
+      return;
+    }
+
+    if (accountWorkspace.role !== "owner") {
+      setAuthError(isEnglish ? "Only workspace owners can invite members." : "Só o dono da workspace pode convidar membros.");
+      return;
+    }
+
+    const invitedEmail = workspaceInviteEmail.trim().toLowerCase();
+
+    if (!invitedEmail) {
+      setAuthError(isEnglish ? "Write the email to invite." : "Escreve o email a convidar.");
+      return;
+    }
+
+    setIsInviteActionRunning(true);
+    setAuthError(null);
+    setAuthStatus(isEnglish ? "Sending invite..." : "A enviar convite...");
+
+    try {
+      await createWorkspaceInviteInSupabase(supabase, accountWorkspace.id, invitedEmail, workspaceInviteRole);
+      setWorkspaceInviteEmail("");
+      await loadWorkspaceCollaboration(accountWorkspace);
+      setAuthStatus(
+        isEnglish
+          ? `Invite created for ${invitedEmail} as ${formatWorkspaceRole(workspaceInviteRole, appLanguage)}.`
+          : `Convite criado para ${invitedEmail} como ${formatWorkspaceRole(workspaceInviteRole, appLanguage)}.`,
+      );
+    } catch (error) {
+      setAuthError(
+        error instanceof Error
+          ? error.message
+          : isEnglish
+            ? "Could not create the invite."
+            : "Não foi possível criar o convite.",
+      );
+      setAuthStatus(null);
+    } finally {
+      setIsInviteActionRunning(false);
+    }
+  }
+
+  async function handleWorkspaceMemberRoleChange(
+    member: WorkspaceMember,
+    nextRole: EditableWorkspaceMemberRole,
+  ) {
+    if (!supabase || !accountWorkspace || accountWorkspace.role !== "owner" || member.role === "owner") {
+      return;
+    }
+
+    setMemberActionUserId(member.userId);
+    setAuthError(null);
+    setAuthStatus(isEnglish ? "Updating member role..." : "A atualizar cargo do membro...");
+
+    try {
+      await updateWorkspaceMemberRoleInSupabase(supabase, accountWorkspace.id, member.userId, nextRole);
+      await loadWorkspaceCollaboration(accountWorkspace);
+      setAuthStatus(
+        isEnglish
+          ? `${member.displayName ?? member.email ?? "Member"} is now ${formatWorkspaceRole(nextRole, appLanguage)}.`
+          : `${member.displayName ?? member.email ?? "Membro"} agora é ${formatWorkspaceRole(nextRole, appLanguage)}.`,
+      );
+    } catch (error) {
+      setAuthError(
+        error instanceof Error
+          ? error.message
+          : isEnglish
+            ? "Could not update the member role."
+            : "Não foi possível atualizar o cargo do membro.",
+      );
+      setAuthStatus(null);
+    } finally {
+      setMemberActionUserId(null);
+    }
+  }
+
+  async function handleRemoveWorkspaceMember(member: WorkspaceMember) {
+    if (!supabase || !accountWorkspace || accountWorkspace.role !== "owner" || member.role === "owner") {
+      return;
+    }
+
+    const memberName = member.displayName ?? member.email ?? (isEnglish ? "this member" : "este membro");
+    const confirmed = window.confirm(
+      isEnglish
+        ? `Remove ${memberName} from this workspace? They will lose access to this map.`
+        : `Remover ${memberName} desta workspace? Essa pessoa perde acesso a este mapa.`,
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setMemberActionUserId(member.userId);
+    setAuthError(null);
+    setAuthStatus(isEnglish ? "Removing member..." : "A remover membro...");
+
+    try {
+      await removeWorkspaceMemberFromSupabase(supabase, accountWorkspace.id, member.userId);
+      await loadWorkspaceCollaboration(accountWorkspace);
+      setAuthStatus(
+        isEnglish
+          ? `${memberName} was removed from the workspace.`
+          : `${memberName} foi removido da workspace.`,
+      );
+    } catch (error) {
+      setAuthError(
+        error instanceof Error
+          ? error.message
+          : isEnglish
+            ? "Could not remove the member."
+            : "Não foi possível remover o membro.",
+      );
+      setAuthStatus(null);
+    } finally {
+      setMemberActionUserId(null);
+    }
+  }
+
+  async function handleAcceptWorkspaceInvite(invite: WorkspaceInvite) {
+    if (!authUser || !supabase) {
+      return;
+    }
+
+    if (!confirmWorkspaceChange()) {
+      return;
+    }
+
+    setIsInviteActionRunning(true);
+    setAuthError(null);
+    setAuthStatus(isEnglish ? "Accepting invite..." : "A aceitar convite...");
+
+    try {
+      await saveQueueRef.current.catch(() => undefined);
+      const acceptedWorkspace = await acceptWorkspaceInviteInSupabase(supabase, invite.id);
+      await syncAccountWorkspace(authUser, acceptedWorkspace.id);
+      setPendingEditorResubmission(null);
+      setPendingEditorNavigation(null);
+      setConnectionValidationError(null);
+      activateTab("graph");
+      setAuthStatus(
+        isEnglish
+          ? `Invite accepted. Workspace "${acceptedWorkspace.name}" opened.`
+          : `Convite aceite. Workspace "${acceptedWorkspace.name}" aberta.`,
+      );
+    } catch (error) {
+      setAuthError(
+        error instanceof Error
+          ? error.message
+          : isEnglish
+            ? "Could not accept the invite."
+            : "Não foi possível aceitar o convite.",
+      );
+      setAuthStatus(null);
+    } finally {
+      setIsInviteActionRunning(false);
+    }
+  }
+
+  async function handleRevokeWorkspaceInvite(invite: WorkspaceInvite) {
+    if (!supabase || !accountWorkspace) {
+      return;
+    }
+
+    setIsInviteActionRunning(true);
+    setAuthError(null);
+    setAuthStatus(isEnglish ? "Revoking invite..." : "A revogar convite...");
+
+    try {
+      await revokeWorkspaceInviteInSupabase(supabase, invite.id);
+      await loadWorkspaceCollaboration(accountWorkspace);
+      setAuthStatus(
+        isEnglish
+          ? `Invite to ${invite.invitedEmail} revoked.`
+          : `Convite para ${invite.invitedEmail} revogado.`,
+      );
+    } catch (error) {
+      setAuthError(
+        error instanceof Error
+          ? error.message
+          : isEnglish
+            ? "Could not revoke the invite."
+            : "Não foi possível revogar o convite.",
+      );
+      setAuthStatus(null);
+    } finally {
+      setIsInviteActionRunning(false);
+    }
   }
 
   function leaveEditorWithoutResubmitting() {
@@ -1108,6 +2098,7 @@ export default function Home() {
     setConnectionValidationError(null);
     setPendingEditorNavigation(null);
     setSelectedArticleId(articleId);
+    rememberSelectedArticle(articleId);
 
     void saveWorkspace({
       selectedArticleId: articleId,
@@ -1126,7 +2117,7 @@ export default function Home() {
   function updateGraphSelectedArticle(articleId: string | null) {
     setConnectionValidationError(null);
     setPendingEditorNavigation(null);
-    setGraphSelectedArticleId(articleId);
+    selectGraphArticle(articleId);
 
     if (articleId) {
       updateSelectedArticle(articleId);
@@ -1134,6 +2125,11 @@ export default function Home() {
   }
 
   function createNewArticle() {
+    if (!canEditCurrentWorkspace) {
+      showReadOnlyWorkspaceError();
+      return;
+    }
+
     const workspaceArticles = currentArticles;
     const nextIndex = workspaceArticles.length + 1;
     const nextArticleTitle = isEnglish
@@ -1190,13 +2186,19 @@ export default function Home() {
     setConnectionValidationError(null);
     setPendingEditorNavigation(null);
     setSelectedArticleId(nextArticle.id);
-    setGraphSelectedArticleId(null);
-    setActiveTab("editor");
+    rememberSelectedArticle(nextArticle.id);
+    selectGraphArticle(null);
+    activateTab("editor");
     void saveWorkspace(snapshot);
   }
 
   function updateArticleDetails(nextArticle: { title: string; source: string }) {
     if (!selectedArticle) return;
+
+    if (!canEditCurrentWorkspace) {
+      showReadOnlyWorkspaceError();
+      return;
+    }
 
     const updatedArticle: WorkspaceArticle = {
       ...selectedArticle,
@@ -1244,6 +2246,11 @@ export default function Home() {
   }
 
   function submitArticle(nextArticle: ArticleSubmission, nextActiveTab: WorkspaceTab = "graph") {
+    if (!canEditCurrentWorkspace) {
+      showReadOnlyWorkspaceError();
+      return;
+    }
+
     const articleToSubmit = nextArticle.articleId
       ? currentArticles.find((article) => article.id === nextArticle.articleId)
       : selectedArticle;
@@ -1273,7 +2280,8 @@ export default function Home() {
       setConnectionValidationError(validationIssues.join(" "));
       setPendingEditorNavigation(null);
       setSelectedArticleId(submittedArticle.id);
-      setActiveTab("editor");
+      rememberSelectedArticle(submittedArticle.id);
+      activateTab("editor");
       return;
     }
 
@@ -1328,12 +2336,18 @@ export default function Home() {
     setConnectionValidationError(null);
     setPendingEditorResubmission(null);
     setSelectedArticleId(submittedArticle.id);
-    setGraphSelectedArticleId(submittedArticle.id);
-    setActiveTab(nextActiveTab);
+    rememberSelectedArticle(submittedArticle.id);
+    selectGraphArticle(submittedArticle.id);
+    activateTab(nextActiveTab);
     void saveWorkspace(snapshot);
   }
 
   function createRelationBetweenArticles(fromArticleId: string, toArticleId: string, note?: string) {
+    if (!canEditCurrentWorkspace) {
+      showReadOnlyWorkspaceError();
+      return;
+    }
+
     if (fromArticleId === toArticleId) {
       return;
     }
@@ -1386,11 +2400,16 @@ export default function Home() {
     };
 
     setWorkspace(snapshot);
-    setGraphSelectedArticleId(fromArticleId);
+    selectGraphArticle(fromArticleId);
     void saveWorkspace(snapshot);
   }
 
   function createWikilinkFromUnlinkedMention(mentionId: string) {
+    if (!canEditCurrentWorkspace) {
+      showReadOnlyWorkspaceError();
+      return;
+    }
+
     const mention = currentUnlinkedMentions.find((currentMention) => currentMention.id === mentionId);
 
     if (!mention) {
@@ -1423,8 +2442,9 @@ export default function Home() {
     if (validationIssues.length > 0) {
       setConnectionValidationError(validationIssues.join(" "));
       setSelectedArticleId(updatedArticle.id);
-      setGraphSelectedArticleId(updatedArticle.id);
-      setActiveTab("editor");
+      rememberSelectedArticle(updatedArticle.id);
+      selectGraphArticle(updatedArticle.id);
+      activateTab("editor");
       return;
     }
 
@@ -1457,12 +2477,18 @@ export default function Home() {
     setWorkspace(snapshot);
     setConnectionValidationError(null);
     setSelectedArticleId(updatedArticle.id);
-    setGraphSelectedArticleId(updatedArticle.id);
-    setActiveTab("graph");
+    rememberSelectedArticle(updatedArticle.id);
+    selectGraphArticle(updatedArticle.id);
+    activateTab("graph");
     void saveWorkspace(snapshot);
   }
 
   function ignoreUnlinkedMention(mentionId: string) {
+    if (!canEditCurrentWorkspace) {
+      showReadOnlyWorkspaceError();
+      return;
+    }
+
     if (currentIgnoredUnlinkedMentionKeys.includes(mentionId)) {
       return;
     }
@@ -1490,6 +2516,11 @@ export default function Home() {
     toArticleId: string,
     relationType: WorkspaceRelation["relationType"] = "manual",
   ) {
+    if (!canEditCurrentWorkspace) {
+      showReadOnlyWorkspaceError();
+      return;
+    }
+
     if (fromArticleId === toArticleId) {
       return;
     }
@@ -1546,7 +2577,8 @@ export default function Home() {
 
       setWorkspace(snapshot);
       setSelectedArticleId(updatedArticle.id);
-      setGraphSelectedArticleId(updatedArticle.id);
+      rememberSelectedArticle(updatedArticle.id);
+      selectGraphArticle(updatedArticle.id);
       void saveWorkspace(snapshot);
       return;
     }
@@ -1597,15 +2629,32 @@ export default function Home() {
   }
 
   function openArticleEditor(articleId: string) {
+    if (!canEditCurrentWorkspace) {
+      showReadOnlyWorkspaceError();
+      return;
+    }
+
     const articleToEdit = currentArticles.find((article) => article.id === articleId);
 
     if (!articleToEdit || isImportedPdfArticle(articleToEdit)) {
       return;
     }
 
-    setGraphSelectedArticleId(articleId);
+    selectGraphArticle(articleId);
     updateSelectedArticle(articleId);
-    setActiveTab("editor");
+    activateTab("editor");
+  }
+
+  function openArticleViewer(articleId: string) {
+    const articleToView = currentArticles.find((article) => article.id === articleId);
+
+    if (!articleToView) {
+      return;
+    }
+
+    selectGraphArticle(articleId);
+    updateSelectedArticle(articleId);
+    activateTab("editor");
   }
 
   async function exportArticlePdf(articleId: string) {
@@ -1621,13 +2670,20 @@ export default function Home() {
     }
 
     try {
+      const articleImageAssets = currentImageAssets.filter(
+        (imageAsset) =>
+          imageAsset.articleId === articleToExport.id ||
+          (!imageAsset.articleId && articleUsesImageAsset(articleToExport, imageAsset)),
+      );
       const response = await fetch("/api/compile", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...(authAccessToken ? { Authorization: `Bearer ${authAccessToken}` } : {}),
         },
         body: JSON.stringify({
           articleId: articleToExport.id,
+          imageAssets: articleImageAssets,
           title: articleToExport.title,
           source: articleToExport.source,
         }),
@@ -1665,6 +2721,10 @@ export default function Home() {
   }
 
   async function importPdfArticle(pdfFile: File) {
+    if (!canEditCurrentWorkspace) {
+      throw new Error(getReadOnlyWorkspaceMessage());
+    }
+
     const importedArticleId = crypto.randomUUID();
     const importedArticleTitle = getTitleFromPdfFileName(pdfFile.name, appLanguage);
     const formData = new FormData();
@@ -1687,8 +2747,8 @@ export default function Home() {
       articleId: importedArticleId,
     };
 
-    if (supabase && authUser) {
-      uploadedPdfAsset = await uploadWorkspaceAssetToSupabase(supabase, authUser.id, uploadedPdfAsset, pdfFile);
+    if (supabase && authUser && accountWorkspace) {
+      uploadedPdfAsset = await uploadWorkspaceAssetToSupabase(supabase, accountWorkspace.id, uploadedPdfAsset, pdfFile);
     }
 
     const importedArticle: WorkspaceArticle = {
@@ -1735,12 +2795,18 @@ export default function Home() {
     setConnectionValidationError(null);
     setPendingEditorNavigation(null);
     setSelectedArticleId(importedArticle.id);
-    setGraphSelectedArticleId(importedArticle.id);
-    setActiveTab("graph");
+    rememberSelectedArticle(importedArticle.id);
+    selectGraphArticle(importedArticle.id);
+    activateTab("graph");
     void saveWorkspace(snapshot);
   }
 
   function addImageAsset(imageAsset: WorkspaceImageAsset) {
+    if (!canEditCurrentWorkspace) {
+      showReadOnlyWorkspaceError();
+      return;
+    }
+
     const scopedImageAsset = {
       ...imageAsset,
       articleId: imageAsset.articleId ?? selectedArticleId,
@@ -1804,6 +2870,10 @@ export default function Home() {
   }
 
   async function deleteImageAsset(imageAsset: WorkspaceImageAsset) {
+    if (!canEditCurrentWorkspace) {
+      throw new Error(getReadOnlyWorkspaceMessage());
+    }
+
     await deleteStoredImageAssetFile(imageAsset);
 
     const nextImageAssets = currentImageAssets.filter((currentImageAsset) => currentImageAsset.id !== imageAsset.id);
@@ -1834,6 +2904,10 @@ export default function Home() {
   }
 
   async function deleteArticle(articleId: string) {
+    if (!canEditCurrentWorkspace) {
+      throw new Error(getReadOnlyWorkspaceMessage());
+    }
+
     const articleToDelete = currentArticles.find((article) => article.id === articleId);
 
     if (!articleToDelete) {
@@ -1875,7 +2949,7 @@ export default function Home() {
         : selectedArticleId;
     const nextGraphSelectedArticleId =
       graphSelectedArticleId === articleId
-        ? nextSubmittedArticles[0]?.id ?? null
+        ? null
         : graphSelectedArticleId;
     const nextSelectedArticle =
       nextArticles.find((article) => article.id === nextSelectedArticleId) ?? nextArticles[0] ?? undefined;
@@ -1906,8 +2980,15 @@ export default function Home() {
     setConnectionValidationError(null);
     setPendingEditorNavigation(null);
     setPendingEditorResubmission(null);
+    setEditorSelection((currentSelection) =>
+      currentSelection?.articleId === articleId ? null : currentSelection,
+    );
     setSelectedArticleId(nextSelectedArticleId);
-    setGraphSelectedArticleId(nextGraphSelectedArticleId);
+    rememberSelectedArticle(nextSelectedArticleId);
+    selectGraphArticle(nextGraphSelectedArticleId);
+    if (supabase && accountWorkspaceId) {
+      void deleteArticleCollaborationStateFromSupabase(supabase, accountWorkspaceId, articleId).catch(() => undefined);
+    }
     void saveWorkspace(snapshot);
   }
 
@@ -1939,6 +3020,10 @@ export default function Home() {
   }
 
   function updateArticlePositions(nextPositions: Record<string, ArticlePosition>) {
+    if (!canEditCurrentWorkspace) {
+      return;
+    }
+
     const normalizedPositions = normalizeArticlePositionsForArticles(currentArticles, nextPositions);
     const snapshot: WorkspaceSnapshot = {
       selectedArticleId,
@@ -1962,6 +3047,7 @@ export default function Home() {
       <AuthLanding
         authMode={authMode}
         email={authEmail}
+        name={authName}
         password={authPassword}
         error={authError}
         isLoading={isAuthLoading}
@@ -1976,6 +3062,7 @@ export default function Home() {
           setAuthError(null);
           setAuthStatus(null);
         }}
+        onNameChange={setAuthName}
         onPasswordChange={setAuthPassword}
         onSubmit={handleAuthSubmit}
       />
@@ -1994,13 +3081,45 @@ export default function Home() {
               className="absolute left-[-5.95rem] top-[-6.28rem] h-auto w-[28rem] max-w-none"
             />
           </div>
+          <button
+            type="button"
+            onClick={() => {
+              setSettingsSection("workspaces");
+              requestTabChange("settings");
+            }}
+            className="w-full rounded-[18px] border border-[var(--border)] bg-white/5 px-4 py-3 text-left transition-colors hover:bg-white/10 sm:w-auto sm:min-w-[16rem]"
+          >
+            <p className="text-[10px] uppercase tracking-[0.24em] text-[var(--muted)]">
+              {isEnglish ? "Active workspace" : "Workspace ativa"}
+            </p>
+            <p className="mt-1 truncate text-sm font-semibold text-white">
+              {accountWorkspace?.name ?? (isEnglish ? "Local workspace" : "Workspace local")}
+            </p>
+            {accountWorkspace ? (
+              <p className="mt-1 text-[11px] text-[var(--muted)]">
+                {onlinePresenceCount <= 1
+                  ? isEnglish
+                    ? "Only you online"
+                    : "Só tu online"
+                  : isEnglish
+                    ? `${onlinePresenceCount} online now`
+                    : `${onlinePresenceCount} online agora`}
+              </p>
+            ) : null}
+          </button>
         </header>
 
         <div className="border-b border-[var(--border)] px-4 py-4 lg:px-5">
           <div className="grid gap-3 md:grid-cols-4">
             {tabs.map((tab) => {
               const isActive = activeTab === tab;
-              const isDisabled = tab === "editor" && !selectedArticleCanBeEdited;
+              const isDisabled = tab === "editor" && !canOpenArticleWorkArea;
+              const disabledTitle =
+                tab === "editor" && !selectedArticle
+                  ? isEnglish
+                    ? "Select an article first."
+                    : "Seleciona primeiro um artigo."
+                  : undefined;
 
               return (
                 <button
@@ -2014,6 +3133,7 @@ export default function Home() {
                         : "PDFs importados não são editáveis."
                       : undefined
                   }
+                  data-disabled-title={disabledTitle}
                   onClick={() => requestTabChange(tab)}
                   className={`rounded-[24px] border px-4 py-4 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
                     isActive
@@ -2057,8 +3177,9 @@ export default function Home() {
                     </h2>
                     <button
                       type="button"
+                      disabled={!canEditCurrentWorkspace}
                       onClick={createNewArticle}
-                      className="rounded-full border border-[var(--border)] bg-white/5 px-3 py-1 text-xs font-semibold text-white transition-colors hover:bg-white/10"
+                      className="rounded-full border border-[var(--border)] bg-white/5 px-3 py-1 text-xs font-semibold text-white transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-45"
                     >
                       {isEnglish ? "New article" : "Novo artigo"}
                     </button>
@@ -2091,8 +3212,9 @@ export default function Home() {
                     <p className="mt-1 text-sm text-[var(--muted)]">{selectedDraftArticle.author}</p>
                     <button
                       type="button"
+                      disabled={!canEditCurrentWorkspace}
                       onClick={() => openArticleEditor(selectedDraftArticle.id)}
-                      className="mt-4 rounded-full border border-[var(--border)] bg-[var(--accent)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-[#041016] transition-transform hover:-translate-y-0.5"
+                      className="mt-4 rounded-full border border-[var(--border)] bg-[var(--accent)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-[#041016] transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {isEnglish ? "Edit draft" : "Editar rascunho"}
                     </button>
@@ -2110,10 +3232,20 @@ export default function Home() {
 
           {activeTab === "editor" ? (
             <div className="flex min-h-0 flex-1 overflow-hidden">
-              {selectedArticle ? (
+              {selectedArticle && shouldUseArticleViewer ? (
+                <ArticleViewerPane
+                  key={`viewer-${selectedArticle.id}`}
+                  article={selectedArticle}
+                  articleCollaborators={articlePresence}
+                  authAccessToken={authAccessToken}
+                  imageAssets={selectedArticleImageAssets}
+                  language={appLanguage}
+                />
+              ) : selectedArticle ? (
                 <EditorPane
                   key={selectedArticle.id}
                   article={selectedArticle}
+                  articleCollaborators={articlePresence}
                   onSaveArticle={updateArticleDetails}
                   onSubmitArticle={submitArticle}
                   submissionIssue={connectionValidationError}
@@ -2123,7 +3255,9 @@ export default function Home() {
                   imageAssets={selectedArticleImageAssets}
                   onImageUploaded={addImageAsset}
                   onImageDeleted={deleteImageAsset}
+                  onEditorSelectionChange={setEditorSelection}
                   authAccessToken={authAccessToken}
+                  workspaceId={accountWorkspace?.id ?? null}
                 />
               ) : (
                 <div className="flex flex-1 items-center justify-center rounded-[28px] border border-[var(--border)] bg-[var(--surface-strong)] p-6 text-center">
@@ -2141,8 +3275,9 @@ export default function Home() {
                     </p>
                     <button
                       type="button"
+                      disabled={!canEditCurrentWorkspace}
                       onClick={createNewArticle}
-                      className="mt-5 rounded-full border border-[var(--accent)] bg-[var(--accent)] px-5 py-3 text-sm font-semibold text-[#041016] transition-transform hover:-translate-y-0.5"
+                      className="mt-5 rounded-full border border-[var(--accent)] bg-[var(--accent)] px-5 py-3 text-sm font-semibold text-[#041016] transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {isEnglish ? "New article" : "Novo artigo"}
                     </button>
@@ -2163,6 +3298,8 @@ export default function Home() {
                   relations={currentRelations}
                   unlinkedMentions={activeArticleUnlinkedMentions}
                   articlePositions={currentArticlePositions}
+                  articlePresenceByArticleId={workspacePresenceByArticleId}
+                  canEdit={canEditCurrentWorkspace}
                   onSelectArticle={updateGraphSelectedArticle}
                   onArticlePositionsChange={updateArticlePositions}
                   onCreateRelation={(fromArticleId, toArticleId) => {
@@ -2172,6 +3309,7 @@ export default function Home() {
                   onCreateWikilinkFromMention={createWikilinkFromUnlinkedMention}
                   onIgnoreUnlinkedMention={ignoreUnlinkedMention}
                   onEditArticle={openArticleEditor}
+                  onViewArticle={openArticleViewer}
                   onExportArticlePdf={exportArticlePdf}
                   onImportPdfArticle={importPdfArticle}
                   onDeleteArticle={deleteArticle}
@@ -2273,6 +3411,470 @@ export default function Home() {
                         );
                       })}
                     </div>
+                  </div>
+                ) : null}
+
+                {settingsSection === "workspaces" ? (
+                  <div className="space-y-5">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
+                        {isEnglish ? "Workspaces" : "Workspaces"}
+                      </p>
+                      <h2 className="mt-2 text-xl font-semibold text-white">
+                        {isEnglish ? "Your article maps" : "Os teus mapas de artigos"}
+                      </h2>
+                      <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+                        {isEnglish
+                          ? "Each workspace has its own articles, files, relations and graph layout. Later, invites will give access to the whole workspace."
+                          : "Cada workspace tem os seus próprios artigos, ficheiros, ligações e layout do mapa. Depois, os convites vão dar acesso ao workspace inteiro."}
+                      </p>
+                    </div>
+
+                    {!supabase ? (
+                      <div className="rounded-[20px] border border-red-300/30 bg-red-500/10 p-4 text-sm leading-6 text-red-100">
+                        {isEnglish
+                          ? "Supabase is not configured, so cloud workspaces are not available."
+                          : "O Supabase não está configurado, por isso as workspaces cloud não estão disponíveis."}
+                      </div>
+                    ) : null}
+
+                    {!authUser ? (
+                      <div className="rounded-[20px] border border-[var(--border)] bg-black/15 p-4 text-sm leading-6 text-[var(--muted)]">
+                        {isEnglish
+                          ? "Sign in to create and switch between cloud workspaces."
+                          : "Inicia sessão para criar e alternar entre workspaces cloud."}
+                      </div>
+                    ) : (
+                      <>
+                        <section className="rounded-[22px] border border-[var(--accent)] bg-[rgba(142,231,255,0.1)] p-4">
+                          <p className="text-xs uppercase tracking-[0.22em] text-[var(--muted)]">
+                            {isEnglish ? "Active workspace" : "Workspace ativa"}
+                          </p>
+                          <div className="mt-3 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                            <div>
+                              <h3 className="text-2xl font-semibold text-white">
+                                {accountWorkspace?.name ?? "PaperGraph"}
+                              </h3>
+                              <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+                                {accountWorkspace
+                                  ? isEnglish
+                                    ? `Role: ${formatWorkspaceRole(accountWorkspace.role, appLanguage)}. Last update: ${formatWorkspaceDate(
+                                        accountWorkspace.updatedAt,
+                                        appLanguage,
+                                      )}.`
+                                    : `Cargo: ${formatWorkspaceRole(accountWorkspace.role, appLanguage)}. Última atualização: ${formatWorkspaceDate(
+                                        accountWorkspace.updatedAt,
+                                        appLanguage,
+                                      )}.`
+                                  : isEnglish
+                                    ? "No cloud workspace is active yet."
+                                    : "Ainda não há uma workspace cloud ativa."}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              disabled={isWorkspaceActionRunning || !authUser}
+                              onClick={() => {
+                                if (authUser) {
+                                  void syncAccountWorkspace(authUser);
+                                }
+                              }}
+                              className="rounded-full border border-[var(--border)] bg-white/10 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {isEnglish ? "Refresh list" : "Atualizar lista"}
+                            </button>
+                          </div>
+                        </section>
+
+                        {pendingWorkspaceInvites.length > 0 ? (
+                          <section className="space-y-3 rounded-[22px] border border-[var(--accent)] bg-[rgba(142,231,255,0.08)] p-4">
+                            <div className="flex items-center justify-between gap-3">
+                              <div>
+                                <p className="text-xs uppercase tracking-[0.22em] text-[var(--muted)]">
+                                  {isEnglish ? "Received invites" : "Convites recebidos"}
+                                </p>
+                                <h3 className="mt-2 text-lg font-semibold text-white">
+                                  {isEnglish ? "Workspaces waiting for you" : "Workspaces à tua espera"}
+                                </h3>
+                              </div>
+                              <span className="rounded-full border border-[var(--border)] bg-black/20 px-3 py-1 text-xs text-[var(--muted)]">
+                                {pendingWorkspaceInvites.length}
+                              </span>
+                            </div>
+
+                            <div className="grid gap-3 xl:grid-cols-2">
+                              {pendingWorkspaceInvites.map((invite) => (
+                                <article
+                                  key={invite.id}
+                                  className="rounded-[18px] border border-[var(--border)] bg-black/15 p-4"
+                                >
+                                  <p className="text-base font-semibold text-white">{invite.workspaceName}</p>
+                                  <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+                                    {isEnglish ? "Invited by" : "Convite de"}{" "}
+                                    {invite.invitedByName ?? invite.invitedByEmail ?? "PaperGraph"}
+                                  </p>
+                                  <p className="mt-1 text-xs text-[var(--muted)]">
+                                    {isEnglish ? "Expires" : "Expira"}: {formatWorkspaceDate(invite.expiresAt, appLanguage)}
+                                  </p>
+                                  <button
+                                    type="button"
+                                    disabled={isInviteActionRunning}
+                                    onClick={() => {
+                                      void handleAcceptWorkspaceInvite(invite);
+                                    }}
+                                    className="mt-4 w-full rounded-full border border-[var(--accent)] bg-[var(--accent)] px-4 py-2 text-xs font-semibold text-[#041016] transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    {isEnglish ? "Accept invite" : "Aceitar convite"}
+                                  </button>
+                                </article>
+                              ))}
+                            </div>
+                          </section>
+                        ) : null}
+
+                        {accountWorkspace ? (
+                          <div className="grid gap-3 xl:grid-cols-2">
+                            <section className="space-y-3 rounded-[22px] border border-[var(--border)] bg-black/15 p-4">
+                              <div className="flex items-center justify-between gap-3">
+                                <div>
+                                  <p className="text-xs uppercase tracking-[0.22em] text-[var(--muted)]">
+                                    {isEnglish ? "Members" : "Membros"}
+                                  </p>
+                                  <h3 className="mt-2 text-lg font-semibold text-white">
+                                    {isEnglish ? "Current workspace" : "Workspace ativa"}
+                                  </h3>
+                                </div>
+                                <span className="rounded-full border border-[var(--border)] bg-black/20 px-3 py-1 text-xs text-[var(--muted)]">
+                                  {workspaceMembers.length}
+                                </span>
+                              </div>
+
+                              {workspaceMembers.length > 0 ? (
+                                <div className="max-h-[18rem] space-y-2 overflow-y-auto pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                                  {workspaceMembers.map((member) => {
+                                    const canManageMember =
+                                      isWorkspaceOwner && member.role !== "owner" && member.userId !== authUser?.id;
+                                    const isMemberActionRunning = memberActionUserId === member.userId;
+                                    const memberPresence = workspacePresenceByUserId.get(member.userId);
+                                    const isMemberOnline = member.userId === authUser?.id || Boolean(memberPresence);
+
+                                    return (
+                                      <article
+                                        key={member.userId}
+                                        className="rounded-[16px] border border-[var(--border)] bg-white/[0.03] p-3"
+                                      >
+                                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                          <div className="min-w-0">
+                                            <p className="truncate text-sm font-semibold text-white">
+                                              {member.displayName ?? member.email ?? member.userId}
+                                            </p>
+                                            {member.email ? (
+                                              <p className="mt-1 truncate text-xs text-[var(--muted)]">{member.email}</p>
+                                            ) : null}
+                                            <p className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-[var(--muted)]">
+                                              <span
+                                                className={`inline-flex h-2 w-2 rounded-full ${
+                                                  isMemberOnline ? "bg-emerald-300" : "bg-white/20"
+                                                }`}
+                                              />
+                                              <span>
+                                                {isMemberOnline
+                                                  ? isEnglish
+                                                    ? "Online"
+                                                    : "Online"
+                                                  : isEnglish
+                                                    ? "Offline"
+                                                    : "Offline"}
+                                              </span>
+                                              {memberPresence ? (
+                                                <span className="truncate">
+                                                  · {getPresenceModeLabel(memberPresence.mode, appLanguage)}
+                                                  {memberPresence.articleTitle ? `: ${memberPresence.articleTitle}` : ""}
+                                                </span>
+                                              ) : null}
+                                            </p>
+                                          </div>
+
+                                          {canManageMember ? (
+                                            <div className="flex shrink-0 flex-wrap gap-2 sm:justify-end">
+                                              <select
+                                                value={getEditableWorkspaceMemberRole(member.role)}
+                                                disabled={Boolean(memberActionUserId)}
+                                                onChange={(event) => {
+                                                  void handleWorkspaceMemberRoleChange(
+                                                    member,
+                                                    event.target.value as EditableWorkspaceMemberRole,
+                                                  );
+                                                }}
+                                                className="rounded-full border border-[var(--border)] bg-black/20 px-3 py-1 text-[11px] font-semibold text-white outline-none transition-colors focus:border-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
+                                              >
+                                                {editableWorkspaceMemberRoles.map((role) => (
+                                                  <option key={role} value={role}>
+                                                    {formatWorkspaceRole(role, appLanguage)}
+                                                  </option>
+                                                ))}
+                                              </select>
+                                              <button
+                                                type="button"
+                                                disabled={Boolean(memberActionUserId)}
+                                                onClick={() => {
+                                                  void handleRemoveWorkspaceMember(member);
+                                                }}
+                                                className="rounded-full border border-red-300/30 bg-red-500/15 px-3 py-1 text-[11px] font-semibold text-red-100 transition-colors hover:bg-red-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+                                              >
+                                                {isMemberActionRunning
+                                                  ? isEnglish
+                                                    ? "Removing..."
+                                                    : "A remover..."
+                                                  : isEnglish
+                                                    ? "Remove"
+                                                    : "Remover"}
+                                              </button>
+                                            </div>
+                                          ) : (
+                                            <span className="shrink-0 rounded-full border border-[var(--border)] bg-white/5 px-3 py-1 text-[11px] font-semibold text-[var(--muted)]">
+                                              {formatWorkspaceRole(member.role, appLanguage)}
+                                            </span>
+                                          )}
+                                        </div>
+                                      </article>
+                                    );
+                                  })}
+                                </div>
+                              ) : (
+                                <p className="rounded-[16px] border border-[var(--border)] bg-white/[0.03] p-3 text-sm leading-6 text-[var(--muted)]">
+                                  {isEnglish ? "No members loaded yet." : "Ainda não há membros carregados."}
+                                </p>
+                              )}
+                            </section>
+
+                            <section className="space-y-3 rounded-[22px] border border-[var(--border)] bg-black/15 p-4">
+                              <div>
+                                <p className="text-xs uppercase tracking-[0.22em] text-[var(--muted)]">
+                                  {isEnglish ? "Invites" : "Convites"}
+                                </p>
+                                <h3 className="mt-2 text-lg font-semibold text-white">
+                                  {isEnglish ? "Invite by email" : "Convidar por email"}
+                                </h3>
+                                <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+                                  {accountWorkspace.role === "owner"
+                                    ? isEnglish
+                                      ? "The invite appears when that person signs in with the same email."
+                                      : "O convite aparece quando essa pessoa entrar com o mesmo email."
+                                    : isEnglish
+                                      ? "Only the workspace owner can invite new members."
+                                      : "Só o dono da workspace pode convidar novos membros."}
+                                </p>
+                              </div>
+
+                              {accountWorkspace.role === "owner" ? (
+                                <>
+                                  <form className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_12rem_auto]" onSubmit={handleCreateWorkspaceInvite}>
+                                    <label className="min-w-0">
+                                      <span className="text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
+                                        Email
+                                      </span>
+                                      <input
+                                        type="email"
+                                        value={workspaceInviteEmail}
+                                        onChange={(event) => setWorkspaceInviteEmail(event.target.value)}
+                                        placeholder={isEnglish ? "friend@example.com" : "amigo@example.com"}
+                                        className="mt-2 w-full rounded-[16px] border border-[var(--border)] bg-black/20 px-4 py-3 text-sm text-white outline-none transition-colors placeholder:text-white/35 focus:border-[var(--accent)]"
+                                      />
+                                    </label>
+                                    <label className="min-w-0">
+                                      <span className="text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
+                                        {isEnglish ? "Role" : "Cargo"}
+                                      </span>
+                                      <select
+                                        value={workspaceInviteRole}
+                                        onChange={(event) => {
+                                          setWorkspaceInviteRole(event.target.value as EditableWorkspaceMemberRole);
+                                        }}
+                                        className="mt-2 w-full rounded-[16px] border border-[var(--border)] bg-black/20 px-4 py-3 text-sm text-white outline-none transition-colors focus:border-[var(--accent)]"
+                                      >
+                                        {editableWorkspaceMemberRoles.map((role) => (
+                                          <option key={role} value={role}>
+                                            {formatWorkspaceRole(role, appLanguage)}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </label>
+                                    <button
+                                      type="submit"
+                                      disabled={isInviteActionRunning}
+                                      className="self-end rounded-full border border-[var(--accent)] bg-[var(--accent)] px-4 py-3 text-sm font-semibold text-[#041016] transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                      {isInviteActionRunning
+                                        ? isEnglish
+                                          ? "Sending..."
+                                          : "A enviar..."
+                                        : isEnglish
+                                          ? "Invite"
+                                          : "Convidar"}
+                                    </button>
+                                  </form>
+
+                                  {workspaceInvites.length > 0 ? (
+                                    <div className="max-h-[16rem] space-y-2 overflow-y-auto pr-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                                      {workspaceInvites.map((invite) => (
+                                        <article
+                                          key={invite.id}
+                                          className="rounded-[16px] border border-[var(--border)] bg-white/[0.03] p-3"
+                                        >
+                                          <div className="flex items-start justify-between gap-3">
+                                            <div className="min-w-0">
+                                              <p className="truncate text-sm font-semibold text-white">{invite.invitedEmail}</p>
+                                              <p className="mt-1 text-xs text-[var(--muted)]">
+                                                {formatInviteStatus(invite.status, appLanguage)} ·{" "}
+                                                {isEnglish ? "expires" : "expira"}{" "}
+                                                {formatWorkspaceDate(invite.expiresAt, appLanguage)}
+                                              </p>
+                                              <p className="mt-1 text-xs text-[var(--muted)]">
+                                                {isEnglish ? "Role" : "Cargo"}: {formatWorkspaceRole(invite.role, appLanguage)}
+                                              </p>
+                                            </div>
+                                            {invite.status === "pending" ? (
+                                              <button
+                                                type="button"
+                                                disabled={isInviteActionRunning}
+                                                onClick={() => {
+                                                  void handleRevokeWorkspaceInvite(invite);
+                                                }}
+                                                className="shrink-0 rounded-full border border-red-300/30 bg-red-500/15 px-3 py-1 text-[11px] font-semibold text-red-100 transition-colors hover:bg-red-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+                                              >
+                                                {isEnglish ? "Revoke" : "Revogar"}
+                                              </button>
+                                            ) : null}
+                                          </div>
+                                        </article>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <p className="rounded-[16px] border border-[var(--border)] bg-white/[0.03] p-3 text-sm leading-6 text-[var(--muted)]">
+                                      {isEnglish ? "No invites yet." : "Ainda não há convites."}
+                                    </p>
+                                  )}
+                                </>
+                              ) : null}
+                            </section>
+                          </div>
+                        ) : null}
+
+                        <form
+                          className="grid gap-3 rounded-[22px] border border-[var(--border)] bg-black/15 p-4 md:grid-cols-[minmax(0,1fr)_auto]"
+                          onSubmit={handleCreateAccountWorkspace}
+                        >
+                          <label className="min-w-0">
+                            <span className="text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
+                              {isEnglish ? "New workspace" : "Nova workspace"}
+                            </span>
+                            <input
+                              type="text"
+                              value={newWorkspaceName}
+                              onChange={(event) => setNewWorkspaceName(event.target.value)}
+                              placeholder={isEnglish ? "e.g. Dissertation papers" : "ex. Artigos da dissertação"}
+                              className="mt-2 w-full rounded-[16px] border border-[var(--border)] bg-black/20 px-4 py-3 text-sm text-white outline-none transition-colors placeholder:text-white/35 focus:border-[var(--accent)]"
+                            />
+                          </label>
+                          <button
+                            type="submit"
+                            disabled={isWorkspaceActionRunning}
+                            className="self-end rounded-full border border-[var(--accent)] bg-[var(--accent)] px-5 py-3 text-sm font-semibold text-[#041016] transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {isWorkspaceActionRunning
+                              ? isEnglish
+                                ? "Working..."
+                                : "A processar..."
+                              : isEnglish
+                                ? "Create workspace"
+                                : "Criar workspace"}
+                          </button>
+                        </form>
+
+                        <section className="space-y-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="text-xs uppercase tracking-[0.22em] text-[var(--muted)]">
+                              {isEnglish ? "Available maps" : "Mapas disponíveis"}
+                            </p>
+                            <span className="rounded-full border border-[var(--border)] bg-black/20 px-3 py-1 text-xs text-[var(--muted)]">
+                              {accountWorkspaces.length}
+                            </span>
+                          </div>
+
+                          {accountWorkspaces.length > 0 ? (
+                            <div className="grid gap-3 xl:grid-cols-2">
+                              {accountWorkspaces.map((workspaceItem) => {
+                                const isActiveWorkspace = workspaceItem.id === accountWorkspace?.id;
+
+                                return (
+                                  <article
+                                    key={workspaceItem.id}
+                                    className={`rounded-[22px] border p-4 transition-colors ${
+                                      isActiveWorkspace
+                                        ? "border-[var(--accent)] bg-[rgba(142,231,255,0.1)]"
+                                        : "border-[var(--border)] bg-black/15"
+                                    }`}
+                                  >
+                                    <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                                      <div className="min-w-0">
+                                        <p className="truncate text-lg font-semibold text-white">{workspaceItem.name}</p>
+                                        <p className="mt-2 text-sm text-[var(--muted)]">
+                                          {isEnglish ? "Role" : "Cargo"}: {formatWorkspaceRole(workspaceItem.role, appLanguage)}
+                                        </p>
+                                        <p className="mt-1 text-xs text-[var(--muted)]">
+                                          {isEnglish ? "Updated" : "Atualizada"}:{" "}
+                                          {formatWorkspaceDate(workspaceItem.updatedAt, appLanguage)}
+                                        </p>
+                                        <p className="mt-1 truncate text-xs text-[var(--muted)]">ID: {workspaceItem.id}</p>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        disabled={isWorkspaceActionRunning || isActiveWorkspace}
+                                        onClick={() => {
+                                          void switchAccountWorkspace(workspaceItem);
+                                        }}
+                                        className={`rounded-full border px-4 py-2 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                                          isActiveWorkspace
+                                            ? "border-[var(--accent)] bg-[rgba(142,231,255,0.12)] text-[var(--accent)]"
+                                            : "border-[var(--border)] bg-white/5 text-white hover:bg-white/10"
+                                        }`}
+                                      >
+                                        {isActiveWorkspace
+                                          ? isEnglish
+                                            ? "Current"
+                                            : "Atual"
+                                          : isEnglish
+                                            ? "Open"
+                                            : "Abrir"}
+                                      </button>
+                                    </div>
+                                  </article>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <div className="rounded-[20px] border border-[var(--border)] bg-black/15 p-4 text-sm leading-6 text-[var(--muted)]">
+                              {isEnglish
+                                ? "No workspaces were returned by Supabase yet. Refresh after running the bootstrap SQL."
+                                : "O Supabase ainda não devolveu workspaces. Atualiza depois de correr o SQL de bootstrap."}
+                            </div>
+                          )}
+                        </section>
+                      </>
+                    )}
+
+                    {authStatus ? (
+                      <p className="rounded-[18px] border border-[rgba(142,231,255,0.25)] bg-[rgba(142,231,255,0.08)] px-4 py-3 text-sm leading-6 text-[var(--accent)]">
+                        {authStatus}
+                      </p>
+                    ) : null}
+
+                    {authError ? (
+                      <p className="rounded-[18px] border border-red-300/30 bg-red-500/10 px-4 py-3 text-sm leading-6 text-red-100">
+                        {authError}
+                      </p>
+                    ) : null}
                   </div>
                 ) : null}
 
@@ -2378,17 +3980,44 @@ export default function Home() {
                           <div className="mt-3 space-y-3">
                             <div>
                               <p className="text-base font-semibold text-white">
-                                {authUser.email ?? (isEnglish ? "Connected account" : "Conta ligada")}
+                                {visibleAccountName ?? (isEnglish ? "Connected account" : "Conta ligada")}
                               </p>
+                              {authUser.email ? (
+                                <p className="mt-1 truncate text-sm text-[var(--muted)]">{authUser.email}</p>
+                              ) : null}
                               <p className="mt-1 truncate text-xs text-[var(--muted)]">{authUser.id}</p>
                             </div>
+
+                            <form className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]" onSubmit={handleProfileNameSubmit}>
+                              <label className="min-w-0">
+                                <span className="text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
+                                  {isEnglish ? "Display name" : "Nome visível"}
+                                </span>
+                                <input
+                                  type="text"
+                                  value={profileNameDraft}
+                                  onChange={(event) => setProfileNameDraft(event.target.value)}
+                                  minLength={2}
+                                  className="mt-2 w-full rounded-[16px] border border-[var(--border)] bg-black/20 px-4 py-3 text-sm text-white outline-none transition-colors placeholder:text-white/35 focus:border-[var(--accent)]"
+                                />
+                              </label>
+                              <button
+                                type="submit"
+                                disabled={isAuthSubmitting}
+                                className="self-end rounded-full border border-[var(--border)] bg-white/5 px-4 py-3 text-xs font-semibold text-white transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                {isEnglish ? "Save name" : "Guardar nome"}
+                              </button>
+                            </form>
 
                             <div className="flex flex-wrap gap-2">
                               <button
                                 type="button"
-                                disabled={isAuthSubmitting}
+                                disabled={isAuthSubmitting || isWorkspaceActionRunning}
                                 onClick={() => {
-                                  void syncAccountWorkspace(authUser);
+                                  if (authUser) {
+                                    void syncAccountWorkspace(authUser);
+                                  }
                                 }}
                                 className="rounded-full border border-[var(--border)] bg-white/5 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
                               >
@@ -2505,8 +4134,8 @@ export default function Home() {
                         <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
                           {accountWorkspace
                             ? isEnglish
-                              ? `Connected as ${accountWorkspace.role}.`
-                              : `Ligada como ${accountWorkspace.role}.`
+                              ? `Connected as ${formatWorkspaceRole(accountWorkspace.role, appLanguage)}.`
+                              : `Ligada como ${formatWorkspaceRole(accountWorkspace.role, appLanguage)}.`
                             : authUser
                               ? isEnglish
                                 ? "The account is connected. The cloud workspace will appear here after bootstrap."
@@ -2611,8 +4240,8 @@ export default function Home() {
           <button
             type="button"
             onClick={() => {
-              setActiveTab("graph");
-              setGraphSelectedArticleId(activeGraphArticle.id);
+              activateTab("graph");
+              selectGraphArticle(activeGraphArticle.id);
               setDismissedUnlinkedToastKey(activeUnlinkedToastKey);
             }}
             className="min-w-0 flex-1 px-4 py-3 text-left"

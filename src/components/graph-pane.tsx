@@ -16,6 +16,15 @@ type GraphPaneProps = {
   relations: WorkspaceRelation[];
   unlinkedMentions: UnlinkedMention[];
   articlePositions: Record<string, ArticlePosition>;
+  articlePresenceByArticleId?: Record<
+    string,
+    Array<{
+      mode: "editing" | "viewing" | "browsing" | "settings";
+      userId: string;
+      userName: string;
+    }>
+  >;
+  canEdit: boolean;
   onSelectArticle: (articleId: string | null) => void;
   onArticlePositionsChange: (positions: Record<string, ArticlePosition>) => void;
   onCreateRelation: (fromArticleId: string, toArticleId: string) => void;
@@ -27,6 +36,7 @@ type GraphPaneProps = {
   onCreateWikilinkFromMention: (mentionId: string) => void;
   onIgnoreUnlinkedMention: (mentionId: string) => void;
   onEditArticle: (articleId: string) => void;
+  onViewArticle: (articleId: string) => void;
   onExportArticlePdf: (articleId: string) => void | Promise<void>;
   onImportPdfArticle: (file: File) => void | Promise<void>;
   onDeleteArticle: (articleId: string) => void | Promise<void>;
@@ -93,6 +103,22 @@ function getRelationBadgeClass(relationType: WorkspaceRelation["relationType"]) 
   return "border-amber-200/25 bg-amber-300/10 text-amber-100";
 }
 
+function getPresenceModeLabel(
+  mode: "editing" | "viewing" | "browsing" | "settings",
+  language: AppLanguage,
+) {
+  switch (mode) {
+    case "editing":
+      return language === "en" ? "editing" : "a editar";
+    case "viewing":
+      return language === "en" ? "viewing" : "a visualizar";
+    case "settings":
+      return language === "en" ? "in settings" : "nas definições";
+    case "browsing":
+      return language === "en" ? "browsing" : "a navegar";
+  }
+}
+
 function isImportedPdfArticle(article: Article) {
   const normalizedTags = article.tags.map((tag) => tag.toLowerCase());
 
@@ -106,6 +132,8 @@ export function GraphPane({
   relations,
   unlinkedMentions,
   articlePositions,
+  articlePresenceByArticleId = {},
+  canEdit,
   onSelectArticle,
   onArticlePositionsChange,
   onCreateRelation,
@@ -113,6 +141,7 @@ export function GraphPane({
   onCreateWikilinkFromMention,
   onIgnoreUnlinkedMention,
   onEditArticle,
+  onViewArticle,
   onExportArticlePdf,
   onImportPdfArticle,
   onDeleteArticle,
@@ -369,6 +398,7 @@ export function GraphPane({
     [activeArticle, articleById, relations],
   );
   const activeRelationCount = activeIncomingRelations.length + activeOutgoingRelations.length;
+  const activeArticlePresence = activeArticle ? articlePresenceByArticleId[activeArticle.id] ?? [] : [];
 
   const screenPositions = useMemo(() => {
     const nextScreenPositions: Record<string, { x: number; y: number }> = {};
@@ -421,7 +451,7 @@ export function GraphPane({
   );
 
   const contextMenuRemovableRelations = useMemo(() => {
-    if (!contextMenu) {
+    if (!contextMenu || !canEdit) {
       return [];
     }
 
@@ -443,16 +473,25 @@ export function GraphPane({
         relation.fromArticleId === contextMenu.articleId ||
         relation.toArticleId === contextMenu.articleId,
     );
-  }, [activeArticle, contextMenu, relations]);
+  }, [activeArticle, canEdit, contextMenu, relations]);
   const contextMenuArticle = contextMenu ? articleById.get(contextMenu.articleId) ?? null : null;
-  const canEditContextMenuArticle = contextMenuArticle ? !isImportedPdfArticle(contextMenuArticle) : false;
-  const canEditActiveArticle = activeArticle ? !isImportedPdfArticle(activeArticle) : false;
+  const canEditContextMenuArticle = canEdit && contextMenuArticle ? !isImportedPdfArticle(contextMenuArticle) : false;
+  const canEditActiveArticle = canEdit && activeArticle ? !isImportedPdfArticle(activeArticle) : false;
   const deleteCandidateArticle = deleteCandidateArticleId
     ? articleById.get(deleteCandidateArticleId) ?? null
     : null;
 
   async function confirmArticleDelete() {
     if (!deleteCandidateArticleId) {
+      return;
+    }
+
+    if (!canEdit) {
+      setDeleteArticleError(
+        isEnglish
+          ? "This workspace is read-only for your account."
+          : "Esta workspace está em modo só leitura para a tua conta.",
+      );
       return;
     }
 
@@ -690,7 +729,7 @@ export function GraphPane({
                   {isEnglish ? "Focus" : "Focar"}
                 </button>
 
-                {isRemovableRelation ? (
+                {canEdit && isRemovableRelation ? (
                   <button
                     type="button"
                     onClick={() =>
@@ -722,7 +761,7 @@ export function GraphPane({
   );
 
   const renderUnlinkedMentionGroup = () => {
-    if (unlinkedMentions.length === 0) {
+    if (!canEdit || unlinkedMentions.length === 0) {
       return null;
     }
 
@@ -777,6 +816,16 @@ export function GraphPane({
   };
 
   async function handlePdfImportChange(event: ChangeEvent<HTMLInputElement>) {
+    if (!canEdit) {
+      event.target.value = "";
+      setImportPdfError(
+        isEnglish
+          ? "This workspace is read-only for your account."
+          : "Esta workspace está em modo só leitura para a tua conta.",
+      );
+      return;
+    }
+
     const pdfFile = event.target.files?.[0];
 
     if (!pdfFile) {
@@ -830,7 +879,7 @@ export function GraphPane({
 
         <button
           type="button"
-          disabled={articles.length < 2 || !activeArticle}
+          disabled={!canEdit || articles.length < 2 || !activeArticle}
           onClick={() => {
             if (!activeArticle) {
               return;
@@ -856,6 +905,14 @@ export function GraphPane({
               : "Ligação manual"}
         </button>
 
+        {!canEdit ? (
+          <p className="mt-3 rounded-[14px] border border-[var(--border)] bg-black/20 px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+            {isEnglish
+              ? "Read-only access. You can browse and export, but not change this workspace."
+              : "Acesso só leitura. Podes navegar e exportar, mas não alterar esta workspace."}
+          </p>
+        ) : null}
+
         <input
           ref={pdfImportInputRef}
           type="file"
@@ -865,7 +922,7 @@ export function GraphPane({
         />
         <button
           type="button"
-          disabled={isImportingPdf}
+          disabled={!canEdit || isImportingPdf}
           onClick={() => pdfImportInputRef.current?.click()}
           className="mt-2 rounded-full border border-[var(--border)] bg-white/5 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
         >
@@ -1044,6 +1101,7 @@ export function GraphPane({
             const isActive = article.id === activeArticle?.id;
             const isDragging = draggingArticleId === article.id;
             const nodeVisualScale = graphVisualScale * (isActive ? 1.1 : 1);
+            const nodePresence = articlePresenceByArticleId[article.id] ?? [];
 
             return (
               <button
@@ -1051,6 +1109,13 @@ export function GraphPane({
                 data-graph-node
                 data-article-id={article.id}
                 type="button"
+                title={
+                  nodePresence.length > 0
+                    ? nodePresence
+                        .map((presence) => `${presence.userName} ${getPresenceModeLabel(presence.mode, language)}`)
+                        .join(", ")
+                    : article.title
+                }
                 onPointerDown={(event) => {
                   if (event.button !== 0) {
                     return;
@@ -1059,6 +1124,18 @@ export function GraphPane({
                   event.preventDefault();
                   stopViewportAnimation();
                   setContextMenu(null);
+
+                  if (!canEdit) {
+                    const nextArticleId = activeArticle?.id === article.id ? null : article.id;
+
+                    onSelectArticle(nextArticleId);
+
+                    if (nextArticleId) {
+                      centerViewportOnArticle(nextArticleId);
+                    }
+
+                    return;
+                  }
 
                   if (activeManualConnectionSourceId) {
                     if (activeManualConnectionSourceId !== article.id) {
@@ -1087,7 +1164,13 @@ export function GraphPane({
                   });
                 }}
                 className={`group absolute z-40 flex w-[9rem] flex-col items-center gap-2 text-center transition-transform ${
-                  activeManualConnectionSourceId ? "cursor-crosshair" : isDragging ? "cursor-grabbing" : "cursor-grab"
+                  !canEdit
+                    ? "cursor-pointer"
+                    : activeManualConnectionSourceId
+                      ? "cursor-crosshair"
+                      : isDragging
+                        ? "cursor-grabbing"
+                        : "cursor-grab"
                 }`}
                 style={{
                   left: `${position.x}px`,
@@ -1115,6 +1198,11 @@ export function GraphPane({
                       article.status === "Published" ? "bg-emerald-300" : "bg-amber-300"
                     }`}
                   />
+                  {nodePresence.length > 0 ? (
+                    <span className="absolute -left-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full border-2 border-[#07111b] bg-emerald-300 px-1 text-[10px] font-bold text-[#041016]">
+                      {nodePresence.length}
+                    </span>
+                  ) : null}
                 </span>
                 <span
                   className={`max-w-[8.5rem] truncate rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
@@ -1158,17 +1246,19 @@ export function GraphPane({
               {isEnglish ? "Export PDF" : "Exportar PDF"}
             </button>
 
-            <button
-              type="button"
-              onClick={() => {
-                setDeleteCandidateArticleId(contextMenu.articleId);
-                setDeleteArticleError(null);
-                setContextMenu(null);
-              }}
-              className="mt-2 w-full rounded-[14px] border border-red-300/30 bg-red-500/15 px-3 py-2 text-sm font-semibold text-red-100 transition-colors hover:bg-red-500/25"
-            >
-              {isEnglish ? "Remove article" : "Remover artigo"}
-            </button>
+            {canEdit ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setDeleteCandidateArticleId(contextMenu.articleId);
+                  setDeleteArticleError(null);
+                  setContextMenu(null);
+                }}
+                className="mt-2 w-full rounded-[14px] border border-red-300/30 bg-red-500/15 px-3 py-2 text-sm font-semibold text-red-100 transition-colors hover:bg-red-500/25"
+              >
+                {isEnglish ? "Remove article" : "Remover artigo"}
+              </button>
+            ) : null}
 
             {contextMenuRemovableRelations.map((relation) => {
               const otherArticleId =
@@ -1247,6 +1337,20 @@ export function GraphPane({
             ))}
           </div>
 
+          {activeArticlePresence.length > 0 ? (
+            <div className="mt-3 rounded-[14px] border border-emerald-300/20 bg-emerald-300/10 px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+              <p className="font-semibold text-white">
+                {activeArticlePresence.map((presence) => presence.userName).join(", ")}
+              </p>
+              <p>
+                {activeArticlePresence
+                  .map((presence) => getPresenceModeLabel(presence.mode, language))
+                  .join(", ")}
+                {isEnglish ? " here." : " aqui."}
+              </p>
+            </div>
+          ) : null}
+
           <div className={`mt-4 grid gap-2 ${canEditActiveArticle ? "grid-cols-3" : "grid-cols-2"}`}>
             <button
               type="button"
@@ -1266,7 +1370,7 @@ export function GraphPane({
             ) : null}
             <button
               type="button"
-              disabled={articles.length < 2}
+              disabled={!canEdit || articles.length < 2}
               onClick={() => {
                 setContextMenu(null);
                 setManualConnectionSourceId((currentSourceId) =>
@@ -1285,9 +1389,19 @@ export function GraphPane({
                   : "Cancelar"
                 : isEnglish
                   ? "Link"
-                  : "Ligar"}
+                : "Ligar"}
             </button>
           </div>
+
+          {!canEditActiveArticle ? (
+            <button
+              type="button"
+              onClick={() => onViewArticle(activeArticle.id)}
+              className="mt-2 w-full rounded-full border border-[var(--border)] bg-white/5 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-white/10"
+            >
+              {isEnglish ? "View article" : "Visualizar artigo"}
+            </button>
+          ) : null}
 
           {manualConnectionSource ? (
             <p className="mt-3 rounded-[14px] border border-[rgba(142,231,255,0.28)] bg-[rgba(142,231,255,0.1)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
@@ -1319,7 +1433,7 @@ export function GraphPane({
         </aside>
       ) : null}
 
-      {deleteCandidateArticle ? (
+      {canEdit && deleteCandidateArticle ? (
         <div
           data-graph-control
           className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 px-4 backdrop-blur-sm"

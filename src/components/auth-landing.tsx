@@ -10,6 +10,7 @@ type AuthMode = "sign-in" | "sign-up";
 type AuthLandingProps = {
   authMode: AuthMode;
   email: string;
+  name: string;
   password: string;
   error: string | null;
   isLoading: boolean;
@@ -20,6 +21,7 @@ type AuthLandingProps = {
   onEmailChange: (value: string) => void;
   onLanguageChange: (language: AppLanguage) => void;
   onModeChange: (mode: AuthMode) => void;
+  onNameChange: (value: string) => void;
   onPasswordChange: (value: string) => void;
   onSubmit: FormEventHandler<HTMLFormElement>;
 };
@@ -50,6 +52,7 @@ const backgroundEdges = [
 export function AuthLanding({
   authMode,
   email,
+  name,
   password,
   error,
   isLoading,
@@ -60,6 +63,7 @@ export function AuthLanding({
   onEmailChange,
   onLanguageChange,
   onModeChange,
+  onNameChange,
   onPasswordChange,
   onSubmit,
 }: AuthLandingProps) {
@@ -207,6 +211,24 @@ export function AuthLanding({
           </div>
 
           <form className="mt-5 space-y-4" onSubmit={onSubmit}>
+            {authMode === "sign-up" ? (
+              <label className="block">
+                <span className="text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
+                  {isEnglish ? "Name" : "Nome"}
+                </span>
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(event) => onNameChange(event.target.value)}
+                  required
+                  minLength={2}
+                  autoComplete="name"
+                  placeholder={isEnglish ? "Your name" : "O teu nome"}
+                  className="mt-2 w-full rounded-[18px] border border-[var(--border)] bg-black/25 px-4 py-3 text-sm text-white outline-none transition-colors placeholder:text-white/35 focus:border-[var(--accent)]"
+                />
+              </label>
+            ) : null}
+
             <label className="block">
               <span className="text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">Email</span>
               <input

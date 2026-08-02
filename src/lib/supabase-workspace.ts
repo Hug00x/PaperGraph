@@ -17,6 +17,72 @@ type WorkspaceRow = {
   language: AppLanguage;
 };
 
+export type WorkspaceMemberRole = "owner" | "member" | "editor" | "viewer";
+
+export type AccountWorkspace = {
+  id: string;
+  name: string;
+  language: AppLanguage;
+  role: WorkspaceMemberRole;
+  createdAt: string | null;
+  updatedAt: string | null;
+};
+
+export type WorkspaceMember = {
+  workspaceId: string;
+  userId: string;
+  role: WorkspaceMemberRole;
+  joinedAt: string | null;
+  displayName: string | null;
+  email: string | null;
+};
+
+export type WorkspaceInvite = {
+  id: string;
+  workspaceId: string;
+  workspaceName: string;
+  invitedEmail: string;
+  invitedBy: string;
+  invitedByName: string | null;
+  invitedByEmail: string | null;
+  role: WorkspaceMemberRole;
+  status: "pending" | "accepted" | "revoked";
+  createdAt: string | null;
+  expiresAt: string | null;
+};
+
+type AccountWorkspaceRpcRow = {
+  workspace_id: string;
+  workspace_name: string;
+  workspace_language: string;
+  member_role: string;
+  workspace_created_at?: string | null;
+  workspace_updated_at?: string | null;
+};
+
+type WorkspaceMemberRpcRow = {
+  workspace_id: string;
+  user_id: string;
+  member_role: string;
+  member_created_at?: string | null;
+  display_name?: string | null;
+  member_email?: string | null;
+};
+
+type WorkspaceInviteRpcRow = {
+  invite_id: string;
+  workspace_id: string;
+  workspace_name: string;
+  invited_email: string;
+  invited_by: string;
+  invited_by_name?: string | null;
+  invited_by_email?: string | null;
+  member_role: string;
+  invite_status: string;
+  invite_created_at?: string | null;
+  invite_expires_at?: string | null;
+};
+
 type ArticleRow = {
   id: string;
   title: string;
@@ -134,6 +200,234 @@ function assertSupabaseResult(error: { message: string } | null, fallbackMessage
   }
 }
 
+function normalizeWorkspaceLanguage(value: string): AppLanguage {
+  return value === "en" ? "en" : "pt";
+}
+
+function normalizeWorkspaceRole(value: string): WorkspaceMemberRole {
+  if (value === "owner" || value === "editor" || value === "viewer") {
+    return value;
+  }
+
+  return "member";
+}
+
+function mapAccountWorkspaceRow(row: AccountWorkspaceRpcRow): AccountWorkspace {
+  return {
+    id: String(row.workspace_id),
+    name: String(row.workspace_name),
+    language: normalizeWorkspaceLanguage(row.workspace_language),
+    role: normalizeWorkspaceRole(String(row.member_role)),
+    createdAt: row.workspace_created_at ?? null,
+    updatedAt: row.workspace_updated_at ?? null,
+  };
+}
+
+function normalizeInviteStatus(value: string): WorkspaceInvite["status"] {
+  if (value === "accepted" || value === "revoked") {
+    return value;
+  }
+
+  return "pending";
+}
+
+function mapWorkspaceMemberRow(row: WorkspaceMemberRpcRow): WorkspaceMember {
+  return {
+    workspaceId: String(row.workspace_id),
+    userId: String(row.user_id),
+    role: normalizeWorkspaceRole(String(row.member_role)),
+    joinedAt: row.member_created_at ?? null,
+    displayName: row.display_name ?? null,
+    email: row.member_email ?? null,
+  };
+}
+
+function mapWorkspaceInviteRow(row: WorkspaceInviteRpcRow): WorkspaceInvite {
+  return {
+    id: String(row.invite_id),
+    workspaceId: String(row.workspace_id),
+    workspaceName: String(row.workspace_name),
+    invitedEmail: String(row.invited_email),
+    invitedBy: String(row.invited_by),
+    invitedByName: row.invited_by_name ?? null,
+    invitedByEmail: row.invited_by_email ?? null,
+    role: normalizeWorkspaceRole(String(row.member_role)),
+    status: normalizeInviteStatus(row.invite_status),
+    createdAt: row.invite_created_at ?? null,
+    expiresAt: row.invite_expires_at ?? null,
+  };
+}
+
+export async function ensureUserWorkspace(
+  supabase: SupabaseClient,
+): Promise<AccountWorkspace | null> {
+  const { data, error } = await supabase.rpc("ensure_user_workspace");
+
+  assertSupabaseResult(error, "Could not prepare workspace.");
+
+  const rows = Array.isArray(data) ? (data as AccountWorkspaceRpcRow[]) : [];
+  const firstWorkspace = rows[0];
+
+  return firstWorkspace ? mapAccountWorkspaceRow(firstWorkspace) : null;
+}
+
+export async function listUserWorkspacesFromSupabase(
+  supabase: SupabaseClient,
+): Promise<AccountWorkspace[]> {
+  const { data, error } = await supabase.rpc("list_user_workspaces");
+
+  assertSupabaseResult(error, "Could not list workspaces.");
+
+  const rows = Array.isArray(data) ? (data as AccountWorkspaceRpcRow[]) : [];
+
+  return rows.map(mapAccountWorkspaceRow);
+}
+
+export async function createUserWorkspaceInSupabase(
+  supabase: SupabaseClient,
+  workspaceName: string,
+): Promise<AccountWorkspace> {
+  const { data, error } = await supabase.rpc("create_user_workspace", {
+    requested_workspace_name: workspaceName,
+  });
+
+  assertSupabaseResult(error, "Could not create workspace.");
+
+  const rows = Array.isArray(data) ? (data as AccountWorkspaceRpcRow[]) : [];
+  const createdWorkspace = rows[0];
+
+  if (!createdWorkspace) {
+    throw new Error("Could not create workspace.");
+  }
+
+  return mapAccountWorkspaceRow(createdWorkspace);
+}
+
+export async function listWorkspaceMembersFromSupabase(
+  supabase: SupabaseClient,
+  workspaceId: string,
+): Promise<WorkspaceMember[]> {
+  const { data, error } = await supabase.rpc("list_workspace_members", {
+    target_workspace_id: workspaceId,
+  });
+
+  assertSupabaseResult(error, "Could not list workspace members.");
+
+  const rows = Array.isArray(data) ? (data as WorkspaceMemberRpcRow[]) : [];
+
+  return rows.map(mapWorkspaceMemberRow);
+}
+
+export async function listWorkspaceInvitesFromSupabase(
+  supabase: SupabaseClient,
+  workspaceId: string,
+): Promise<WorkspaceInvite[]> {
+  const { data, error } = await supabase.rpc("list_workspace_invites", {
+    target_workspace_id: workspaceId,
+  });
+
+  assertSupabaseResult(error, "Could not list workspace invites.");
+
+  const rows = Array.isArray(data) ? (data as WorkspaceInviteRpcRow[]) : [];
+
+  return rows.map(mapWorkspaceInviteRow);
+}
+
+export async function listMyPendingWorkspaceInvitesFromSupabase(
+  supabase: SupabaseClient,
+): Promise<WorkspaceInvite[]> {
+  const { data, error } = await supabase.rpc("list_my_pending_workspace_invites");
+
+  assertSupabaseResult(error, "Could not list pending workspace invites.");
+
+  const rows = Array.isArray(data) ? (data as WorkspaceInviteRpcRow[]) : [];
+
+  return rows.map(mapWorkspaceInviteRow);
+}
+
+export async function createWorkspaceInviteInSupabase(
+  supabase: SupabaseClient,
+  workspaceId: string,
+  invitedEmail: string,
+  role: Exclude<WorkspaceMemberRole, "owner"> = "editor",
+): Promise<WorkspaceInvite> {
+  const { data, error } = await supabase.rpc("create_workspace_invite", {
+    requested_member_role: role,
+    target_email: invitedEmail,
+    target_workspace_id: workspaceId,
+  });
+
+  assertSupabaseResult(error, "Could not create workspace invite.");
+
+  const rows = Array.isArray(data) ? (data as WorkspaceInviteRpcRow[]) : [];
+  const createdInvite = rows[0];
+
+  if (!createdInvite) {
+    throw new Error("Could not create workspace invite.");
+  }
+
+  return mapWorkspaceInviteRow(createdInvite);
+}
+
+export async function acceptWorkspaceInviteInSupabase(
+  supabase: SupabaseClient,
+  inviteId: string,
+): Promise<AccountWorkspace> {
+  const { data, error } = await supabase.rpc("accept_workspace_invite", {
+    invite_uuid: inviteId,
+  });
+
+  assertSupabaseResult(error, "Could not accept workspace invite.");
+
+  const rows = Array.isArray(data) ? (data as AccountWorkspaceRpcRow[]) : [];
+  const acceptedWorkspace = rows[0];
+
+  if (!acceptedWorkspace) {
+    throw new Error("Could not accept workspace invite.");
+  }
+
+  return mapAccountWorkspaceRow(acceptedWorkspace);
+}
+
+export async function revokeWorkspaceInviteInSupabase(
+  supabase: SupabaseClient,
+  inviteId: string,
+) {
+  const { error } = await supabase.rpc("revoke_workspace_invite", {
+    invite_uuid: inviteId,
+  });
+
+  assertSupabaseResult(error, "Could not revoke workspace invite.");
+}
+
+export async function updateWorkspaceMemberRoleInSupabase(
+  supabase: SupabaseClient,
+  workspaceId: string,
+  userId: string,
+  role: Exclude<WorkspaceMemberRole, "owner">,
+) {
+  const { error } = await supabase.rpc("update_workspace_member_role", {
+    requested_member_role: role,
+    target_user_id: userId,
+    target_workspace_id: workspaceId,
+  });
+
+  assertSupabaseResult(error, "Could not update workspace member role.");
+}
+
+export async function removeWorkspaceMemberFromSupabase(
+  supabase: SupabaseClient,
+  workspaceId: string,
+  userId: string,
+) {
+  const { error } = await supabase.rpc("remove_workspace_member", {
+    target_user_id: userId,
+    target_workspace_id: workspaceId,
+  });
+
+  assertSupabaseResult(error, "Could not remove workspace member.");
+}
+
 export async function loadWorkspaceSnapshotFromSupabase(
   supabase: SupabaseClient,
   workspaceId: string,
@@ -219,11 +513,9 @@ export async function loadWorkspaceSnapshotFromSupabase(
   const ignoredUnlinkedMentionKeys = ((ignoredMentionsResult.data ?? []) as IgnoredMentionRow[]).map(
     (mention) => mention.mention_key,
   );
-  const selectedArticle = articles[0] ?? null;
-
   return {
     ...defaultSnapshot,
-    selectedArticleId: selectedArticle?.id ?? "",
+    selectedArticleId: "",
     articles,
     relations,
     articlePositions,
@@ -233,7 +525,7 @@ export async function loadWorkspaceSnapshotFromSupabase(
       articles,
     }),
     activityFeed: createInitialActivityFeed(articles, relations),
-    appStats: createInitialAppStats(articles, relations, selectedArticle ?? undefined),
+    appStats: createInitialAppStats(articles, relations, undefined),
     ignoredUnlinkedMentionKeys,
     imageAssets,
   };

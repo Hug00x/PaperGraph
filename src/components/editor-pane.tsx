@@ -2,6 +2,10 @@
 
 import { type ChangeEvent, useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
+import {
+  CollaborativeLatexEditor,
+  type CollaborativeLatexEditorHandle,
+} from "@/components/collaborative-latex-editor";
 import deleteButtonImage from "@/imagens/Delete_button.png";
 import { getArticleStatusLabel, type AppLanguage } from "@/lib/portuguese-labels";
 import { getSupabaseBrowserClient } from "@/lib/supabase-client";
@@ -10,6 +14,14 @@ import type { WorkspaceArticle, WorkspaceImageAsset } from "@/lib/workspace-data
 
 type EditorPaneProps = {
   article: WorkspaceArticle;
+  articleCollaborators?: Array<{
+    clientId?: string;
+    mode: "editing" | "viewing" | "browsing" | "settings";
+    selectionEnd?: number | null;
+    selectionStart?: number | null;
+    userId: string;
+    userName: string;
+  }>;
   onSaveArticle: (article: { title: string; source: string }) => void;
   onSubmitArticle: (article: { articleId: string; title: string; source: string }) => void;
   submissionIssue: string | null;
@@ -18,8 +30,10 @@ type EditorPaneProps = {
   imageAssets: WorkspaceImageAsset[];
   onImageUploaded: (imageAsset: WorkspaceImageAsset) => void;
   onImageDeleted: (imageAsset: WorkspaceImageAsset) => void | Promise<void>;
+  onEditorSelectionChange?: (selection: { articleId: string; end: number; start: number }) => void;
   language: AppLanguage;
   authAccessToken?: string | null;
+  workspaceId?: string | null;
 };
 
 const latexImageDirectory = "papergraph-images";
@@ -114,8 +128,20 @@ function getDefaultImageInsertionIndex(documentSource: string) {
   return endDocumentIndex === -1 ? documentSource.length : endDocumentIndex;
 }
 
+function getCollaboratorColor(value: string) {
+  const colors = ["#8ee7ff", "#6ee7b7", "#fbbf24", "#fda4af", "#c4b5fd", "#93c5fd"];
+  let hash = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) | 0;
+  }
+
+  return colors[Math.abs(hash) % colors.length];
+}
+
 export function EditorPane({
   article,
+  articleCollaborators = [],
   onSaveArticle,
   onSubmitArticle,
   submissionIssue,
@@ -124,8 +150,10 @@ export function EditorPane({
   imageAssets,
   onImageUploaded,
   onImageDeleted,
+  onEditorSelectionChange,
   language,
   authAccessToken,
+  workspaceId,
 }: EditorPaneProps) {
   const [title, setTitle] = useState(article.title);
   const [source, setSource] = useState(article.source);
@@ -143,13 +171,28 @@ export function EditorPane({
   const autoCompileStartedRef = useRef(false);
   const onSaveArticleRef = useRef(onSaveArticle);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const editorRef = useRef<CollaborativeLatexEditorHandle | null>(null);
   const lastTextSelectionRef = useRef<{ start: number; end: number } | null>(null);
   const previewScrollerRef = useRef<HTMLDivElement | null>(null);
   const previewContainerRef = useRef<HTMLDivElement | null>(null);
   const isEnglish = language === "en";
   const isSubmittedArticle = article.status !== "Draft";
   const hasPendingResubmission = isSubmittedArticle && (title !== article.title || source !== article.source);
+  const editingCollaborators = articleCollaborators.filter((collaborator) => collaborator.mode === "editing");
+  const collaboratorNames = articleCollaborators.map((collaborator) => collaborator.userName).join(", ");
+  const remoteCursors = editingCollaborators
+    .filter((collaborator) => typeof collaborator.selectionStart === "number")
+    .map((collaborator) => {
+      const cursorId = collaborator.clientId ?? collaborator.userId;
+
+      return {
+        clientId: cursorId,
+        color: getCollaboratorColor(cursorId),
+        selectionEnd: collaborator.selectionEnd ?? collaborator.selectionStart ?? 0,
+        selectionStart: collaborator.selectionStart ?? 0,
+        userName: collaborator.userName,
+      };
+    });
 
   useEffect(() => {
     onSaveArticleRef.current = onSaveArticle;
@@ -354,17 +397,15 @@ export function EditorPane({
     setSource(value);
   }
 
-  function updateLastTextSelection() {
-    const textarea = textareaRef.current;
+  function updateLastTextSelection(selection?: { end: number; start: number }) {
+    const nextSelection = selection ?? editorRef.current?.getSelection();
 
-    if (!textarea) {
+    if (!nextSelection) {
       return;
     }
 
-    lastTextSelectionRef.current = {
-      start: textarea.selectionStart,
-      end: textarea.selectionEnd,
-    };
+    lastTextSelectionRef.current = nextSelection;
+    onEditorSelectionChange?.({ articleId: article.id, end: nextSelection.end, start: nextSelection.start });
   }
 
   function insertImageSnippet(imageAsset: WorkspaceImageAsset) {
@@ -402,14 +443,8 @@ export function EditorPane({
     };
 
     window.requestAnimationFrame(() => {
-      const currentTextarea = textareaRef.current;
-
-      if (!currentTextarea) {
-        return;
-      }
-
-      currentTextarea.focus();
-      currentTextarea.setSelectionRange(nextCursorPosition, nextCursorPosition);
+      editorRef.current?.setSelection(nextCursorPosition, nextCursorPosition);
+      editorRef.current?.focus();
     });
   }
 
@@ -441,7 +476,7 @@ export function EditorPane({
 
       let imageAsset = (await response.json()) as WorkspaceImageAsset;
 
-      if (authAccessToken) {
+      if (authAccessToken && workspaceId) {
         const supabase = getSupabaseBrowserClient();
         const { data: sessionData, error: sessionError } = supabase
           ? await supabase.auth.getSession()
@@ -452,7 +487,7 @@ export function EditorPane({
           throw new Error(sessionError?.message ?? (isEnglish ? "Could not validate the session." : "Não foi possível validar a sessão."));
         }
 
-        imageAsset = await uploadWorkspaceAssetToSupabase(supabase, userId, imageAsset, uploadedFile);
+        imageAsset = await uploadWorkspaceAssetToSupabase(supabase, workspaceId, imageAsset, uploadedFile);
       }
 
       onImageUploaded(imageAsset);
@@ -592,6 +627,30 @@ export function EditorPane({
         </div>
       </div>
 
+      {articleCollaborators.length > 0 ? (
+        <div className="mt-4 rounded-[18px] border border-[rgba(142,231,255,0.26)] bg-[rgba(142,231,255,0.08)] px-4 py-3 text-sm leading-6 text-[var(--muted)]">
+          <p className="font-semibold text-white">
+            {editingCollaborators.length > 0
+              ? isEnglish
+                ? "Someone else is editing this article"
+                : "Mais alguém está a editar este artigo"
+              : isEnglish
+                ? "Someone else is viewing this article"
+                : "Mais alguém está a visualizar este artigo"}
+          </p>
+          <p className="mt-1">
+            {collaboratorNames}
+            {editingCollaborators.length > 0
+              ? isEnglish
+                ? " is editing this article too."
+                : " também está a editar este artigo."
+              : isEnglish
+                ? " is here too."
+                : " também está aqui."}
+          </p>
+        </div>
+      ) : null}
+
       {imagePanelOpen ? (
         <aside className="absolute right-4 top-[6.4rem] z-40 flex w-[min(24rem,calc(100%_-_2rem))] max-h-[calc(100%_-_7.5rem)] flex-col overflow-hidden rounded-[14px] border border-[var(--border)] bg-[#17202b] shadow-[0_18px_50px_rgba(0,0,0,0.38)]">
           <div className="flex items-center justify-between gap-3 border-b border-white/10 px-3 py-2">
@@ -703,15 +762,16 @@ export function EditorPane({
                 {getArticleStatusLabel(article.status, language).toLowerCase()} • {saveStatusLabel}
               </span>
             </div>
-            <textarea
-              ref={textareaRef}
+            <CollaborativeLatexEditor
+              ref={editorRef}
+              articleId={article.id}
+              className="min-h-[18rem] w-full flex-1 overflow-hidden rounded-[24px] border border-[var(--border)] bg-[#f7fbff] shadow-inner xl:min-h-0"
+              language={language}
+              onChange={handleSourceChange}
+              onSelectionChange={updateLastTextSelection}
+              remoteCursors={remoteCursors}
               value={source}
-              onChange={(event) => handleSourceChange(event.target.value)}
-              onClick={updateLastTextSelection}
-              onKeyUp={updateLastTextSelection}
-              onSelect={updateLastTextSelection}
-              className="min-h-[18rem] w-full flex-1 resize-none overflow-y-auto overscroll-contain rounded-[24px] border border-[var(--border)] bg-[#f7fbff] p-5 font-mono text-sm leading-7 text-slate-900 shadow-inner outline-none placeholder:text-slate-400 xl:min-h-0"
-              spellCheck={false}
+              workspaceId={workspaceId}
             />
           </label>
         </div>
