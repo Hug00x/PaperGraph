@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { NextResponse } from "next/server";
+import { getPaperGraphAssetDirectory } from "@/lib/server-paths";
 import { getSupabaseServerStorageClient } from "@/lib/supabase-client";
 
 export const runtime = "nodejs";
@@ -19,7 +20,7 @@ function getProjectPath(...segments: string[]) {
   return join(/*turbopackIgnore: true*/ process.cwd(), ...segments);
 }
 
-const uploadedImagesDirectory = getProjectPath("data", "images");
+const uploadedImagesDirectory = getPaperGraphAssetDirectory();
 
 type CompileRequestBody = {
   articleId?: string;
@@ -36,6 +37,12 @@ type WorkspaceImageAsset = {
 };
 
 function resolveTectonicPath() {
+  const configuredTectonicPath = process.env.PAPERGRAPH_TECTONIC_PATH?.trim();
+
+  if (configuredTectonicPath && existsSync(configuredTectonicPath)) {
+    return configuredTectonicPath;
+  }
+
   const binaryCandidates = [
     getProjectPath("node_modules", "@node-latex-compiler", "bin-win32-x64", "bin", "tectonic.exe"),
   ];

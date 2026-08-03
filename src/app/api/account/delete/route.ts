@@ -1,12 +1,13 @@
 import { unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { NextResponse } from "next/server";
+import { getPaperGraphAssetDirectory } from "@/lib/server-paths";
 import { getSupabaseServerStorageClient } from "@/lib/supabase-client";
 import { paperGraphAssetBucket } from "@/lib/supabase-storage";
 
 export const runtime = "nodejs";
 
-const assetDirectory = join(process.cwd(), "data", "images");
+const assetDirectory = getPaperGraphAssetDirectory();
 
 type StoragePathRow = {
   storage_path: string | null;

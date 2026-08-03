@@ -2,11 +2,12 @@ import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { NextResponse } from "next/server";
+import { getPaperGraphAssetDirectory } from "@/lib/server-paths";
 import type { WorkspaceImageAsset } from "@/lib/workspace-data";
 
 export const runtime = "nodejs";
 
-const assetDirectory = join(process.cwd(), "data", "images");
+const assetDirectory = getPaperGraphAssetDirectory();
 const maxAssetSize = 50 * 1024 * 1024;
 const acceptedAssetTypes = new Map([
   ["image/png", ".png"],

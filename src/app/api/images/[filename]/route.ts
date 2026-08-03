@@ -1,12 +1,13 @@
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { NextResponse } from "next/server";
+import { getPaperGraphAssetDirectory } from "@/lib/server-paths";
 import { getSupabaseServerStorageClient } from "@/lib/supabase-client";
 
 export const runtime = "nodejs";
 
 const storageBucket = "papergraph-assets";
-const assetDirectory = join(process.cwd(), "data", "images");
+const assetDirectory = getPaperGraphAssetDirectory();
 const contentTypes = new Map([
   [".jpg", "image/jpeg"],
   [".jpeg", "image/jpeg"],

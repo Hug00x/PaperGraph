@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { NextResponse } from "next/server";
+import { getPaperGraphDataDirectory } from "@/lib/server-paths";
 import {
   defaultSnapshot,
   type ArticlePosition,
@@ -9,7 +10,7 @@ import {
   type WorkspaceSnapshot,
 } from "@/lib/workspace-data";
 
-const dataDirectory = join(process.cwd(), "data");
+const dataDirectory = getPaperGraphDataDirectory();
 const dataFile = join(dataDirectory, "workspace.json");
 
 function normalizeRelationType(value: unknown): WorkspaceRelation["relationType"] {

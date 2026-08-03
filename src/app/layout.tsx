@@ -1,18 +1,13 @@
 import type { Metadata } from "next";
-import { IBM_Plex_Mono, Space_Grotesk } from "next/font/google";
+import type { CSSProperties } from "react";
 import "./globals.css";
 
-const spaceGrotesk = Space_Grotesk({
-  variable: "--font-space-grotesk",
-  weight: ["400", "500", "600", "700"],
-  subsets: ["latin"],
-});
-
-const ibmPlexMono = IBM_Plex_Mono({
-  variable: "--font-ibm-plex-mono",
-  weight: ["400", "500", "600"],
-  subsets: ["latin"],
-});
+const fontVariables = {
+  "--font-space-grotesk":
+    '"Space Grotesk", Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  "--font-ibm-plex-mono":
+    '"IBM Plex Mono", "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace',
+} as CSSProperties;
 
 export const metadata: Metadata = {
   title: "PaperGraph",
@@ -30,10 +25,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html
-      lang="pt-PT"
-      className={`${spaceGrotesk.variable} ${ibmPlexMono.variable} h-full antialiased`}
-    >
+    <html lang="pt-PT" className="h-full antialiased" style={fontVariables}>
       <body className="min-h-full flex flex-col">{children}</body>
     </html>
   );
