@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { NextResponse } from "next/server";
 import { getSupabaseServerStorageClient } from "@/lib/supabase-client";
@@ -10,12 +11,17 @@ import { getSupabaseServerStorageClient } from "@/lib/supabase-client";
 export const runtime = "nodejs";
 
 const execFileAsync = promisify(execFile);
+const require = createRequire(import.meta.url);
 const imageDirectoryName = "papergraph-images";
 const storageBucket = "papergraph-assets";
 const missingImageFileName = "papergraph-missing-image.png";
-const uploadedImagesDirectory = join(process.cwd(), "data", "images");
-const placeholderImagePath = join(process.cwd(), "public", "papergraph-icon.png");
-const workspacePath = join(process.cwd(), "data", "workspace.json");
+
+function getProjectPath(...segments: string[]) {
+  return join(/*turbopackIgnore: true*/ process.cwd(), ...segments);
+}
+
+const uploadedImagesDirectory = getProjectPath("data", "images");
+const placeholderImagePath = getProjectPath("public", "papergraph-icon.png");
 
 type CompileRequestBody = {
   articleId?: string;
@@ -32,16 +38,18 @@ type WorkspaceImageAsset = {
 };
 
 function resolveTectonicPath() {
-  const binaryPath = join(
-    process.cwd(),
-    "node_modules",
-    "@node-latex-compiler",
-    "bin-win32-x64",
-    "bin",
-    "tectonic.exe",
-  );
+  const binaryCandidates = [
+    getProjectPath("node_modules", "@node-latex-compiler", "bin-win32-x64", "bin", "tectonic.exe"),
+  ];
 
-  return existsSync(binaryPath) ? binaryPath : null;
+  try {
+    const packageJsonPath = require.resolve("@node-latex-compiler/bin-win32-x64/package.json");
+    binaryCandidates.push(join(dirname(packageJsonPath), "bin", "tectonic.exe"));
+  } catch {
+    // Fall back to the physical node_modules path above.
+  }
+
+  return binaryCandidates.find((binaryPath) => existsSync(binaryPath)) ?? null;
 }
 
 function moveXcolorBeforeOtherPackages(source: string) {
@@ -107,6 +115,84 @@ function escapeLatexText(value: string) {
     .replace(/~/g, String.raw`\textasciitilde{}`);
 }
 
+function getLatexSourceLine(source: string, lineNumber: number) {
+  return source.split(/\r?\n/)[lineNumber - 1]?.trim();
+}
+
+function hasEmptyMathEnvironment(source: string) {
+  return /\\begin\{(equation\*?|align\*?|gather\*?|multline\*?)\}\s*\\end\{\1\}/.test(source);
+}
+
+function getLatexCompileHint(detail: string, source: string, lineNumber: number) {
+  const sourceLine = getLatexSourceLine(source, lineNumber) ?? "";
+
+  if (/Missing \$ inserted/i.test(detail)) {
+    if (hasEmptyMathEnvironment(source)) {
+      return String.raw`Parece haver um bloco de equacao vazio. Escreve uma formula entre \begin{equation} e \end{equation}, ou remove esse bloco.`;
+    }
+
+    if (sourceLine.includes("_")) {
+      return String.raw`Se usaste "_" em texto normal, escreve "\_" ou coloca a expressao dentro de $...$.`;
+    }
+
+    if (sourceLine.includes("^")) {
+      return String.raw`Se usaste "^" em texto normal, escreve "\textasciicircum{}" ou coloca a expressao dentro de $...$.`;
+    }
+
+    return String.raw`Confirma se ha simbolos matematicos fora de $...$ ou um ambiente de matematica mal fechado.`;
+  }
+
+  if (/file .* not found|not found/i.test(detail)) {
+    return "Confirma se o ficheiro foi carregado neste artigo e se o nome no LaTeX esta correto.";
+  }
+
+  return null;
+}
+
+function formatLatexCompileError(error: unknown, source: string) {
+  if (!(error instanceof Error)) {
+    return "A compilacao LaTeX falhou.";
+  }
+
+  const commandError = error as Error & { stderr?: string; stdout?: string };
+  const rawOutput = [commandError.stderr, commandError.stdout, commandError.message]
+    .filter(Boolean)
+    .join("\n");
+  const latexErrorMatch = rawOutput.match(/error:\s+article\.tex:(\d+):\s*([^\r\n]+)/i);
+
+  if (latexErrorMatch) {
+    const lineNumber = Number(latexErrorMatch[1]);
+    const detail = latexErrorMatch[2].trim();
+    const sourceLine = getLatexSourceLine(source, lineNumber);
+    const hint = getLatexCompileHint(detail, source, lineNumber);
+    const messageParts = [`Erro LaTeX na linha ${lineNumber}: ${detail}.`];
+
+    if (sourceLine) {
+      messageParts.push(`Linha ${lineNumber}: ${sourceLine}`);
+    }
+
+    if (hint) {
+      messageParts.push(hint);
+    }
+
+    return messageParts.join(" ");
+  }
+
+  const cleanedOutput = rawOutput
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(
+      (line) =>
+        line &&
+        !line.startsWith("Command failed:") &&
+        !line.startsWith("Fontconfig error:"),
+    )
+    .slice(0, 4)
+    .join(" ");
+
+  return cleanedOutput || error.message || "A compilacao LaTeX falhou.";
+}
+
 function rewriteMissingImageReferences(
   source: string,
   compileDirectory: string,
@@ -154,19 +240,7 @@ function rewriteMissingPdfIncludes(source: string, compileDirectory: string) {
 }
 
 async function readWorkspaceImageAssets(requestImageAssets?: WorkspaceImageAsset[]) {
-  if (requestImageAssets) {
-    return requestImageAssets;
-  }
-
-  try {
-    const workspace = JSON.parse(await readFile(workspacePath, "utf8")) as {
-      imageAssets?: WorkspaceImageAsset[];
-    };
-
-    return workspace.imageAssets ?? [];
-  } catch {
-    return [];
-  }
+  return requestImageAssets ?? [];
 }
 
 async function downloadStorageAssetToLocalFile(imageAsset: WorkspaceImageAsset, localFilePath: string, accessToken?: string) {
@@ -271,18 +345,19 @@ async function compileLatexToPdf(
       compileDirectory,
       hasMissingImagePlaceholder,
     );
-    await writeFile(
-      texPath,
-      rewriteMissingPdfIncludes(sourceWithImagePlaceholders, compileDirectory),
-      "utf8",
-    );
+    const sourceForCompile = rewriteMissingPdfIncludes(sourceWithImagePlaceholders, compileDirectory);
+    await writeFile(texPath, sourceForCompile, "utf8");
 
-    await execFileAsync(tectonicPath, [texPath, `--outdir=${compileDirectory}`], {
-      cwd: compileDirectory,
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024 * 8,
-      timeout: 45000,
-    });
+    try {
+      await execFileAsync(tectonicPath, [texPath, `--outdir=${compileDirectory}`], {
+        cwd: compileDirectory,
+        encoding: "utf8",
+        maxBuffer: 1024 * 1024 * 8,
+        timeout: 45000,
+      });
+    } catch (error) {
+      throw new Error(formatLatexCompileError(error, sourceForCompile));
+    }
 
     if (!existsSync(pdfPath)) {
       throw new Error("O ficheiro PDF não foi gerado.");

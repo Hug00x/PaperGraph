@@ -141,6 +141,36 @@ html[data-papergraph-theme="light"] .papergraph-app .hover\:bg-red-500\/25:hover
   background-color: rgba(220, 38, 38, 0.2) !important;
 }
 
+.papergraph-file-panel {
+  --file-panel-divider: rgba(255, 255, 255, 0.1);
+  --file-panel-file-border: rgba(255, 255, 255, 0.8);
+  --file-panel-meta: #94a3b8;
+  --file-panel-muted-surface: rgba(0, 0, 0, 0.18);
+  --file-panel-row-hover: #2d3a4d;
+  background: #17202b;
+}
+
+html[data-papergraph-theme="light"] .papergraph-app .papergraph-file-panel {
+  --file-panel-divider: rgba(75, 97, 120, 0.16);
+  --file-panel-file-border: rgba(75, 97, 120, 0.28);
+  --file-panel-meta: #64748b;
+  --file-panel-muted-surface: rgba(255, 255, 255, 0.72);
+  --file-panel-row-hover: rgba(14, 165, 233, 0.1);
+  background: rgba(248, 252, 255, 0.96);
+}
+
+.papergraph-delete-icon-light {
+  display: none;
+}
+
+html[data-papergraph-theme="light"] .papergraph-app .papergraph-delete-icon-dark {
+  display: none;
+}
+
+html[data-papergraph-theme="light"] .papergraph-app .papergraph-delete-icon-light {
+  display: block;
+}
+
 html[data-papergraph-theme="light"] .papergraph-app .backdrop-blur-xl {
   backdrop-filter: blur(18px);
 }

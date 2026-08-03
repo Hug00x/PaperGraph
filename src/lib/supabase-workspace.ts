@@ -303,6 +303,55 @@ export async function createUserWorkspaceInSupabase(
   return mapAccountWorkspaceRow(createdWorkspace);
 }
 
+export async function renameWorkspaceInSupabase(
+  supabase: SupabaseClient,
+  workspaceId: string,
+  workspaceName: string,
+): Promise<AccountWorkspace> {
+  const { data, error } = await supabase.rpc("rename_user_workspace", {
+    requested_workspace_name: workspaceName,
+    target_workspace_id: workspaceId,
+  });
+
+  assertSupabaseResult(error, "Could not rename workspace.");
+
+  const rows = Array.isArray(data) ? (data as AccountWorkspaceRpcRow[]) : [];
+  const renamedWorkspace = rows[0];
+
+  if (!renamedWorkspace) {
+    throw new Error("Could not rename workspace.");
+  }
+
+  return mapAccountWorkspaceRow(renamedWorkspace);
+}
+
+export async function listWorkspaceAssetStoragePathsFromSupabase(
+  supabase: SupabaseClient,
+  workspaceId: string,
+): Promise<string[]> {
+  const { data, error } = await supabase
+    .from("assets")
+    .select("storage_path")
+    .eq("workspace_id", workspaceId);
+
+  assertSupabaseResult(error, "Could not list workspace assets.");
+
+  return ((data ?? []) as Array<{ storage_path: string | null }>)
+    .map((asset) => asset.storage_path)
+    .filter((storagePath): storagePath is string => Boolean(storagePath));
+}
+
+export async function deleteWorkspaceInSupabase(
+  supabase: SupabaseClient,
+  workspaceId: string,
+) {
+  const { error } = await supabase.rpc("delete_user_workspace", {
+    target_workspace_id: workspaceId,
+  });
+
+  assertSupabaseResult(error, "Could not delete workspace.");
+}
+
 export async function listWorkspaceMembersFromSupabase(
   supabase: SupabaseClient,
   workspaceId: string,
@@ -426,6 +475,19 @@ export async function removeWorkspaceMemberFromSupabase(
   });
 
   assertSupabaseResult(error, "Could not remove workspace member.");
+}
+
+export async function transferWorkspaceOwnerInSupabase(
+  supabase: SupabaseClient,
+  workspaceId: string,
+  nextOwnerUserId: string,
+) {
+  const { error } = await supabase.rpc("transfer_workspace_owner", {
+    next_owner_user_id: nextOwnerUserId,
+    target_workspace_id: workspaceId,
+  });
+
+  assertSupabaseResult(error, "Could not transfer workspace ownership.");
 }
 
 export async function loadWorkspaceSnapshotFromSupabase(

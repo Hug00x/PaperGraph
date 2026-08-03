@@ -175,6 +175,29 @@ as $$
   );
 $$;
 
+create or replace function public.prevent_workspace_owner_id_direct_update()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if old.owner_id is distinct from new.owner_id
+    and coalesce(current_setting('papergraph.allow_owner_transfer', true), '') <> 'on' then
+    raise exception 'workspace owner can only be changed through transfer_workspace_owner';
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists prevent_workspace_owner_id_direct_update on public.workspaces;
+
+create trigger prevent_workspace_owner_id_direct_update
+before update of owner_id on public.workspaces
+for each row
+execute function public.prevent_workspace_owner_id_direct_update();
+
 drop policy if exists "profiles visible to owner" on public.profiles;
 drop policy if exists "profiles insertable by owner" on public.profiles;
 drop policy if exists "profiles editable by owner" on public.profiles;
@@ -421,6 +444,8 @@ using (public.can_edit_workspace(workspace_id));
 drop function if exists public.ensure_user_workspace(text);
 drop function if exists public.list_user_workspaces();
 drop function if exists public.create_user_workspace(text);
+drop function if exists public.rename_user_workspace(uuid, text);
+drop function if exists public.delete_user_workspace(uuid);
 drop function if exists public.list_workspace_members(uuid);
 drop function if exists public.list_workspace_invites(uuid);
 drop function if exists public.list_my_pending_workspace_invites();
@@ -429,6 +454,7 @@ drop function if exists public.accept_workspace_invite(uuid);
 drop function if exists public.revoke_workspace_invite(uuid);
 drop function if exists public.update_workspace_member_role(uuid, uuid, text);
 drop function if exists public.remove_workspace_member(uuid, uuid);
+drop function if exists public.transfer_workspace_owner(uuid, uuid);
 
 create function public.ensure_user_workspace(requested_workspace_name text default 'PaperGraph')
 returns table (
@@ -600,6 +626,79 @@ begin
   where workspaces.id = next_workspace_id
     and workspace_members.user_id = current_user_id
   limit 1;
+end;
+$$;
+
+create function public.rename_user_workspace(
+  target_workspace_id uuid,
+  requested_workspace_name text
+)
+returns table (
+  workspace_id uuid,
+  workspace_name text,
+  workspace_language text,
+  member_role text,
+  workspace_created_at timestamptz,
+  workspace_updated_at timestamptz
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_user_id uuid := auth.uid();
+  next_workspace_name text := coalesce(nullif(btrim(requested_workspace_name), ''), 'PaperGraph');
+begin
+  if current_user_id is null then
+    raise exception 'not authenticated';
+  end if;
+
+  if not public.is_workspace_owner(target_workspace_id) then
+    raise exception 'only workspace owners can rename workspaces';
+  end if;
+
+  update public.workspaces
+  set
+    name = next_workspace_name,
+    updated_at = now()
+  where workspaces.id = target_workspace_id;
+
+  return query
+  select
+    workspaces.id,
+    workspaces.name,
+    workspaces.language,
+    workspace_members.member_role,
+    workspaces.created_at,
+    workspaces.updated_at
+  from public.workspaces
+  join public.workspace_members
+    on workspace_members.workspace_id = workspaces.id
+  where workspaces.id = target_workspace_id
+    and workspace_members.user_id = current_user_id
+  limit 1;
+end;
+$$;
+
+create function public.delete_user_workspace(target_workspace_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_user_id uuid := auth.uid();
+begin
+  if current_user_id is null then
+    raise exception 'not authenticated';
+  end if;
+
+  if not public.is_workspace_owner(target_workspace_id) then
+    raise exception 'only workspace owners can delete workspaces';
+  end if;
+
+  delete from public.workspaces
+  where workspaces.id = target_workspace_id;
 end;
 $$;
 
@@ -1093,6 +1192,64 @@ begin
 end;
 $$;
 
+create function public.transfer_workspace_owner(
+  target_workspace_id uuid,
+  next_owner_user_id uuid
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_user_id uuid := auth.uid();
+  next_owner_current_role text;
+begin
+  if current_user_id is null then
+    raise exception 'not authenticated';
+  end if;
+
+  if not public.is_workspace_owner(target_workspace_id) then
+    raise exception 'only workspace owners can transfer ownership';
+  end if;
+
+  if next_owner_user_id = current_user_id then
+    raise exception 'you already own this workspace';
+  end if;
+
+  select workspace_members.member_role
+  into next_owner_current_role
+  from public.workspace_members
+  where workspace_members.workspace_id = target_workspace_id
+    and workspace_members.user_id = next_owner_user_id
+  limit 1;
+
+  if next_owner_current_role is null then
+    raise exception 'member not found';
+  end if;
+
+  update public.workspace_members
+  set member_role = case
+    when workspace_members.user_id = next_owner_user_id then 'owner'
+    when workspace_members.member_role = 'owner' then 'editor'
+    else workspace_members.member_role
+  end
+  where workspace_members.workspace_id = target_workspace_id
+    and (
+      workspace_members.user_id = next_owner_user_id
+      or workspace_members.member_role = 'owner'
+    );
+
+  perform set_config('papergraph.allow_owner_transfer', 'on', true);
+
+  update public.workspaces
+  set
+    owner_id = next_owner_user_id,
+    updated_at = now()
+  where workspaces.id = target_workspace_id;
+end;
+$$;
+
 grant usage on schema public to authenticated;
 grant select, insert, update, delete on public.profiles to authenticated;
 grant select, insert, update, delete on public.workspaces to authenticated;
@@ -1110,6 +1267,8 @@ grant execute on function public.can_edit_workspace(uuid) to authenticated;
 grant execute on function public.ensure_user_workspace(text) to authenticated;
 grant execute on function public.list_user_workspaces() to authenticated;
 grant execute on function public.create_user_workspace(text) to authenticated;
+grant execute on function public.rename_user_workspace(uuid, text) to authenticated;
+grant execute on function public.delete_user_workspace(uuid) to authenticated;
 grant execute on function public.list_workspace_members(uuid) to authenticated;
 grant execute on function public.list_workspace_invites(uuid) to authenticated;
 grant execute on function public.list_my_pending_workspace_invites() to authenticated;
@@ -1118,5 +1277,6 @@ grant execute on function public.accept_workspace_invite(uuid) to authenticated;
 grant execute on function public.revoke_workspace_invite(uuid) to authenticated;
 grant execute on function public.update_workspace_member_role(uuid, uuid, text) to authenticated;
 grant execute on function public.remove_workspace_member(uuid, uuid) to authenticated;
+grant execute on function public.transfer_workspace_owner(uuid, uuid) to authenticated;
 
 notify pgrst, 'reload schema';

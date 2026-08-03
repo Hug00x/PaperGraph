@@ -7,6 +7,7 @@ import {
   type CollaborativeLatexEditorHandle,
 } from "@/components/collaborative-latex-editor";
 import deleteButtonImage from "@/imagens/Delete_button.png";
+import deleteButtonImageInverted from "@/imagens/Delete_button_inverted.png";
 import { getArticleStatusLabel, type AppLanguage } from "@/lib/portuguese-labels";
 import { getSupabaseBrowserClient } from "@/lib/supabase-client";
 import { uploadWorkspaceAssetToSupabase } from "@/lib/supabase-storage";
@@ -25,7 +26,13 @@ type EditorPaneProps = {
   collaborationClientId?: string;
   collaborationUserName?: string;
   onSaveArticle: (article: { title: string; source: string }) => void;
-  onSubmitArticle: (article: { articleId: string; title: string; source: string }) => void;
+  onSubmitArticle: (article: { articleId: string; title: string; source: string }) => Promise<{
+    cancelled?: boolean;
+    issue?: string;
+    pdfBuffer?: ArrayBuffer;
+    submitted: boolean;
+  }>;
+  isSubmissionRunning?: boolean;
   submissionIssue: string | null;
   onSubmissionIssueClear: () => void;
   onPendingResubmissionChange: (article: { articleId: string; title: string; source: string } | null) => void;
@@ -148,6 +155,7 @@ export function EditorPane({
   collaborationUserName,
   onSaveArticle,
   onSubmitArticle,
+  isSubmissionRunning = false,
   submissionIssue,
   onSubmissionIssueClear,
   onPendingResubmissionChange,
@@ -171,6 +179,7 @@ export function EditorPane({
   );
   const [compileError, setCompileError] = useState<string | null>(null);
   const [pdfBuffer, setPdfBuffer] = useState<ArrayBuffer | null>(null);
+  const [compiledPreviewSignature, setCompiledPreviewSignature] = useState<string | null>(null);
   const didMountRef = useRef(false);
   const autoCompileStartedRef = useRef(false);
   const onSaveArticleRef = useRef(onSaveArticle);
@@ -182,6 +191,8 @@ export function EditorPane({
   const isEnglish = language === "en";
   const isSubmittedArticle = article.status !== "Draft";
   const hasPendingResubmission = isSubmittedArticle && (title !== article.title || source !== article.source);
+  const currentPreviewSignature = `${title}\n${source}`;
+  const isPreviewStale = compileState === "ready" && compiledPreviewSignature !== currentPreviewSignature;
   const editingCollaborators = articleCollaborators.filter((collaborator) => collaborator.mode === "editing");
   const collaboratorNames = articleCollaborators.map((collaborator) => collaborator.userName).join(", ");
   const remoteCursors = editingCollaborators
@@ -274,6 +285,7 @@ export function EditorPane({
 
       const pdfBlob = await response.blob();
       setPdfBuffer(await pdfBlob.arrayBuffer());
+      setCompiledPreviewSignature(`${documentTitle}\n${documentSource}`);
     } catch (error) {
       setCompileState("error");
       setCompileError((error as Error).message);
@@ -495,7 +507,6 @@ export function EditorPane({
       }
 
       onImageUploaded(imageAsset);
-      insertImageSnippet(imageAsset);
     } catch (error) {
       setImageUploadError(
         error instanceof Error
@@ -533,9 +544,29 @@ export function EditorPane({
     void compileDocument(title, source);
   }
 
-  function handleSubmitClick() {
-    onSubmitArticle({ articleId: article.id, title, source });
-    setSaveState("saved");
+  async function handleSubmitClick() {
+    setCompileState("rendering");
+    setCompileError(null);
+
+    const result = await onSubmitArticle({ articleId: article.id, title, source });
+
+    if (result.submitted) {
+      if (result.pdfBuffer) {
+        setPdfBuffer(result.pdfBuffer);
+      }
+
+      setCompiledPreviewSignature(currentPreviewSignature);
+      setSaveState("saved");
+      return;
+    }
+
+    if (!result.cancelled) {
+      setCompileState("error");
+      setCompileError(result.issue ?? (isEnglish ? "Submission failed." : "A submissão falhou."));
+      return;
+    }
+
+    setCompileState(pdfBuffer ? "ready" : "idle");
   }
 
   const submitButtonLabel =
@@ -597,7 +628,7 @@ export function EditorPane({
               aria-expanded={imagePanelOpen}
               title={isEnglish ? "Open file library" : "Abrir biblioteca de ficheiros"}
               onClick={() => setImagePanelOpen((currentValue) => !currentValue)}
-              className={`border-l border-[var(--border)] px-3 py-2 text-base font-semibold transition-colors ${
+              className={`border-l border-[var(--border)] px-3 py-2 text-base font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--accent)] ${
                 imagePanelOpen ? "bg-[rgba(142,231,255,0.16)] text-[var(--accent)]" : "text-white hover:bg-white/10"
               }`}
             >
@@ -608,16 +639,20 @@ export function EditorPane({
           <button
             type="button"
             onClick={handleSubmitClick}
-            disabled={isSubmittedArticle && !hasPendingResubmission}
+            disabled={compileState === "rendering" || isSubmissionRunning || (isSubmittedArticle && !hasPendingResubmission)}
             className="rounded-full border border-[var(--border)] bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {submitButtonLabel}
+            {isSubmissionRunning
+              ? isEnglish
+                ? "Compiling..."
+                : "A compilar..."
+              : submitButtonLabel}
           </button>
 
           <button
             type="button"
             onClick={handleCompileClick}
-            disabled={compileState === "rendering"}
+            disabled={compileState === "rendering" || isSubmissionRunning}
             className="rounded-full border border-[var(--border)] bg-[var(--accent)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-[#041016] transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {compileState === "rendering"
@@ -656,8 +691,8 @@ export function EditorPane({
       ) : null}
 
       {imagePanelOpen ? (
-        <aside className="absolute right-4 top-[6.4rem] z-40 flex w-[min(24rem,calc(100%_-_2rem))] max-h-[calc(100%_-_7.5rem)] flex-col overflow-hidden rounded-[14px] border border-[var(--border)] bg-[#17202b] shadow-[0_18px_50px_rgba(0,0,0,0.38)]">
-          <div className="flex items-center justify-between gap-3 border-b border-white/10 px-3 py-2">
+        <aside className="papergraph-file-panel absolute right-4 top-[6.4rem] z-40 flex w-[min(24rem,calc(100%_-_2rem))] max-h-[calc(100%_-_7.5rem)] flex-col overflow-hidden rounded-[14px] border border-[var(--border)] shadow-[0_18px_50px_rgba(0,0,0,0.28)]">
+          <div className="flex items-center justify-between gap-3 border-b border-[var(--file-panel-divider)] px-3 py-2">
             <p className="text-xs uppercase tracking-[0.22em] text-[var(--muted)]">
               {isEnglish ? "Files" : "Ficheiros"}
             </p>
@@ -674,7 +709,7 @@ export function EditorPane({
 
           <div className="scrollbar-hidden min-h-0 flex-1 overflow-y-auto overscroll-contain py-1">
             {imageAssets.length === 0 ? (
-              <div className="m-2 rounded-[10px] border border-white/10 bg-black/18 p-3 text-sm leading-6 text-[var(--muted)]">
+              <div className="m-2 rounded-[10px] border border-[var(--file-panel-divider)] bg-[var(--file-panel-muted-surface)] p-3 text-sm leading-6 text-[var(--muted)]">
                 {isEnglish ? "There are no uploaded files yet." : "Ainda não há ficheiros carregados."}
               </div>
             ) : null}
@@ -682,20 +717,20 @@ export function EditorPane({
             {imageAssets.map((imageAsset) => (
               <article
                 key={imageAsset.id}
-                className="group flex min-h-11 items-center gap-2 px-2 py-1 text-white transition-colors hover:bg-[#2d3a4d]"
+                className="group flex min-h-11 items-center gap-2 px-2 py-1 text-white transition-colors hover:bg-[var(--file-panel-row-hover)]"
               >
                 <div className="flex min-w-0 flex-1 items-center gap-2">
                   <div
                     role="img"
                     aria-label={imageAsset.originalName}
-                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[4px] border border-white/80 bg-cover bg-center bg-no-repeat text-[8px] font-bold leading-none text-white"
+                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[4px] border border-[var(--file-panel-file-border)] bg-cover bg-center bg-no-repeat text-[8px] font-bold leading-none text-white"
                     style={isPdfAsset(imageAsset) ? undefined : { backgroundImage: `url(${getImageUrl(imageAsset)})` }}
                   >
                     {getAssetKindLabel(imageAsset)}
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-base font-medium leading-5 text-white">{imageAsset.originalName}</p>
-                    <p className="truncate text-[11px] leading-4 text-slate-400">
+                    <p className="truncate text-[11px] leading-4 text-[var(--file-panel-meta)]">
                       {formatBytes(imageAsset.size)} • {imageAsset.uploadedAt}
                     </p>
                     <p className="hidden">
@@ -726,7 +761,13 @@ export function EditorPane({
                       src={deleteButtonImage}
                       alt=""
                       aria-hidden
-                      className="absolute left-1/2 top-1/2 h-[3.2rem] w-[4.8rem] max-w-none -translate-x-1/2 -translate-y-1/2 object-contain"
+                      className="papergraph-delete-icon-dark absolute left-1/2 top-1/2 h-[3.2rem] w-[4.8rem] max-w-none -translate-x-1/2 -translate-y-1/2 object-contain"
+                    />
+                    <Image
+                      src={deleteButtonImageInverted}
+                      alt=""
+                      aria-hidden
+                      className="papergraph-delete-icon-light absolute left-1/2 top-1/2 h-[3.2rem] w-[4.8rem] max-w-none -translate-x-1/2 -translate-y-1/2 object-contain"
                     />
                   </span>
                 </button>
@@ -739,7 +780,7 @@ export function EditorPane({
       {submissionIssue ? (
         <div className="mt-4 rounded-[18px] border border-red-300/30 bg-red-500/10 px-4 py-3 text-sm leading-6 text-red-100">
           <p className="font-semibold text-red-50">
-            {isEnglish ? "Invalid connections" : "Conexões inválidas"}
+            {isEnglish ? "Submission blocked" : "Submissão bloqueada"}
           </p>
           <p className="mt-1">{submissionIssue}</p>
         </div>
@@ -793,6 +834,10 @@ export function EditorPane({
                   ? isEnglish
                     ? "error"
                     : "erro"
+                  : isPreviewStale
+                    ? isEnglish
+                      ? "outdated"
+                      : "desatualizada"
                   : isEnglish
                     ? "ready"
                     : "pronto"}
