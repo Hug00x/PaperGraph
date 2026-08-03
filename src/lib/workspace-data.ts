@@ -11,6 +11,19 @@ export type WorkspaceArticle = Article & {
   source: string;
 };
 
+export type WorkspaceArticleVersion = {
+  id: string;
+  articleId: string;
+  title: string;
+  author: string;
+  status: Exclude<Article["status"], "Draft">;
+  source: string;
+  tags: string[];
+  createdAt: string;
+  submittedBy?: string | null;
+  submittedByName?: string | null;
+};
+
 export type WorkspaceRelation = {
   id: string;
   fromArticleId: string;
@@ -52,6 +65,7 @@ export type WorkspaceSnapshot = {
   articlePositions: Record<string, ArticlePosition>;
   ignoredUnlinkedMentionKeys: string[];
   imageAssets: WorkspaceImageAsset[];
+  articleVersions: WorkspaceArticleVersion[];
 };
 
 export const articles: WorkspaceArticle[] = [];
@@ -65,4 +79,5 @@ export const defaultSnapshot: WorkspaceSnapshot = {
   articlePositions,
   ignoredUnlinkedMentionKeys: [],
   imageAssets: [],
+  articleVersions: [],
 };

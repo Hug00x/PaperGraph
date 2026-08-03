@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ArticleHistoryPanel } from "@/components/article-history-panel";
 import { PdfZoomControls } from "@/components/pdf-zoom-controls";
 import { getFriendlyErrorMessage, getFriendlyResponseError } from "@/lib/friendly-errors";
 import { getPdfFitScale } from "@/lib/pdf-preview-layout";
 import { getArticleStatusLabel, type AppLanguage } from "@/lib/portuguese-labels";
-import type { WorkspaceArticle, WorkspaceImageAsset } from "@/lib/workspace-data";
+import type { WorkspaceArticle, WorkspaceArticleVersion, WorkspaceImageAsset } from "@/lib/workspace-data";
 
 type SubmittedArticleStatus = Exclude<WorkspaceArticle["status"], "Draft">;
 
@@ -43,6 +44,7 @@ type ArticleViewerPaneProps = {
     userName: string;
   }>;
   authAccessToken?: string | null;
+  articleVersions?: WorkspaceArticleVersion[];
   canEditMetadata?: boolean;
   imageAssets: WorkspaceImageAsset[];
   language: AppLanguage;
@@ -58,6 +60,7 @@ export function ArticleViewerPane({
   article,
   articleCollaborators = [],
   authAccessToken,
+  articleVersions = [],
   canEditMetadata = false,
   imageAssets,
   language,
@@ -256,22 +259,30 @@ export function ArticleViewerPane({
           </p>
         </div>
 
-        <button
-          type="button"
-          disabled={compileState === "rendering"}
-          onClick={() => {
-            void compileDocument();
-          }}
-          className="rounded-full border border-[var(--border)] bg-[var(--accent)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-[#041016] transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {compileState === "rendering"
-            ? isEnglish
-              ? "Loading..."
-              : "A carregar..."
-            : isEnglish
-              ? "Refresh PDF"
-              : "Atualizar PDF"}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <ArticleHistoryPanel
+            articleTitle={article.title}
+            language={language}
+            versions={articleVersions}
+          />
+
+          <button
+            type="button"
+            disabled={compileState === "rendering"}
+            onClick={() => {
+              void compileDocument();
+            }}
+            className="rounded-full border border-[var(--border)] bg-[var(--accent)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-[#041016] transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {compileState === "rendering"
+              ? isEnglish
+                ? "Loading..."
+                : "A carregar..."
+              : isEnglish
+                ? "Refresh PDF"
+                : "Atualizar PDF"}
+          </button>
+        </div>
       </div>
 
       {articleCollaborators.length > 0 ? (

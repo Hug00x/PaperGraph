@@ -76,6 +76,7 @@ async function readSnapshot(): Promise<WorkspaceSnapshot> {
       ),
       ignoredUnlinkedMentionKeys: parsed.ignoredUnlinkedMentionKeys ?? defaultSnapshot.ignoredUnlinkedMentionKeys,
       imageAssets: parsed.imageAssets ?? defaultSnapshot.imageAssets,
+      articleVersions: parsed.articleVersions ?? defaultSnapshot.articleVersions,
     } satisfies WorkspaceSnapshot;
 
     return workspaceSnapshot;

@@ -324,6 +324,51 @@ html[data-papergraph-theme="light"] .papergraph-app .papergraph-pdf-page {
   display: none;
 }
 
+.papergraph-diff-added {
+  border-radius: 4px;
+  background: rgba(52, 211, 153, 0.2);
+  color: #d1fae5;
+  box-shadow: inset 0 0 0 1px rgba(110, 231, 183, 0.22);
+}
+
+.papergraph-diff-removed {
+  border-radius: 4px;
+  background: rgba(248, 113, 113, 0.18);
+  color: #fecaca;
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+  box-shadow: inset 0 0 0 1px rgba(252, 165, 165, 0.22);
+}
+
+.papergraph-diff-dot {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-right: 0.4rem;
+  border-radius: 999px;
+  vertical-align: middle;
+}
+
+.papergraph-diff-dot-added {
+  background: #34d399;
+}
+
+.papergraph-diff-dot-removed {
+  background: #f87171;
+}
+
+html[data-papergraph-theme="light"] .papergraph-app .papergraph-diff-added {
+  background: rgba(16, 185, 129, 0.18);
+  color: #047857;
+  box-shadow: inset 0 0 0 1px rgba(5, 150, 105, 0.2);
+}
+
+html[data-papergraph-theme="light"] .papergraph-app .papergraph-diff-removed {
+  background: rgba(239, 68, 68, 0.14);
+  color: #b91c1c;
+  box-shadow: inset 0 0 0 1px rgba(220, 38, 38, 0.18);
+}
+
 @keyframes papergraph-toast-in {
   from {
     opacity: 0;

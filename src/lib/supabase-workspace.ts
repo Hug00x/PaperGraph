@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   defaultSnapshot,
+  type WorkspaceArticleVersion,
   type WorkspaceImageAsset,
   type WorkspaceRelation,
   type WorkspaceSnapshot,
@@ -89,6 +90,19 @@ type ArticleRow = {
   source: string | null;
   tags: string[] | null;
   updated_at: string | null;
+};
+
+type ArticleVersionRow = {
+  id: string;
+  article_id: string;
+  title: string;
+  author: string | null;
+  status: string;
+  source: string | null;
+  tags: string[] | null;
+  created_at: string | null;
+  submitted_by: string | null;
+  submitted_by_name: string | null;
 };
 
 type RelationRow = {
@@ -502,13 +516,25 @@ export async function loadWorkspaceSnapshotFromSupabase(
   supabase: SupabaseClient,
   workspaceId: string,
 ): Promise<WorkspaceSnapshot> {
-  const [articlesResult, relationsResult, positionsResult, assetsResult, ignoredMentionsResult] =
+  const [
+    articlesResult,
+    articleVersionsResult,
+    relationsResult,
+    positionsResult,
+    assetsResult,
+    ignoredMentionsResult,
+  ] =
     await Promise.all([
       supabase
         .from("articles")
         .select("id,title,author,status,source,tags,updated_at")
         .eq("workspace_id", workspaceId)
         .order("created_at", { ascending: true }),
+      supabase
+        .from("article_versions")
+        .select("id,article_id,title,author,status,source,tags,created_at,submitted_by,submitted_by_name")
+        .eq("workspace_id", workspaceId)
+        .order("created_at", { ascending: false }),
       supabase
         .from("relations")
         .select("id,from_article_id,to_article_id,relation_type,note,created_at")
@@ -530,6 +556,7 @@ export async function loadWorkspaceSnapshotFromSupabase(
     ]);
 
   assertSupabaseResult(articlesResult.error, "Could not load articles.");
+  assertSupabaseResult(articleVersionsResult.error, "Could not load article history.");
   assertSupabaseResult(relationsResult.error, "Could not load relations.");
   assertSupabaseResult(positionsResult.error, "Could not load graph positions.");
   assertSupabaseResult(assetsResult.error, "Could not load assets.");
@@ -545,6 +572,20 @@ export async function loadWorkspaceSnapshotFromSupabase(
     source: article.source ?? "",
   }));
   const articleIds = new Set(articles.map((article) => article.id));
+  const articleVersions: WorkspaceArticleVersion[] = ((articleVersionsResult.data ?? []) as ArticleVersionRow[])
+    .filter((version) => articleIds.has(version.article_id))
+    .map((version) => ({
+      id: version.id,
+      articleId: version.article_id,
+      title: version.title,
+      author: version.author ?? "PaperGraph",
+      status: normalizeStatus(version.status) === "Published" ? "Published" : "Review",
+      source: version.source ?? "",
+      tags: version.tags ?? [],
+      createdAt: version.created_at ?? new Date().toISOString(),
+      submittedBy: version.submitted_by,
+      submittedByName: version.submitted_by_name,
+    }));
   const relations = ((relationsResult.data ?? []) as RelationRow[])
     .filter(
       (relation) =>
@@ -591,6 +632,7 @@ export async function loadWorkspaceSnapshotFromSupabase(
     articlePositions,
     ignoredUnlinkedMentionKeys,
     imageAssets,
+    articleVersions,
   };
 }
 
@@ -647,6 +689,21 @@ export async function saveWorkspaceSnapshotToSupabase(
       size_bytes: asset.size,
       created_at: new Date().toISOString(),
     }));
+  const articleVersionRows = snapshot.articleVersions
+    .filter((version) => articleIds.has(version.articleId))
+    .map((version) => ({
+      id: version.id,
+      workspace_id: workspace.id,
+      article_id: version.articleId,
+      title: version.title,
+      author: version.author,
+      status: version.status,
+      source: version.source,
+      tags: version.tags,
+      created_at: version.createdAt,
+      submitted_by: version.submittedBy ?? null,
+      submitted_by_name: version.submittedByName ?? null,
+    }));
   const ignoredMentionRows = snapshot.ignoredUnlinkedMentionKeys
     .map((mentionKey) => {
       const parsedMentionKey = parseIgnoredMentionKey(mentionKey);
@@ -675,7 +732,7 @@ export async function saveWorkspaceSnapshotToSupabase(
 
   assertSupabaseResult(workspaceUpdate.error, "Could not update workspace.");
 
-  for (const table of ["ignored_unlinked_mentions", "relations", "article_positions", "assets", "articles"]) {
+  for (const table of ["ignored_unlinked_mentions", "relations", "article_positions", "assets", "article_versions", "articles"]) {
     const result = await supabase.from(table).delete().eq("workspace_id", workspace.id);
     assertSupabaseResult(result.error, `Could not clear ${table}.`);
   }
@@ -698,6 +755,11 @@ export async function saveWorkspaceSnapshotToSupabase(
   if (assetRows.length > 0) {
     const result = await supabase.from("assets").insert(assetRows);
     assertSupabaseResult(result.error, "Could not save assets.");
+  }
+
+  if (articleVersionRows.length > 0) {
+    const result = await supabase.from("article_versions").insert(articleVersionRows);
+    assertSupabaseResult(result.error, "Could not save article history.");
   }
 
   if (ignoredMentionRows.length > 0) {

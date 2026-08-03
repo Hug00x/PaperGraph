@@ -15,6 +15,7 @@ import {
   type UnlinkedMention,
   type WorkspaceSnapshot,
   type WorkspaceArticle,
+  type WorkspaceArticleVersion,
   type WorkspaceImageAsset,
   type WorkspaceRelation,
 } from "@/lib/workspace-data";
@@ -55,6 +56,7 @@ const activeWorkspaceStorageKey = "papergraph-active-workspace-id";
 const emptyWorkspacesStorageKeyPrefix = "papergraph-empty-workspaces";
 const localWorkspaceUiStorageId = "local";
 const workspaceUiStorageKeyPrefix = "papergraph-workspace-ui";
+const maxArticleVersionsPerArticle = 50;
 const tabs = ["drafts", "editor", "graph", "settings"] as const;
 const settingsSections = ["general", "workspaces", "help", "account"] as const;
 const editableWorkspaceMemberRoles = ["editor", "viewer"] as const;
@@ -376,6 +378,383 @@ function WorkspaceRoleToggle({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+function HelpSection({ language }: { language: AppLanguage }) {
+  const isEnglish = language === "en";
+  const quickSteps = isEnglish
+    ? [
+        {
+          title: "Create or open a workspace",
+          body: "A workspace is a separate research map. Use one workspace per project, course, dissertation chapter or group.",
+        },
+        {
+          title: "Add articles",
+          body: "Write a LaTeX draft, submit it to the map, or import an external PDF directly from the map tab.",
+        },
+        {
+          title: "Connect ideas",
+          body: "Use wikilinks, unlinked mention suggestions or manual links to build the article network.",
+        },
+      ]
+    : [
+        {
+          title: "Cria ou abre uma workspace",
+          body: "Uma workspace é um mapa de investigação separado. Usa uma por projeto, cadeira, capítulo da dissertação ou grupo.",
+        },
+        {
+          title: "Adiciona artigos",
+          body: "Escreve um rascunho em LaTeX, submete-o para o mapa ou importa um PDF externo diretamente na tab Mapa.",
+        },
+        {
+          title: "Liga ideias",
+          body: "Usa wikilinks, sugestões de menções não ligadas ou ligações manuais para construir a rede de artigos.",
+        },
+      ];
+  const helpGroups = isEnglish
+    ? [
+        {
+          eyebrow: "Workspaces",
+          title: "Maps, members and roles",
+          description: "Workspaces keep articles, files, links and graph layout separated from each other.",
+          cards: [
+            {
+              title: "Available maps",
+              body: "The Workspaces section lists every map you own or were invited to. Opening a map changes the active articles, files and graph layout.",
+            },
+            {
+              title: "Invites",
+              body: "Owners invite people by email. The invite appears when that person signs in with the same email address.",
+            },
+            {
+              title: "Roles",
+              body: "Owners manage members and workspaces. Editors can write, import and link articles. Viewers can inspect articles and the graph without changing data.",
+            },
+            {
+              title: "Ownership and deletion",
+              body: "Workspace deletion is permanent. Ownership transfer asks for confirmation and makes another member the owner.",
+            },
+          ],
+        },
+        {
+          eyebrow: "Articles",
+          title: "Drafts, submitted articles and viewing",
+          description: "PaperGraph separates the writing stage from the article version that appears on the map.",
+          cards: [
+            {
+              title: "Drafts",
+              body: "New articles start as drafts. Drafts stay in the Drafts tab and do not appear on the map until submitted.",
+            },
+            {
+              title: "Review and Published",
+              body: "Review and Published are editorial states. Both appear on the map; the label simply tells collaborators how mature the article is.",
+            },
+            {
+              title: "Edit vs view",
+              body: "Editable LaTeX articles open in the editor. Imported PDFs and viewer-only accounts open in article viewing mode.",
+            },
+            {
+              title: "Resubmit",
+              body: "After editing an article that is already on the map, changes only affect links, keywords and preview after resubmitting.",
+            },
+          ],
+        },
+        {
+          eyebrow: "Editor",
+          title: "LaTeX, preview and files",
+          description: "The editor is for writing source text and preparing the PDF version of an article.",
+          cards: [
+            {
+              title: "Compile PDF",
+              body: "Compile refreshes the PDF preview only. It does not publish the article to the map and does not change graph relations.",
+            },
+            {
+              title: "Submit article",
+              body: "Submit sends the current version to the map, validates wikilinks, detects unlinked mentions and stores the chosen status and keywords.",
+            },
+            {
+              title: "Uploads",
+              body: "Uploaded images and PDFs belong to the article where they were uploaded. A file is inserted into the source only when you click Insert.",
+            },
+            {
+              title: "Imported PDFs",
+              body: "Imported PDFs are external documents. They appear on the map, can be linked and exported, but their internal text is not edited in PaperGraph.",
+            },
+          ],
+        },
+        {
+          eyebrow: "Map",
+          title: "Graph navigation and relations",
+          description: "The map is the visual workspace where submitted articles become nodes.",
+          cards: [
+            {
+              title: "Library panel",
+              body: "The left library lists submitted articles. Search by title, tag or status; click an item to move the camera smoothly to that node.",
+            },
+            {
+              title: "Zoom and focus",
+              body: "Zoom follows the mouse position. Focusing an article moves the camera to it without changing the saved node position.",
+            },
+            {
+              title: "Manual links",
+              body: "Select an article, click Manual link, then click another article. Manual links stay editable from the details panel.",
+            },
+            {
+              title: "Right click actions",
+              body: "Right click a node to edit, export, remove existing relations or delete the article after confirmation.",
+            },
+          ],
+        },
+        {
+          eyebrow: "Connections",
+          title: "Wikilinks and unlinked mentions",
+          description: "Connections can come from the source text, from suggestions or from manual graph actions.",
+          cards: [
+            {
+              title: "Basic wikilink",
+              body: "Use [[Article name]] in LaTeX to create an explicit connection to another submitted article.",
+            },
+            {
+              title: "Visible alias",
+              body: "Use [[Article name|visible text]] when the graph should link to the article, but the PDF should show only readable text.",
+            },
+            {
+              title: "Unlinked mentions",
+              body: "If an article mentions another article title without a wikilink, PaperGraph can suggest turning that mention into a real link.",
+            },
+            {
+              title: "Validation",
+              body: "When submitting or resubmitting, PaperGraph checks whether wikilinks point to existing submitted articles.",
+            },
+          ],
+        },
+        {
+          eyebrow: "Collaboration",
+          title: "Working with other people",
+          description: "Collaboration is workspace-based, so members share the same map and articles.",
+          cards: [
+            {
+              title: "Live editing",
+              body: "When someone is editing an article, other members can see that presence before overwriting or submitting changes.",
+            },
+            {
+              title: "Simultaneous editing",
+              body: "The LaTeX editor supports collaborative text editing for members with editing access.",
+            },
+            {
+              title: "Viewer mode",
+              body: "Viewers can read PDFs, navigate the map and inspect relations, but cannot edit source, upload files or change links.",
+            },
+            {
+              title: "Account data",
+              body: "Your visible name is stored in the profile table. Deleting an account removes personal data and handles owned collaborative workspaces.",
+            },
+          ],
+        },
+      ]
+    : [
+        {
+          eyebrow: "Workspaces",
+          title: "Mapas, membros e cargos",
+          description: "As workspaces mantêm artigos, ficheiros, ligações e layout do mapa separados entre si.",
+          cards: [
+            {
+              title: "Mapas disponíveis",
+              body: "A secção Workspaces lista todos os mapas que criaste ou onde foste convidado. Abrir um mapa troca os artigos, ficheiros e layout ativos.",
+            },
+            {
+              title: "Convites",
+              body: "O dono convida pessoas por email. O convite aparece quando essa pessoa entra com o mesmo endereço de email.",
+            },
+            {
+              title: "Cargos",
+              body: "O dono gere membros e workspaces. Editores podem escrever, importar e ligar artigos. Visualizadores podem ver artigos e o mapa sem alterar dados.",
+            },
+            {
+              title: "Propriedade e eliminação",
+              body: "Eliminar uma workspace é permanente. Transferir dono pede confirmação e passa a propriedade para outro membro.",
+            },
+          ],
+        },
+        {
+          eyebrow: "Artigos",
+          title: "Rascunhos, artigos submetidos e visualização",
+          description: "O PaperGraph separa a fase de escrita da versão do artigo que aparece no mapa.",
+          cards: [
+            {
+              title: "Rascunhos",
+              body: "Artigos novos começam como rascunhos. Ficam na tab Rascunhos e não aparecem no mapa até serem submetidos.",
+            },
+            {
+              title: "Revisão e Publicado",
+              body: "Revisão e Publicado são estados editoriais. Ambos aparecem no mapa; a etiqueta só indica a maturidade do artigo.",
+            },
+            {
+              title: "Editar vs visualizar",
+              body: "Artigos LaTeX editáveis abrem no editor. PDFs importados e contas visualizadoras abrem em modo de visualização do artigo.",
+            },
+            {
+              title: "Resubmeter",
+              body: "Depois de editar um artigo que já está no mapa, as mudanças só afetam ligações, palavras-chave e preview depois de resubmeter.",
+            },
+          ],
+        },
+        {
+          eyebrow: "Editor",
+          title: "LaTeX, preview e ficheiros",
+          description: "O editor serve para escrever o código fonte e preparar a versão PDF de um artigo.",
+          cards: [
+            {
+              title: "Compilar PDF",
+              body: "Compilar atualiza apenas a preview do PDF. Não publica o artigo no mapa e não altera as relações do grafo.",
+            },
+            {
+              title: "Submeter artigo",
+              body: "Submeter envia a versão atual para o mapa, valida wikilinks, deteta menções não ligadas e guarda o estado e as palavras-chave escolhidas.",
+            },
+            {
+              title: "Uploads",
+              body: "Imagens e PDFs carregados pertencem ao artigo onde foram enviados. Um ficheiro só entra no código quando clicas em Inserir.",
+            },
+            {
+              title: "PDFs importados",
+              body: "PDFs importados são documentos externos. Aparecem no mapa, podem ser ligados e exportados, mas o texto interno não é editado no PaperGraph.",
+            },
+          ],
+        },
+        {
+          eyebrow: "Mapa",
+          title: "Navegação e ligações",
+          description: "O mapa é a área visual onde artigos submetidos passam a nodes.",
+          cards: [
+            {
+              title: "Biblioteca",
+              body: "A biblioteca à esquerda lista artigos submetidos. Pesquisa por título, tag ou estado; clicar num artigo move suavemente a câmara até ao node.",
+            },
+            {
+              title: "Zoom e foco",
+              body: "O zoom acompanha a posição do rato. Focar um artigo move a câmara até ele sem alterar a posição guardada do node.",
+            },
+            {
+              title: "Ligações manuais",
+              body: "Seleciona um artigo, clica em Ligação manual e depois clica noutro artigo. Ligações manuais continuam editáveis no painel de detalhes.",
+            },
+            {
+              title: "Ações com botão direito",
+              body: "Clica com o botão direito num node para editar, exportar, remover relações existentes ou eliminar o artigo depois de confirmação.",
+            },
+          ],
+        },
+        {
+          eyebrow: "Conexões",
+          title: "Wikilinks e menções não ligadas",
+          description: "As conexões podem vir do texto fonte, de sugestões ou de ações manuais no mapa.",
+          cards: [
+            {
+              title: "Wikilink básico",
+              body: "Usa [[Nome do artigo]] no LaTeX para criar uma ligação explícita para outro artigo submetido.",
+            },
+            {
+              title: "Alias visível",
+              body: "Usa [[Nome do artigo|texto visível]] quando o mapa deve ligar ao artigo, mas o PDF deve mostrar apenas texto legível.",
+            },
+            {
+              title: "Menções não ligadas",
+              body: "Se um artigo mencionar o título de outro artigo sem wikilink, o PaperGraph pode sugerir transformar essa menção numa ligação real.",
+            },
+            {
+              title: "Validação",
+              body: "Ao submeter ou resubmeter, o PaperGraph verifica se os wikilinks apontam para artigos submetidos existentes.",
+            },
+          ],
+        },
+        {
+          eyebrow: "Colaboração",
+          title: "Trabalhar com outras pessoas",
+          description: "A colaboração é feita por workspace, por isso os membros partilham o mesmo mapa e os mesmos artigos.",
+          cards: [
+            {
+              title: "Edição em tempo real",
+              body: "Quando alguém está a editar um artigo, os outros membros conseguem ver essa presença antes de sobrescrever ou submeter alterações.",
+            },
+            {
+              title: "Edição simultânea",
+              body: "O editor LaTeX suporta edição colaborativa de texto para membros com acesso de editor.",
+            },
+            {
+              title: "Modo visualizador",
+              body: "Visualizadores podem ler PDFs, navegar no mapa e consultar relações, mas não podem editar código, carregar ficheiros ou alterar ligações.",
+            },
+            {
+              title: "Dados da conta",
+              body: "O nome visível fica guardado na tabela de perfil. Eliminar a conta remove dados pessoais e trata workspaces colaborativas onde és dono.",
+            },
+          ],
+        },
+      ];
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <p className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
+          {isEnglish ? "Help" : "Ajuda"}
+        </p>
+        <h2 className="mt-2 text-xl font-semibold text-[var(--foreground)]">
+          {isEnglish ? "PaperGraph guide" : "Guia do PaperGraph"}
+        </h2>
+        <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--muted)]">
+          {isEnglish
+            ? "A practical reference for the main workflows: writing articles, building the map, collaborating and managing data."
+            : "Uma referência prática para os fluxos principais: escrever artigos, construir o mapa, colaborar e gerir dados."}
+        </p>
+      </div>
+
+      <section className="rounded-[24px] border border-[var(--border)] bg-black/15 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-xs uppercase tracking-[0.22em] text-[var(--muted)]">
+              {isEnglish ? "Start here" : "Começa aqui"}
+            </p>
+            <h3 className="mt-2 text-lg font-semibold text-[var(--foreground)]">
+              {isEnglish ? "First useful path" : "Primeiro caminho útil"}
+            </h3>
+          </div>
+          <span className="rounded-full border border-[var(--border)] bg-white/5 px-3 py-1 text-xs font-semibold text-[var(--muted)]">
+            {isEnglish ? "3 steps" : "3 passos"}
+          </span>
+        </div>
+
+        <div className="mt-4 grid gap-3 lg:grid-cols-3">
+          {quickSteps.map((step, index) => (
+            <article key={step.title} className="rounded-[20px] border border-[var(--border)] bg-white/[0.03] p-4">
+              <span className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-[var(--accent)] bg-[rgba(142,231,255,0.12)] text-xs font-semibold text-[var(--accent)]">
+                {index + 1}
+              </span>
+              <h4 className="mt-3 text-sm font-semibold text-[var(--foreground)]">{step.title}</h4>
+              <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{step.body}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      {helpGroups.map((group) => (
+        <section key={group.title} className="rounded-[24px] border border-[var(--border)] bg-black/15 p-4">
+          <p className="text-xs uppercase tracking-[0.22em] text-[var(--muted)]">{group.eyebrow}</p>
+          <h3 className="mt-2 text-lg font-semibold text-[var(--foreground)]">{group.title}</h3>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--muted)]">{group.description}</p>
+
+          <div className="mt-4 grid gap-3 xl:grid-cols-2">
+            {group.cards.map((card) => (
+              <article key={card.title} className="rounded-[18px] border border-[var(--border)] bg-white/[0.03] p-4">
+                <h4 className="text-sm font-semibold text-[var(--foreground)]">{card.title}</h4>
+                <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{card.body}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+      ))}
     </div>
   );
 }
@@ -723,7 +1102,7 @@ function validateExplicitLinkTargets(workspaceArticles: WorkspaceArticle[], lang
   return validationIssues;
 }
 
-function isSubmittedArticle(article: WorkspaceArticle) {
+function isSubmittedArticle(article: WorkspaceArticle): article is WorkspaceArticle & { status: SubmittedArticleStatus } {
   return article.status !== "Draft";
 }
 
@@ -964,6 +1343,7 @@ export default function Home() {
     return savedTheme === "light" ? "light" : "dark";
   });
   const [pendingEditorResubmission, setPendingEditorResubmission] = useState<PendingEditorResubmission | null>(null);
+  const [restoredEditorVersion, setRestoredEditorVersion] = useState<WorkspaceArticleVersion | null>(null);
   const [pendingEditorNavigation, setPendingEditorNavigation] = useState<PendingEditorNavigation | null>(null);
   const [appDialog, setAppDialog] = useState<AppDialogState | null>(null);
   const [appDialogValue, setAppDialogValue] = useState("");
@@ -1527,6 +1907,7 @@ export default function Home() {
     setWorkspaceInviteEmail("");
     setPendingEditorNavigation(null);
     setPendingEditorResubmission(null);
+    setRestoredEditorVersion(null);
     setConnectionValidationError(null);
     rememberActiveWorkspaceId(null);
     applyWorkspaceSnapshot(defaultSnapshot, null, false);
@@ -1565,6 +1946,9 @@ export default function Home() {
       setWorkspacePresence([]);
       setEditorSelection(null);
       setWorkspaceInviteEmail("");
+      setPendingEditorNavigation(null);
+      setPendingEditorResubmission(null);
+      setRestoredEditorVersion(null);
       rememberActiveWorkspaceId(null);
       applyWorkspaceSnapshot(defaultSnapshot, null, false);
       setAuthStatus(isEnglish ? "Signed out." : "Sessão terminada.");
@@ -1685,6 +2069,10 @@ export default function Home() {
   );
 
   const currentArticles = workspace.articles;
+  const currentArticleVersions = useMemo(
+    () => workspace.articleVersions,
+    [workspace.articleVersions],
+  );
   const canEditCurrentWorkspace =
     !accountWorkspace || accountWorkspace.role === "owner" || accountWorkspace.role === "editor" || accountWorkspace.role === "member";
   const isWorkspaceOwner = accountWorkspace?.role === "owner";
@@ -1719,6 +2107,18 @@ export default function Home() {
     draftArticles.find((article) => article.id === selectedArticleId) ?? draftArticles[0] ?? null;
   const activeGraphArticle =
     submittedArticles.find((article) => article.id === graphSelectedArticleId) ?? null;
+  const selectedArticleVersions = useMemo(
+    () =>
+      selectedArticle
+        ? currentArticleVersions
+            .filter((version) => version.articleId === selectedArticle.id)
+            .sort(
+              (firstVersion, secondVersion) =>
+                new Date(secondVersion.createdAt).getTime() - new Date(firstVersion.createdAt).getTime(),
+            )
+        : [],
+    [currentArticleVersions, selectedArticle],
+  );
   const currentRelations = useMemo(
     () => rebuildExplicitRelations(submittedArticles, workspace.relations),
     [submittedArticles, workspace.relations],
@@ -2041,6 +2441,47 @@ export default function Home() {
     setLoadError(getReadOnlyWorkspaceMessage());
   }
 
+  function createArticleVersion(article: WorkspaceArticle): WorkspaceArticleVersion | null {
+    if (!isSubmittedArticle(article)) {
+      return null;
+    }
+
+    return {
+      id: createBrowserUuid(),
+      articleId: article.id,
+      title: article.title,
+      author: article.author,
+      status: article.status,
+      source: article.source,
+      tags: [...article.tags],
+      createdAt: new Date().toISOString(),
+      submittedBy: authUser?.id ?? null,
+      submittedByName: visibleAccountName ?? authUser?.email ?? null,
+    };
+  }
+
+  function addArticleVersion(
+    versions: WorkspaceArticleVersion[],
+    article: WorkspaceArticle,
+  ): WorkspaceArticleVersion[] {
+    const nextVersion = createArticleVersion(article);
+
+    if (!nextVersion) {
+      return versions;
+    }
+
+    const articleVersions = [
+      nextVersion,
+      ...versions.filter((version) => version.articleId === article.id),
+    ].slice(0, maxArticleVersionsPerArticle);
+    const otherVersions = versions.filter((version) => version.articleId !== article.id);
+
+    return [...articleVersions, ...otherVersions].sort(
+      (firstVersion, secondVersion) =>
+        new Date(secondVersion.createdAt).getTime() - new Date(firstVersion.createdAt).getTime(),
+    );
+  }
+
   function saveWorkspace(snapshot: WorkspaceSnapshot) {
     if (!canEditCurrentWorkspace) {
       setWorkspace(snapshot);
@@ -2188,6 +2629,7 @@ export default function Home() {
     try {
       await saveQueueRef.current.catch(() => undefined);
       setPendingEditorResubmission(null);
+      setRestoredEditorVersion(null);
       setPendingEditorNavigation(null);
       setConnectionValidationError(null);
       setAccountWorkspace(nextWorkspace);
@@ -2249,6 +2691,7 @@ export default function Home() {
       rememberActiveWorkspaceId(createdWorkspace.id);
       setNewWorkspaceName("");
       setPendingEditorResubmission(null);
+      setRestoredEditorVersion(null);
       setPendingEditorNavigation(null);
       setConnectionValidationError(null);
       await loadCloudWorkspace(createdWorkspace.id);
@@ -2390,6 +2833,7 @@ export default function Home() {
       setAccountWorkspaces(refreshedWorkspaces);
       rememberShouldKeepWorkspacesEmpty(authUser.id, refreshedWorkspaces.length === 0);
       setPendingEditorResubmission(null);
+      setRestoredEditorVersion(null);
       setPendingEditorNavigation(null);
       setConnectionValidationError(null);
 
@@ -2659,6 +3103,7 @@ export default function Home() {
       rememberShouldKeepWorkspacesEmpty(authUser.id, false);
       await syncAccountWorkspace(authUser, acceptedWorkspace.id);
       setPendingEditorResubmission(null);
+      setRestoredEditorVersion(null);
       setPendingEditorNavigation(null);
       setConnectionValidationError(null);
       activateTab("graph");
@@ -2759,6 +3204,7 @@ export default function Home() {
     const navigation = pendingEditorNavigation;
 
     setPendingEditorResubmission(null);
+    setRestoredEditorVersion(null);
     setPendingEditorNavigation(null);
     setConnectionValidationError(null);
     completePendingEditorNavigation(navigation);
@@ -2798,6 +3244,7 @@ export default function Home() {
       articlePositions: currentArticlePositions,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: currentImageAssets,
+      articleVersions: currentArticleVersions,
     });
   }
 
@@ -2852,6 +3299,7 @@ export default function Home() {
       articlePositions: nextArticlePositions,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: currentImageAssets,
+      articleVersions: currentArticleVersions,
     };
 
     setWorkspace(snapshot);
@@ -2893,6 +3341,7 @@ export default function Home() {
       articlePositions: nextArticlePositions,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: currentImageAssets,
+      articleVersions: currentArticleVersions,
     };
 
     setWorkspace(snapshot);
@@ -2929,6 +3378,7 @@ export default function Home() {
     );
     const nextSubmittedArticles = nextArticles.filter(isSubmittedArticle);
     const nextRelations = rebuildExplicitRelations(nextSubmittedArticles, currentRelations);
+    const nextArticleVersions = addArticleVersion(currentArticleVersions, updatedArticle);
     const snapshot: WorkspaceSnapshot = {
       selectedArticleId: updatedArticle.id,
       articles: nextArticles,
@@ -2936,6 +3386,7 @@ export default function Home() {
       articlePositions: currentArticlePositions,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: currentImageAssets,
+      articleVersions: nextArticleVersions,
     };
 
     setWorkspace(snapshot);
@@ -2944,6 +3395,43 @@ export default function Home() {
     rememberSelectedArticle(updatedArticle.id);
     selectGraphArticle(updatedArticle.id);
     void saveWorkspace(snapshot);
+  }
+
+  function restoreArticleVersion(versionId: string) {
+    if (!canEditCurrentWorkspace) {
+      showReadOnlyWorkspaceError();
+      return;
+    }
+
+    const versionToRestore = currentArticleVersions.find((version) => version.id === versionId);
+
+    if (!versionToRestore) {
+      setConnectionValidationError(
+        isEnglish
+          ? "Could not find that saved version."
+          : "NÃ£o foi possÃ­vel encontrar essa versÃ£o guardada.",
+      );
+      return;
+    }
+
+    const articleToRestore = currentArticles.find((article) => article.id === versionToRestore.articleId);
+
+    if (!articleToRestore || isImportedPdfArticle(articleToRestore)) {
+      setConnectionValidationError(
+        isEnglish
+          ? "This article cannot be restored in the editor."
+          : "Este artigo nÃ£o pode ser restaurado no editor.",
+      );
+      return;
+    }
+
+    setRestoredEditorVersion(versionToRestore);
+    setConnectionValidationError(null);
+    setPendingEditorNavigation(null);
+    setSelectedArticleId(versionToRestore.articleId);
+    rememberSelectedArticle(versionToRestore.articleId);
+    selectGraphArticle(versionToRestore.articleId);
+    activateTab("editor");
   }
 
   async function compileArticleForSubmission(article: WorkspaceArticle) {
@@ -3103,6 +3591,7 @@ export default function Home() {
       submittedArticle.id,
       submittedArticleUnlinkedMentions,
     );
+    const nextArticleVersions = addArticleVersion(currentArticleVersions, submittedArticle);
 
     const snapshot: WorkspaceSnapshot = {
       selectedArticleId: submittedArticle.id,
@@ -3111,11 +3600,13 @@ export default function Home() {
       articlePositions: nextArticlePositions,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: currentImageAssets,
+      articleVersions: nextArticleVersions,
     };
 
     setWorkspace(snapshot);
     setConnectionValidationError(null);
     setPendingEditorResubmission(null);
+    setRestoredEditorVersion(null);
     setSelectedArticleId(submittedArticle.id);
     rememberSelectedArticle(submittedArticle.id);
     selectGraphArticle(submittedArticle.id);
@@ -3174,6 +3665,7 @@ export default function Home() {
       articlePositions: nextArticlePositions,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: currentImageAssets,
+      articleVersions: currentArticleVersions,
     };
 
     setWorkspace(snapshot);
@@ -3236,6 +3728,7 @@ export default function Home() {
       articlePositions: currentArticlePositions,
       ignoredUnlinkedMentionKeys: nextIgnoredUnlinkedMentionKeys,
       imageAssets: currentImageAssets,
+      articleVersions: currentArticleVersions,
     };
 
     setWorkspace(snapshot);
@@ -3265,6 +3758,7 @@ export default function Home() {
       articlePositions: currentArticlePositions,
       ignoredUnlinkedMentionKeys: nextIgnoredUnlinkedMentionKeys,
       imageAssets: currentImageAssets,
+      articleVersions: currentArticleVersions,
     };
 
     setWorkspace(snapshot);
@@ -3320,6 +3814,7 @@ export default function Home() {
         articlePositions: currentArticlePositions,
         ignoredUnlinkedMentionKeys: nextIgnoredUnlinkedMentionKeys,
         imageAssets: currentImageAssets,
+        articleVersions: currentArticleVersions,
       };
 
       setWorkspace(snapshot);
@@ -3354,6 +3849,7 @@ export default function Home() {
       articlePositions: currentArticlePositions,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: currentImageAssets,
+      articleVersions: currentArticleVersions,
     };
 
     setWorkspace(snapshot);
@@ -3511,6 +4007,7 @@ export default function Home() {
       ...currentArticlePositions,
       [importedArticle.id]: calculateNextArticlePosition(currentArticles),
     };
+    const nextArticleVersions = addArticleVersion(currentArticleVersions, importedArticle);
     const snapshot: WorkspaceSnapshot = {
       selectedArticleId: importedArticle.id,
       articles: nextArticles,
@@ -3518,6 +4015,7 @@ export default function Home() {
       articlePositions: nextArticlePositions,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: nextImageAssets,
+      articleVersions: nextArticleVersions,
     };
 
     setWorkspace(snapshot);
@@ -3551,6 +4049,7 @@ export default function Home() {
       articlePositions: currentArticlePositions,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: nextImageAssets,
+      articleVersions: currentArticleVersions,
     };
 
     setWorkspace(snapshot);
@@ -3641,6 +4140,7 @@ export default function Home() {
       articlePositions: currentArticlePositions,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: nextImageAssets,
+      articleVersions: currentArticleVersions,
     };
 
     setWorkspace(snapshot);
@@ -3696,6 +4196,7 @@ export default function Home() {
         ? null
         : graphSelectedArticleId;
     const nextImageAssets = currentImageAssets.filter((imageAsset) => imageAsset.articleId !== articleId);
+    const nextArticleVersions = currentArticleVersions.filter((version) => version.articleId !== articleId);
     const snapshot: WorkspaceSnapshot = {
       selectedArticleId: nextSelectedArticleId,
       articles: nextArticles,
@@ -3703,12 +4204,16 @@ export default function Home() {
       articlePositions: nextArticlePositions,
       ignoredUnlinkedMentionKeys: nextIgnoredUnlinkedMentionKeys,
       imageAssets: nextImageAssets,
+      articleVersions: nextArticleVersions,
     };
 
     setWorkspace(snapshot);
     setConnectionValidationError(null);
     setPendingEditorNavigation(null);
     setPendingEditorResubmission(null);
+    setRestoredEditorVersion((currentVersion) =>
+      currentVersion?.articleId === articleId ? null : currentVersion,
+    );
     setEditorSelection((currentSelection) =>
       currentSelection?.articleId === articleId ? null : currentSelection,
     );
@@ -3734,6 +4239,7 @@ export default function Home() {
       articlePositions: normalizedPositions,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: currentImageAssets,
+      articleVersions: currentArticleVersions,
     };
 
     setWorkspace(snapshot);
@@ -3916,6 +4422,7 @@ export default function Home() {
                   article={selectedArticle}
                   articleCollaborators={articlePresence}
                   authAccessToken={authAccessToken}
+                  articleVersions={selectedArticleVersions}
                   canEditMetadata={canEditCurrentWorkspace && selectedArticleIsImportedPdf}
                   imageAssets={selectedArticleImageAssets}
                   language={appLanguage}
@@ -3926,10 +4433,13 @@ export default function Home() {
                   key={selectedArticle.id}
                   article={selectedArticle}
                   articleCollaborators={articlePresence}
+                  articleVersions={selectedArticleVersions}
+                  canRestoreArticleVersion={selectedArticleCanBeEdited}
                   collaborationClientId={collaborationClientId}
                   collaborationUserName={collaborationUserName}
                   onSaveArticle={updateArticleDetails}
                   onSubmitArticle={submitArticle}
+                  onRestoreArticleVersion={restoreArticleVersion}
                   isSubmissionRunning={isArticleSubmissionRunning}
                   submissionIssue={connectionValidationError}
                   language={appLanguage}
@@ -3940,6 +4450,9 @@ export default function Home() {
                   onImageDeleted={deleteImageAsset}
                   onEditorSelectionChange={setEditorSelection}
                   authAccessToken={authAccessToken}
+                  restoredVersion={
+                    restoredEditorVersion?.articleId === selectedArticle.id ? restoredEditorVersion : null
+                  }
                   workspaceId={accountWorkspace?.id ?? null}
                 />
               ) : (
@@ -4000,7 +4513,7 @@ export default function Home() {
           ) : null}
 
           {activeTab === "settings" ? (
-            <div className="grid min-h-0 flex-1 gap-5 overflow-y-auto lg:grid-cols-[20rem_minmax(0,1fr)]">
+            <div className="scrollbar-hidden grid min-h-0 flex-1 gap-5 overflow-y-auto lg:grid-cols-[20rem_minmax(0,1fr)]">
               <aside className="flex flex-col gap-5 rounded-[28px] border border-[var(--border)] bg-[var(--surface-strong)] p-5">
                 <div>
                   <p className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
@@ -4045,7 +4558,7 @@ export default function Home() {
                 </div>
               </aside>
 
-              <section className="min-h-0 overflow-y-auto rounded-[28px] border border-[var(--border)] bg-[var(--surface-strong)] p-5">
+              <section className="scrollbar-hidden min-h-0 overflow-y-auto rounded-[28px] border border-[var(--border)] bg-[var(--surface-strong)] p-5">
                 {settingsSection === "general" ? (
                   <div className="space-y-5">
                     <div>
@@ -4629,83 +5142,7 @@ export default function Home() {
                 ) : null}
 
                 {settingsSection === "help" ? (
-                  <div className="space-y-4">
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
-                        {isEnglish ? "Help" : "Ajuda"}
-                      </p>
-                      <h2 className="mt-2 text-xl font-semibold text-white">
-                        {isEnglish ? "Core concepts" : "Conceitos principais"}
-                      </h2>
-                    </div>
-
-                    {(isEnglish
-                      ? [
-                          {
-                            title: "Wikilinks",
-                            body: "Use [[Article name]] inside LaTeX to create an explicit graph connection. Use [[Article name|visible text]] when the PDF should show only the readable alias.",
-                          },
-                          {
-                            title: "Unlinked mentions",
-                            body: "If an article mentions another article title without a wikilink, PaperGraph suggests converting that mention into a real connection.",
-                          },
-                          {
-                            title: "Compile vs submit",
-                            body: "Compile only refreshes the PDF preview. Submit publishes the current article version to the graph and recalculates wikilinks, mentions and relations.",
-                          },
-                          {
-                            title: "Manual links",
-                            body: "Manual links are graph-only relations. Select an article, click Manual link, then click the target article.",
-                          },
-                          {
-                            title: "Uploads and imported PDFs",
-                            body: "Uploads belong to the article where they were added. Imported PDFs appear on the graph, can be connected and exported, but are not editable.",
-                          },
-                          {
-                            title: "Right click actions",
-                            body: "Right click an article node to edit, export, remove relations or remove the article after confirmation.",
-                          },
-                          {
-                            title: "Collaboration",
-                            body: "Workspace members can work on the same map. Editors can change articles; viewers can inspect PDFs and the graph without editing source text.",
-                          },
-                        ]
-                      : [
-                          {
-                            title: "Wikilinks",
-                            body: "Usa [[Nome do artigo]] dentro do LaTeX para criar uma ligação explícita no mapa. Usa [[Nome do artigo|texto visível]] quando o PDF deve mostrar só o alias legível.",
-                          },
-                          {
-                            title: "Menções não ligadas",
-                            body: "Se um artigo mencionar o título de outro artigo sem wikilink, o PaperGraph sugere converter essa menção numa ligação real.",
-                          },
-                          {
-                            title: "Compilar vs submeter",
-                            body: "Compilar só atualiza a preview do PDF. Submeter publica a versão atual no mapa e recalcula wikilinks, menções e ligações.",
-                          },
-                          {
-                            title: "Ligações manuais",
-                            body: "As ligações manuais existem só no mapa. Seleciona um artigo, clica em Ligação manual e depois clica no artigo de destino.",
-                          },
-                          {
-                            title: "Uploads e PDFs importados",
-                            body: "Os uploads pertencem ao artigo onde foram adicionados. PDFs importados aparecem no mapa, podem ser ligados e exportados, mas não são editáveis.",
-                          },
-                          {
-                            title: "Ações com right click",
-                            body: "Clica com o botão direito num node para editar, exportar, remover relações ou remover o artigo depois de confirmação.",
-                          },
-                          {
-                            title: "Colaboração",
-                            body: "Membros da workspace podem trabalhar no mesmo mapa. Editores podem alterar artigos; visualizadores podem ver PDFs e o mapa sem editar o código.",
-                          },
-                        ]).map((item) => (
-                      <article key={item.title} className="rounded-[20px] border border-[var(--border)] bg-black/15 p-4">
-                        <h3 className="text-base font-semibold text-white">{item.title}</h3>
-                        <p className="mt-2 text-sm leading-6 text-[var(--muted)]">{item.body}</p>
-                      </article>
-                    ))}
-                  </div>
+                  <HelpSection language={appLanguage} />
                 ) : null}
 
                 {settingsSection === "account" ? (

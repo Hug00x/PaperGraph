@@ -69,6 +69,23 @@ create table if not exists public.articles (
   primary key (workspace_id, id)
 );
 
+create table if not exists public.article_versions (
+  id text primary key,
+  workspace_id uuid not null references public.workspaces (id) on delete cascade,
+  article_id text not null,
+  title text not null,
+  author text not null default 'PaperGraph',
+  status text not null check (status in ('Review', 'Published')),
+  source text not null default '',
+  tags text[] not null default '{}',
+  submitted_by uuid references auth.users (id) on delete set null,
+  submitted_by_name text,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists article_versions_workspace_article_created_idx
+on public.article_versions (workspace_id, article_id, created_at desc);
+
 create table if not exists public.article_collaboration_states (
   workspace_id uuid not null references public.workspaces (id) on delete cascade,
   article_id text not null,
@@ -122,6 +139,7 @@ alter table public.workspaces enable row level security;
 alter table public.workspace_members enable row level security;
 alter table public.workspace_invites enable row level security;
 alter table public.articles enable row level security;
+alter table public.article_versions enable row level security;
 alter table public.article_collaboration_states enable row level security;
 alter table public.relations enable row level security;
 alter table public.article_positions enable row level security;
@@ -217,6 +235,10 @@ drop policy if exists "articles visible to members" on public.articles;
 drop policy if exists "articles insertable by members" on public.articles;
 drop policy if exists "articles editable by members" on public.articles;
 drop policy if exists "articles deletable by members" on public.articles;
+drop policy if exists "article versions visible to members" on public.article_versions;
+drop policy if exists "article versions insertable by members" on public.article_versions;
+drop policy if exists "article versions editable by members" on public.article_versions;
+drop policy if exists "article versions deletable by members" on public.article_versions;
 drop policy if exists "article collaboration states visible to members" on public.article_collaboration_states;
 drop policy if exists "article collaboration states insertable by members" on public.article_collaboration_states;
 drop policy if exists "article collaboration states editable by members" on public.article_collaboration_states;
@@ -333,6 +355,27 @@ with check (public.can_edit_workspace(workspace_id));
 
 create policy "articles deletable by members"
 on public.articles for delete
+to authenticated
+using (public.can_edit_workspace(workspace_id));
+
+create policy "article versions visible to members"
+on public.article_versions for select
+to authenticated
+using (public.is_workspace_member(workspace_id));
+
+create policy "article versions insertable by members"
+on public.article_versions for insert
+to authenticated
+with check (public.can_edit_workspace(workspace_id));
+
+create policy "article versions editable by members"
+on public.article_versions for update
+to authenticated
+using (public.can_edit_workspace(workspace_id))
+with check (public.can_edit_workspace(workspace_id));
+
+create policy "article versions deletable by members"
+on public.article_versions for delete
 to authenticated
 using (public.can_edit_workspace(workspace_id));
 
@@ -1391,6 +1434,7 @@ grant select, insert, update, delete on public.workspaces to authenticated;
 grant select, insert, update, delete on public.workspace_members to authenticated;
 grant select, insert, update, delete on public.workspace_invites to authenticated;
 grant select, insert, update, delete on public.articles to authenticated;
+grant select, insert, update, delete on public.article_versions to authenticated;
 grant select, insert, update, delete on public.article_collaboration_states to authenticated;
 grant select, insert, update, delete on public.relations to authenticated;
 grant select, insert, update, delete on public.article_positions to authenticated;

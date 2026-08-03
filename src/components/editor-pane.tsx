@@ -6,6 +6,7 @@ import {
   CollaborativeLatexEditor,
   type CollaborativeLatexEditorHandle,
 } from "@/components/collaborative-latex-editor";
+import { ArticleHistoryPanel } from "@/components/article-history-panel";
 import { PdfZoomControls } from "@/components/pdf-zoom-controls";
 import deleteButtonImage from "@/imagens/Delete_button.png";
 import deleteButtonImageInverted from "@/imagens/Delete_button_inverted.png";
@@ -14,7 +15,7 @@ import { getPdfFitScale } from "@/lib/pdf-preview-layout";
 import { getArticleStatusLabel, type AppLanguage } from "@/lib/portuguese-labels";
 import { getSupabaseBrowserClient } from "@/lib/supabase-client";
 import { uploadWorkspaceAssetToSupabase } from "@/lib/supabase-storage";
-import type { WorkspaceArticle, WorkspaceImageAsset } from "@/lib/workspace-data";
+import type { WorkspaceArticle, WorkspaceArticleVersion, WorkspaceImageAsset } from "@/lib/workspace-data";
 
 type SubmittedArticleStatus = Exclude<WorkspaceArticle["status"], "Draft">;
 
@@ -54,6 +55,10 @@ type EditorPaneProps = {
     title: string;
   } | null) => void;
   imageAssets: WorkspaceImageAsset[];
+  articleVersions?: WorkspaceArticleVersion[];
+  canRestoreArticleVersion?: boolean;
+  restoredVersion?: WorkspaceArticleVersion | null;
+  onRestoreArticleVersion?: (versionId: string) => void | Promise<void>;
   onImageUploaded: (imageAsset: WorkspaceImageAsset) => void;
   onImageDeleted: (imageAsset: WorkspaceImageAsset) => void | Promise<void>;
   onEditorSelectionChange?: (selection: { articleId: string; end: number; start: number }) => void;
@@ -247,6 +252,10 @@ export function EditorPane({
   onSubmissionIssueClear,
   onPendingResubmissionChange,
   imageAssets,
+  articleVersions = [],
+  canRestoreArticleVersion = false,
+  restoredVersion = null,
+  onRestoreArticleVersion,
   onImageUploaded,
   onImageDeleted,
   onEditorSelectionChange,
@@ -280,6 +289,7 @@ export function EditorPane({
   const lastTextSelectionRef = useRef<{ start: number; end: number } | null>(null);
   const previewScrollerRef = useRef<HTMLDivElement | null>(null);
   const previewContainerRef = useRef<HTMLDivElement | null>(null);
+  const restoredVersionIdRef = useRef<string | null>(null);
   const isEnglish = language === "en";
   const isSubmittedArticle = article.status !== "Draft";
   const keywordTags = useMemo(() => normalizeKeywordTags(keywordInput), [keywordInput]);
@@ -312,6 +322,31 @@ export function EditorPane({
   useEffect(() => {
     onSaveArticleRef.current = onSaveArticle;
   }, [onSaveArticle]);
+
+  useEffect(() => {
+    if (!restoredVersion) {
+      restoredVersionIdRef.current = null;
+      return;
+    }
+
+    if (
+      restoredVersion.articleId !== article.id ||
+      restoredVersionIdRef.current === restoredVersion.id
+    ) {
+      return;
+    }
+
+    restoredVersionIdRef.current = restoredVersion.id;
+    onSubmissionIssueClear();
+    setTitle(restoredVersion.title);
+    setSource(restoredVersion.source);
+    setKeywordInput(restoredVersion.tags.join(", "));
+    setSubmissionStatus(restoredVersion.status);
+    setPdfBuffer(null);
+    setCompiledPreviewSignature(null);
+    setCompileState("idle");
+    setCompileError(null);
+  }, [article.id, onSubmissionIssueClear, restoredVersion]);
 
   useEffect(() => {
     if (!didMountRef.current) {
@@ -874,6 +909,14 @@ export function EditorPane({
                 <div className="papergraph-pdf-preview-status rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.3em] backdrop-blur-xl">
                   {previewStatusLabel}
                 </div>
+
+                <ArticleHistoryPanel
+                  articleTitle={title}
+                  canRestore={canRestoreArticleVersion}
+                  language={language}
+                  onRestoreVersion={onRestoreArticleVersion}
+                  versions={articleVersions}
+                />
 
                 <div className="flex overflow-hidden rounded-full border border-[var(--border)] bg-white/5">
                   <button
