@@ -141,6 +141,16 @@ html[data-papergraph-theme="light"] .papergraph-app .hover\:bg-red-500\/25:hover
   background-color: rgba(220, 38, 38, 0.2) !important;
 }
 
+html[data-papergraph-theme="light"] .papergraph-app .darkmode-safe-transfer-button {
+  background-color: rgba(245, 158, 11, 0.16) !important;
+  border-color: rgba(180, 83, 9, 0.26) !important;
+  color: #92400e !important;
+}
+
+html[data-papergraph-theme="light"] .papergraph-app .darkmode-safe-transfer-button:hover {
+  background-color: rgba(245, 158, 11, 0.24) !important;
+}
+
 .papergraph-file-panel {
   --file-panel-divider: rgba(255, 255, 255, 0.1);
   --file-panel-file-border: rgba(255, 255, 255, 0.8);

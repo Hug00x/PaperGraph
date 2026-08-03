@@ -456,6 +456,8 @@ drop function if exists public.revoke_workspace_invite(uuid);
 drop function if exists public.update_workspace_member_role(uuid, uuid, text);
 drop function if exists public.remove_workspace_member(uuid, uuid);
 drop function if exists public.transfer_workspace_owner(uuid, uuid);
+drop function if exists public.list_user_account_deletion_storage_paths(uuid);
+drop function if exists public.delete_user_account_data(uuid);
 
 create function public.ensure_user_workspace(requested_workspace_name text default 'PaperGraph')
 returns table (
@@ -1282,6 +1284,107 @@ begin
 end;
 $$;
 
+create function public.list_user_account_deletion_storage_paths(target_user_id uuid)
+returns table (
+  storage_path text
+)
+language sql
+security definer
+set search_path = public
+as $$
+  select assets.storage_path::text
+  from public.assets
+  join public.workspaces
+    on workspaces.id = assets.workspace_id
+  where workspaces.owner_id = target_user_id
+    and not exists (
+      select 1
+      from public.workspace_members
+      where workspace_members.workspace_id = workspaces.id
+        and workspace_members.user_id <> target_user_id
+    )
+  order by assets.created_at asc;
+$$;
+
+create function public.delete_user_account_data(target_user_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  target_user_email text;
+  owned_workspace record;
+  next_owner_user_id uuid;
+begin
+  if target_user_id is null then
+    raise exception 'target user is required';
+  end if;
+
+  select lower(auth_users.email)
+  into target_user_email
+  from auth.users as auth_users
+  where auth_users.id = target_user_id
+  limit 1;
+
+  if target_user_email is null then
+    raise exception 'user not found';
+  end if;
+
+  for owned_workspace in
+    select workspaces.id
+    from public.workspaces
+    where workspaces.owner_id = target_user_id
+      and exists (
+        select 1
+        from public.workspace_members
+        where workspace_members.workspace_id = workspaces.id
+          and workspace_members.user_id <> target_user_id
+      )
+  loop
+    select workspace_members.user_id
+    into next_owner_user_id
+    from public.workspace_members
+    where workspace_members.workspace_id = owned_workspace.id
+      and workspace_members.user_id <> target_user_id
+    order by workspace_members.created_at asc, workspace_members.user_id asc
+    limit 1;
+
+    if next_owner_user_id is not null then
+      update public.workspace_members
+      set member_role = case
+        when workspace_members.user_id = next_owner_user_id then 'owner'
+        when workspace_members.user_id = target_user_id then 'editor'
+        else workspace_members.member_role
+      end
+      where workspace_members.workspace_id = owned_workspace.id
+        and workspace_members.user_id in (target_user_id, next_owner_user_id);
+
+      perform set_config('papergraph.allow_owner_transfer', 'on', true);
+
+      update public.workspaces
+      set
+        owner_id = next_owner_user_id,
+        updated_at = now()
+      where workspaces.id = owned_workspace.id;
+    end if;
+  end loop;
+
+  delete from public.workspaces
+  where workspaces.owner_id = target_user_id;
+
+  delete from public.workspace_members
+  where workspace_members.user_id = target_user_id;
+
+  delete from public.workspace_invites
+  where workspace_invites.invited_by = target_user_id
+    or lower(workspace_invites.invited_email) = target_user_email;
+
+  delete from public.profiles
+  where profiles.id = target_user_id;
+end;
+$$;
+
 grant usage on schema public to authenticated;
 grant select, insert, update, delete on public.profiles to authenticated;
 grant select, insert, update, delete on public.workspaces to authenticated;
@@ -1311,5 +1414,9 @@ grant execute on function public.revoke_workspace_invite(uuid) to authenticated;
 grant execute on function public.update_workspace_member_role(uuid, uuid, text) to authenticated;
 grant execute on function public.remove_workspace_member(uuid, uuid) to authenticated;
 grant execute on function public.transfer_workspace_owner(uuid, uuid) to authenticated;
+revoke execute on function public.list_user_account_deletion_storage_paths(uuid) from public;
+revoke execute on function public.delete_user_account_data(uuid) from public;
+grant execute on function public.list_user_account_deletion_storage_paths(uuid) to service_role;
+grant execute on function public.delete_user_account_data(uuid) to service_role;
 
 notify pgrst, 'reload schema';

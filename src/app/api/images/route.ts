@@ -84,9 +84,9 @@ export async function POST(request: Request) {
     };
 
     return NextResponse.json(asset, { status: 201 });
-  } catch (error) {
+  } catch {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Não foi possível carregar o ficheiro." },
+      { error: "Não foi possível guardar o ficheiro no servidor local." },
       { status: 500 },
     );
   }

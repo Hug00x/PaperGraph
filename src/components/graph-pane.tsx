@@ -7,11 +7,12 @@ import {
   getRelationNoteLabel,
   type AppLanguage,
 } from "@/lib/portuguese-labels";
-import type { Article, ArticlePosition, UnlinkedMention, WorkspaceRelation } from "@/lib/workspace-data";
+import { getFriendlyErrorMessage } from "@/lib/friendly-errors";
+import type { ArticlePosition, UnlinkedMention, WorkspaceArticle, WorkspaceRelation } from "@/lib/workspace-data";
 
 type GraphPaneProps = {
-  activeArticle: Article | null;
-  articles: Article[];
+  activeArticle: WorkspaceArticle | null;
+  articles: WorkspaceArticle[];
   language: AppLanguage;
   relations: WorkspaceRelation[];
   unlinkedMentions: UnlinkedMention[];
@@ -44,7 +45,7 @@ type GraphPaneProps = {
 
 type ArticleRelationEntry = {
   relation: WorkspaceRelation;
-  article: Article;
+  article: WorkspaceArticle;
 };
 
 function clamp(value: number, minimum: number, maximum: number) {
@@ -119,10 +120,21 @@ function getPresenceModeLabel(
   }
 }
 
-function isImportedPdfArticle(article: Article) {
+function isImportedPdfArticle(article: WorkspaceArticle) {
   const normalizedTags = article.tags.map((tag) => tag.toLowerCase());
 
-  return normalizedTags.includes("pdf") && (normalizedTags.includes("importado") || normalizedTags.includes("imported"));
+  return (
+    article.source.includes("\\includepdf") ||
+    (normalizedTags.includes("pdf") && (normalizedTags.includes("importado") || normalizedTags.includes("imported")))
+  );
+}
+
+function getVisibleArticleTags(article: WorkspaceArticle) {
+  if (!isImportedPdfArticle(article)) {
+    return article.tags;
+  }
+
+  return article.tags.filter((tag) => tag.toLowerCase() !== "pdf");
 }
 
 export function GraphPane({
@@ -508,11 +520,10 @@ export function GraphPane({
       setDeleteCandidateArticleId(null);
     } catch (error) {
       setDeleteArticleError(
-        error instanceof Error
-          ? error.message
-          : isEnglish
-            ? "Could not remove the article."
-            : "Não foi possível remover o artigo.",
+        getFriendlyErrorMessage(error, language, {
+          context: "delete",
+          fallback: isEnglish ? "Could not remove the article." : "Não foi possível remover o artigo.",
+        }),
       );
     } finally {
       setIsDeletingArticle(false);
@@ -845,11 +856,10 @@ export function GraphPane({
       await onImportPdfArticle(pdfFile);
     } catch (error) {
       setImportPdfError(
-        error instanceof Error
-          ? error.message
-          : isEnglish
-            ? "Could not import the PDF."
-            : "Não foi possível importar o PDF.",
+        getFriendlyErrorMessage(error, language, {
+          context: "import",
+          fallback: isEnglish ? "Could not import the PDF." : "Não foi possível importar o PDF.",
+        }),
       );
     } finally {
       setIsImportingPdf(false);
@@ -959,10 +969,10 @@ export function GraphPane({
           />
         </label>
 
-        <div className="mt-4 min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain pr-1">
+        <div className="scrollbar-hidden mt-4 min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain pr-1">
           {filteredLibraryArticles.map((article) => {
             const isActive = article.id === activeArticle?.id;
-            const articleKeywordLabel = article.tags
+            const articleKeywordLabel = getVisibleArticleTags(article)
               .slice(0, 2)
               .map((tag) => getArticleTagLabel(tag, language))
               .join(" • ");
@@ -1002,9 +1012,13 @@ export function GraphPane({
 
           {filteredLibraryArticles.length === 0 ? (
             <div className="rounded-[18px] border border-[var(--border)] bg-black/15 p-4 text-sm leading-6 text-[var(--muted)]">
-              {isEnglish
-                ? "No submitted article matches the current search."
-                : "Nenhum artigo submetido corresponde à pesquisa atual."}
+              {articles.length === 0
+                ? isEnglish
+                  ? "No articles on the map yet. Import a PDF or submit a draft to start."
+                  : "Ainda não há artigos no mapa. Importa um PDF ou submete um rascunho para começar."
+                : isEnglish
+                  ? "No submitted article matches the current search."
+                  : "Nenhum artigo submetido corresponde à pesquisa atual."}
             </div>
           ) : null}
         </div>
@@ -1331,7 +1345,7 @@ export function GraphPane({
             <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-white/80">
               {getArticleStatusLabel(activeArticle.status, language)}
             </span>
-            {activeArticle.tags.map((tag) => (
+            {getVisibleArticleTags(activeArticle).map((tag) => (
               <span
                 key={tag}
                 className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] text-[var(--muted)]"

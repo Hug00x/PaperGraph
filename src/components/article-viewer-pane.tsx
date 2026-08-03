@@ -2,9 +2,38 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PdfZoomControls } from "@/components/pdf-zoom-controls";
+import { getFriendlyErrorMessage, getFriendlyResponseError } from "@/lib/friendly-errors";
 import { getPdfFitScale } from "@/lib/pdf-preview-layout";
-import type { AppLanguage } from "@/lib/portuguese-labels";
+import { getArticleStatusLabel, type AppLanguage } from "@/lib/portuguese-labels";
 import type { WorkspaceArticle, WorkspaceImageAsset } from "@/lib/workspace-data";
+
+type SubmittedArticleStatus = Exclude<WorkspaceArticle["status"], "Draft">;
+
+function normalizeTags(value: string) {
+  const seenTags = new Set<string>();
+
+  return value
+    .split(",")
+    .map((tag) => tag.trim())
+    .filter((tag) => {
+      const normalizedTag = tag.toLowerCase();
+
+      if (!tag || seenTags.has(normalizedTag)) {
+        return false;
+      }
+
+      seenTags.add(normalizedTag);
+      return true;
+    });
+}
+
+function getEditableArticleTags(article: WorkspaceArticle) {
+  if (!article.source.includes("\\includepdf")) {
+    return article.tags;
+  }
+
+  return article.tags.filter((tag) => tag.toLowerCase() !== "pdf");
+}
 
 type ArticleViewerPaneProps = {
   article: WorkspaceArticle;
@@ -14,17 +43,31 @@ type ArticleViewerPaneProps = {
     userName: string;
   }>;
   authAccessToken?: string | null;
+  canEditMetadata?: boolean;
   imageAssets: WorkspaceImageAsset[];
   language: AppLanguage;
+  onSaveArticleMetadata?: (article: {
+    articleId: string;
+    status: SubmittedArticleStatus;
+    tags: string[];
+    title: string;
+  }) => void;
 };
 
 export function ArticleViewerPane({
   article,
   articleCollaborators = [],
   authAccessToken,
+  canEditMetadata = false,
   imageAssets,
   language,
+  onSaveArticleMetadata,
 }: ArticleViewerPaneProps) {
+  const [metadataTitle, setMetadataTitle] = useState(article.title);
+  const [metadataTagsInput, setMetadataTagsInput] = useState(getEditableArticleTags(article).join(", "));
+  const [metadataStatus, setMetadataStatus] = useState<SubmittedArticleStatus>(
+    article.status === "Published" ? "Published" : "Review",
+  );
   const [compileState, setCompileState] = useState<"idle" | "rendering" | "ready" | "error">(
     article.source.trim() ? "rendering" : "idle",
   );
@@ -34,6 +77,12 @@ export function ArticleViewerPane({
   const previewScrollerRef = useRef<HTMLDivElement | null>(null);
   const previewContainerRef = useRef<HTMLDivElement | null>(null);
   const isEnglish = language === "en";
+  const metadataTags = normalizeTags(metadataTagsInput);
+  const editableArticleTags = getEditableArticleTags(article);
+  const hasMetadataChanges =
+    metadataTitle.trim() !== article.title ||
+    metadataStatus !== article.status ||
+    metadataTags.join("\u0001") !== editableArticleTags.join("\u0001");
   const editingCollaborators = articleCollaborators.filter((collaborator) => collaborator.mode === "editing");
   const collaboratorNames = articleCollaborators.map((collaborator) => collaborator.userName).join(", ");
 
@@ -64,12 +113,11 @@ export function ArticleViewerPane({
       });
 
       if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
         throw new Error(
-          payload?.error ??
-            (isEnglish
-              ? `Preview failed with status ${response.status}.`
-              : `A visualização falhou com o estado ${response.status}.`),
+          await getFriendlyResponseError(response, language, {
+            context: "preview",
+            fallback: isEnglish ? "Could not prepare the article PDF." : "Não foi possível preparar o PDF do artigo.",
+          }),
         );
       }
 
@@ -78,14 +126,13 @@ export function ArticleViewerPane({
     } catch (error) {
       setCompileState("error");
       setCompileError(
-        error instanceof Error
-          ? error.message
-          : isEnglish
-            ? "Could not prepare the article PDF."
-            : "Não foi possível preparar o PDF do artigo.",
+        getFriendlyErrorMessage(error, language, {
+          context: "preview",
+          fallback: isEnglish ? "Could not prepare the article PDF." : "Não foi possível preparar o PDF do artigo.",
+        }),
       );
     }
-  }, [article.id, article.source, article.title, authAccessToken, imageAssets, isEnglish]);
+  }, [article.id, article.source, article.title, authAccessToken, imageAssets, isEnglish, language]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -162,11 +209,10 @@ export function ArticleViewerPane({
       if (!cancelled) {
         setCompileState("error");
         setCompileError(
-          error instanceof Error
-            ? error.message
-            : isEnglish
-              ? "Could not render the article PDF."
-              : "Não foi possível renderizar o PDF do artigo.",
+          getFriendlyErrorMessage(error, language, {
+            context: "preview",
+            fallback: isEnglish ? "Could not render the article PDF." : "Não foi possível renderizar o PDF do artigo.",
+          }),
         );
       }
     });
@@ -174,7 +220,26 @@ export function ArticleViewerPane({
     return () => {
       cancelled = true;
     };
-  }, [isEnglish, pdfBuffer, pdfZoom]);
+  }, [isEnglish, language, pdfBuffer, pdfZoom]);
+
+  function saveMetadata() {
+    if (!canEditMetadata || !onSaveArticleMetadata) {
+      return;
+    }
+
+    const nextTitle = metadataTitle.trim();
+
+    if (!nextTitle) {
+      return;
+    }
+
+    onSaveArticleMetadata({
+      articleId: article.id,
+      status: metadataStatus,
+      tags: metadataTags,
+      title: nextTitle,
+    });
+  }
 
   return (
     <section className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-transparent">
@@ -231,6 +296,71 @@ export function ArticleViewerPane({
                 : " também está aqui."}
           </p>
         </div>
+      ) : null}
+
+      {canEditMetadata ? (
+        <section className="mt-4 rounded-[20px] border border-[var(--border)] bg-black/15 p-4">
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(12rem,0.55fr)_auto] lg:items-end">
+            <label className="min-w-0">
+              <span className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
+                {isEnglish ? "Title" : "Titulo"}
+              </span>
+              <input
+                value={metadataTitle}
+                onChange={(event) => setMetadataTitle(event.target.value)}
+                className="mt-2 w-full rounded-[18px] border border-[var(--border)] bg-black/20 px-4 py-3 text-sm text-white outline-none transition-colors placeholder:text-white/35 focus:border-[var(--accent)]"
+              />
+            </label>
+
+            <fieldset>
+              <legend className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
+                {isEnglish ? "State" : "Estado"}
+              </legend>
+              <div className="mt-2 grid grid-cols-2 rounded-full border border-[var(--border)] bg-black/20 p-1">
+                {(["Review", "Published"] as const).map((statusOption) => {
+                  const isSelectedStatus = metadataStatus === statusOption;
+
+                  return (
+                    <button
+                      key={statusOption}
+                      type="button"
+                      aria-pressed={isSelectedStatus}
+                      onClick={() => setMetadataStatus(statusOption)}
+                      className={`rounded-full px-3 py-2 text-xs font-semibold transition-colors ${
+                        isSelectedStatus
+                          ? "bg-[var(--accent)] text-[#041016]"
+                          : "text-[var(--muted)] hover:text-[var(--foreground)]"
+                      }`}
+                    >
+                      {getArticleStatusLabel(statusOption, language)}
+                    </button>
+                  );
+                })}
+              </div>
+            </fieldset>
+
+            <button
+              type="button"
+              disabled={!hasMetadataChanges || !metadataTitle.trim()}
+              onClick={saveMetadata}
+              className="rounded-full border border-[var(--accent)] bg-[var(--accent)] px-4 py-3 text-xs font-semibold uppercase tracking-[0.18em] text-[#041016] transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isEnglish ? "Save" : "Guardar"}
+            </button>
+          </div>
+
+          <label className="mt-3 block">
+            <span className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
+              {isEnglish ? "Keywords" : "Palavras-chave"}
+            </span>
+            <input
+              value={metadataTagsInput}
+              onChange={(event) => setMetadataTagsInput(event.target.value)}
+              className="mt-2 w-full rounded-[18px] border border-[var(--border)] bg-black/20 px-4 py-3 text-sm text-white outline-none transition-colors placeholder:text-white/35 focus:border-[var(--accent)]"
+              placeholder={isEnglish ? "e.g. imported, archive" : "ex. importado, arquivo"}
+            />
+          </label>
+        </section>
       ) : null}
 
       <div className="flex min-h-0 flex-1 justify-center overflow-hidden py-6 lg:py-8">

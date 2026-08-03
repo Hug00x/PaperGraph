@@ -45,6 +45,7 @@ import {
 import { deleteArticleCollaborationStateFromSupabase } from "@/lib/supabase-collaboration";
 import { getSupabaseBrowserClient } from "@/lib/supabase-client";
 import { paperGraphAssetBucket, uploadWorkspaceAssetToSupabase } from "@/lib/supabase-storage";
+import { getFriendlyErrorMessage, getFriendlyResponseError } from "@/lib/friendly-errors";
 import Image from "next/image";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "@supabase/supabase-js";
@@ -69,6 +70,23 @@ type PendingEditorResubmission = {
   title: string;
 };
 type PendingEditorNavigation = { type: "tab"; tab: WorkspaceTab };
+type AppDialogTone = "default" | "danger" | "warning";
+type AppDialogState = {
+  body?: string;
+  cancelLabel?: string;
+  confirmLabel?: string;
+  confirmationValue?: string;
+  eyebrow?: string;
+  inputDefaultValue?: string;
+  inputLabel?: string;
+  kind: "alert" | "confirm" | "prompt";
+  title: string;
+  tone?: AppDialogTone;
+};
+type AppDialogResult = {
+  confirmed: boolean;
+  value?: string;
+};
 type ArticleSubmission = {
   articleId?: string;
   source: string;
@@ -305,6 +323,61 @@ function formatWorkspaceRole(role: string, language: AppLanguage) {
 
 function getEditableWorkspaceMemberRole(role: WorkspaceMemberRole): EditableWorkspaceMemberRole {
   return role === "viewer" ? "viewer" : "editor";
+}
+
+function WorkspaceRoleToggle({
+  className = "",
+  disabled = false,
+  language,
+  onChange,
+  size = "md",
+  value,
+}: {
+  className?: string;
+  disabled?: boolean;
+  language: AppLanguage;
+  onChange: (role: EditableWorkspaceMemberRole) => void;
+  size?: "sm" | "md";
+  value: EditableWorkspaceMemberRole;
+}) {
+  const selectedIndex = editableWorkspaceMemberRoles.indexOf(value);
+  const buttonClassName =
+    size === "sm" ? "px-3 py-1.5 text-[11px]" : "px-5 py-2.5 text-sm";
+
+  return (
+    <div
+      className={`relative grid grid-cols-2 rounded-full border border-[var(--border)] bg-black/20 p-1 ${className}`}
+    >
+      <span
+        aria-hidden
+        className={`absolute inset-y-1 left-1 w-[calc(50%-0.25rem)] rounded-full bg-[var(--accent)] shadow-[0_10px_24px_rgba(142,231,255,0.18)] transition-transform duration-200 ease-out ${
+          selectedIndex === 1 ? "translate-x-full" : "translate-x-0"
+        }`}
+      />
+      {editableWorkspaceMemberRoles.map((role) => {
+        const isSelectedRole = value === role;
+
+        return (
+          <button
+            key={role}
+            type="button"
+            aria-pressed={isSelectedRole}
+            disabled={disabled}
+            onClick={() => {
+              if (!isSelectedRole) {
+                onChange(role);
+              }
+            }}
+            className={`relative z-10 rounded-full font-semibold transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-60 ${buttonClassName} ${
+              isSelectedRole ? "text-[#041016]" : "text-[var(--muted)] hover:text-[var(--foreground)]"
+            }`}
+          >
+            {formatWorkspaceRole(role, language)}
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 function formatInviteStatus(status: WorkspaceInvite["status"], language: AppLanguage) {
@@ -654,10 +727,13 @@ function isSubmittedArticle(article: WorkspaceArticle) {
   return article.status !== "Draft";
 }
 
-function isImportedPdfArticle(article: { tags: string[] }) {
+function isImportedPdfArticle(article: { source?: string; tags: string[] }) {
   const normalizedTags = article.tags.map((tag) => tag.toLowerCase());
 
-  return normalizedTags.includes("pdf") && (normalizedTags.includes("importado") || normalizedTags.includes("imported"));
+  return (
+    article.source?.includes("\\includepdf") === true ||
+    (normalizedTags.includes("pdf") && (normalizedTags.includes("importado") || normalizedTags.includes("imported")))
+  );
 }
 
 function articleUsesImageAsset(article: WorkspaceArticle, imageAsset: WorkspaceImageAsset) {
@@ -889,6 +965,8 @@ export default function Home() {
   });
   const [pendingEditorResubmission, setPendingEditorResubmission] = useState<PendingEditorResubmission | null>(null);
   const [pendingEditorNavigation, setPendingEditorNavigation] = useState<PendingEditorNavigation | null>(null);
+  const [appDialog, setAppDialog] = useState<AppDialogState | null>(null);
+  const [appDialogValue, setAppDialogValue] = useState("");
   const [isArticleSubmissionRunning, setIsArticleSubmissionRunning] = useState(false);
   const [connectionValidationError, setConnectionValidationError] = useState<string | null>(null);
   const [dismissedUnlinkedToastKey, setDismissedUnlinkedToastKey] = useState<string | null>(null);
@@ -902,6 +980,7 @@ export default function Home() {
   const [authAccessToken, setAuthAccessToken] = useState<string | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(false);
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
+  const [isAccountDeletionRunning, setIsAccountDeletionRunning] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authStatus, setAuthStatus] = useState<string | null>(null);
   const [accountWorkspace, setAccountWorkspace] = useState<AccountWorkspace | null>(null);
@@ -929,6 +1008,54 @@ export default function Home() {
   const currentPresencePayloadRef = useRef<WorkspacePresence | null>(null);
   const presenceLocationKeyRef = useRef<string | null>(null);
   const presenceEnteredAtRef = useRef<string>(new Date().toISOString());
+  const appDialogResolverRef = useRef<((result: AppDialogResult) => void) | null>(null);
+
+  const openAppDialog = useCallback((dialog: AppDialogState) => {
+    appDialogResolverRef.current?.({ confirmed: false });
+    setAppDialog(dialog);
+    setAppDialogValue(dialog.inputDefaultValue ?? "");
+
+    return new Promise<AppDialogResult>((resolve) => {
+      appDialogResolverRef.current = resolve;
+    });
+  }, []);
+
+  const closeAppDialog = useCallback((result: AppDialogResult) => {
+    appDialogResolverRef.current?.(result);
+    appDialogResolverRef.current = null;
+    setAppDialog(null);
+    setAppDialogValue("");
+  }, []);
+
+  const requestAppConfirm = useCallback(
+    async (dialog: Omit<AppDialogState, "kind">) => {
+      const result = await openAppDialog({ ...dialog, kind: "confirm" });
+      return result.confirmed;
+    },
+    [openAppDialog],
+  );
+
+  const requestAppPrompt = useCallback(
+    async (dialog: Omit<AppDialogState, "kind">) => {
+      const result = await openAppDialog({ ...dialog, kind: "prompt" });
+      return result.confirmed ? result.value ?? "" : null;
+    },
+    [openAppDialog],
+  );
+
+  const requestAppAlert = useCallback(
+    async (dialog: Omit<AppDialogState, "kind">) => {
+      await openAppDialog({ ...dialog, kind: "alert" });
+    },
+    [openAppDialog],
+  );
+
+  useEffect(() => {
+    return () => {
+      appDialogResolverRef.current?.({ confirmed: false });
+      appDialogResolverRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     window.localStorage.setItem("papergraph-language", appLanguage);
@@ -1001,15 +1128,14 @@ export default function Home() {
         await mirrorWorkspaceLocally(snapshot);
       } catch (error) {
         setLoadError(
-          error instanceof Error
-            ? error.message
-            : isEnglish
-              ? "Could not load the cloud workspace."
-              : "Não foi possível carregar a workspace cloud.",
+          getFriendlyErrorMessage(error, appLanguage, {
+            context: "workspace",
+            fallback: isEnglish ? "Could not load the cloud workspace." : "Não foi possível carregar a workspace cloud.",
+          }),
         );
       }
     },
-    [applyWorkspaceSnapshot, isEnglish, mirrorWorkspaceLocally, supabase],
+    [appLanguage, applyWorkspaceSnapshot, isEnglish, mirrorWorkspaceLocally, supabase],
   );
 
   const loadAuthProfile = useCallback(
@@ -1101,15 +1227,16 @@ export default function Home() {
         setWorkspaceInvites([]);
         setPendingWorkspaceInvites([]);
         setAuthError(
-          error instanceof Error
-            ? error.message
-            : isEnglish
+          getFriendlyErrorMessage(error, appLanguage, {
+            context: "workspace",
+            fallback: isEnglish
               ? "Could not load workspace collaboration data."
               : "Não foi possível carregar os dados de colaboração da workspace.",
+          }),
         );
       }
     },
-    [isEnglish, supabase],
+    [appLanguage, isEnglish, supabase],
   );
 
   const syncAccountWorkspace = useCallback(
@@ -1174,16 +1301,18 @@ export default function Home() {
         setAuthStatus(null);
         setAuthError(
           isEnglish
-            ? `Account connected, but the cloud workspace could not be prepared: ${
-                error instanceof Error ? error.message : "unknown error"
-              }. Run supabase/bootstrap-workspace.sql in the SQL Editor.`
-            : `Conta ligada, mas não foi possível preparar a workspace cloud: ${
-                error instanceof Error ? error.message : "erro desconhecido"
-              }. Corre supabase/bootstrap-workspace.sql no SQL Editor.`,
+            ? `Account connected, but the cloud workspace could not be prepared: ${getFriendlyErrorMessage(error, appLanguage, {
+                context: "workspace",
+                fallback: "Run supabase/bootstrap-workspace.sql in the SQL Editor.",
+              })}`
+            : `Conta ligada, mas não foi possível preparar a workspace cloud: ${getFriendlyErrorMessage(error, appLanguage, {
+                context: "workspace",
+                fallback: "Corre supabase/bootstrap-workspace.sql no SQL Editor.",
+              })}`,
         );
       }
     },
-    [applyWorkspaceSnapshot, isEnglish, loadAuthProfile, loadCloudWorkspace, loadWorkspaceCollaboration, supabase],
+    [appLanguage, applyWorkspaceSnapshot, isEnglish, loadAuthProfile, loadCloudWorkspace, loadWorkspaceCollaboration, supabase],
   );
 
   useEffect(() => {
@@ -1223,11 +1352,10 @@ export default function Home() {
         window.clearTimeout(sessionCheckTimeout);
         setIsAuthLoading(false);
         setAuthError(
-          error instanceof Error
-            ? error.message
-            : isEnglish
-              ? "Could not check the saved session."
-              : "Não foi possível confirmar a sessão guardada.",
+          getFriendlyErrorMessage(error, appLanguage, {
+            context: "auth",
+            fallback: isEnglish ? "Could not check the saved session." : "Não foi possível confirmar a sessão guardada.",
+          }),
         );
       });
 
@@ -1264,7 +1392,7 @@ export default function Home() {
       window.clearTimeout(sessionCheckTimeout);
       listener.subscription.unsubscribe();
     };
-  }, [isEnglish, supabase, syncAccountWorkspace]);
+  }, [appLanguage, isEnglish, supabase, syncAccountWorkspace]);
 
   async function handleAuthSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1293,6 +1421,9 @@ export default function Home() {
         email: authEmail.trim(),
         password: authPassword,
       };
+      const emailConfirmationUrl =
+        process.env.NEXT_PUBLIC_AUTH_CONFIRMATION_URL ??
+        (typeof window === "undefined" ? undefined : window.location.origin);
       const result =
         authMode === "sign-in"
           ? await supabase.auth.signInWithPassword(credentials)
@@ -1304,7 +1435,7 @@ export default function Home() {
                   full_name: normalizedAuthName,
                   name: normalizedAuthName,
                 },
-                emailRedirectTo: window.location.origin,
+                emailRedirectTo: emailConfirmationUrl,
               },
             });
 
@@ -1336,11 +1467,10 @@ export default function Home() {
       }
     } catch (error) {
       setAuthError(
-        error instanceof Error
-          ? error.message
-          : isEnglish
-            ? "Authentication failed."
-            : "A autenticação falhou.",
+        getFriendlyErrorMessage(error, appLanguage, {
+          context: "auth",
+          fallback: isEnglish ? "Authentication failed." : "A autenticação falhou.",
+        }),
       );
     } finally {
       setIsAuthSubmitting(false);
@@ -1370,15 +1500,37 @@ export default function Home() {
       setAuthStatus(isEnglish ? "Profile name saved." : "Nome de perfil guardado.");
     } catch (error) {
       setAuthError(
-        error instanceof Error
-          ? error.message
-          : isEnglish
-            ? "Could not save the profile name."
-            : "Não foi possível guardar o nome de perfil.",
+        getFriendlyErrorMessage(error, appLanguage, {
+          context: "auth",
+          fallback: isEnglish ? "Could not save the profile name." : "Não foi possível guardar o nome de perfil.",
+        }),
       );
     } finally {
       setIsAuthSubmitting(false);
     }
+  }
+
+  function clearAccountSessionState(nextStatus: string) {
+    setAuthUser(null);
+    setAuthAccessToken(null);
+    setAuthDisplayName(null);
+    setAuthName("");
+    setProfileNameDraft("");
+    setAccountWorkspace(null);
+    setAccountWorkspaces([]);
+    setNewWorkspaceName("");
+    setWorkspaceMembers([]);
+    setWorkspaceInvites([]);
+    setPendingWorkspaceInvites([]);
+    setWorkspacePresence([]);
+    setEditorSelection(null);
+    setWorkspaceInviteEmail("");
+    setPendingEditorNavigation(null);
+    setPendingEditorResubmission(null);
+    setConnectionValidationError(null);
+    rememberActiveWorkspaceId(null);
+    applyWorkspaceSnapshot(defaultSnapshot, null, false);
+    setAuthStatus(nextStatus);
   }
 
   async function handleSignOut() {
@@ -1392,7 +1544,12 @@ export default function Home() {
     const { error } = await supabase.auth.signOut();
 
     if (error) {
-      setAuthError(error.message);
+      setAuthError(
+        getFriendlyErrorMessage(error, appLanguage, {
+          context: "auth",
+          fallback: isEnglish ? "Could not sign out." : "Não foi possível terminar sessão.",
+        }),
+      );
     } else {
       setAuthUser(null);
       setAuthAccessToken(null);
@@ -1416,6 +1573,68 @@ export default function Home() {
     setIsAuthSubmitting(false);
   }
 
+  async function handleDeleteAccount() {
+    if (!supabase || !authUser || !authAccessToken) {
+      setAuthError(isEnglish ? "Sign in before deleting the account." : "Inicia sessão antes de eliminar a conta.");
+      return;
+    }
+
+    const accountDeletionConfirmation = isEnglish ? "CONFIRM" : "CONFIRMAR";
+    const confirmation = await requestAppPrompt({
+      body: isEnglish
+        ? "This permanently deletes your account. Workspaces where you are the only owner are deleted with their articles, links, PDFs and images. If you own a collaborative workspace, ownership is transferred to the oldest member. In workspaces owned by others, you are removed from the member list."
+        : "Isto elimina permanentemente a tua conta. Workspaces onde és o único dono são apagadas com os respetivos artigos, ligações, PDFs e imagens. Se fores dono de uma workspace colaborativa, a propriedade passa para o membro mais antigo. Em workspaces de outras pessoas, desapareces da lista de membros.",
+      cancelLabel: isEnglish ? "Cancel" : "Cancelar",
+      confirmationValue: accountDeletionConfirmation,
+      confirmLabel: isEnglish ? "Delete account" : "Eliminar conta",
+      eyebrow: isEnglish ? "Danger zone" : "Zona de perigo",
+      inputLabel: isEnglish ? "Confirmation" : "Confirmação",
+      title: isEnglish ? "Delete your account?" : "Eliminar a tua conta?",
+      tone: "danger",
+    });
+
+    if (confirmation !== accountDeletionConfirmation) {
+      return;
+    }
+
+    setIsAccountDeletionRunning(true);
+    setAuthError(null);
+    setAuthStatus(isEnglish ? "Deleting account..." : "A eliminar conta...");
+
+    try {
+      const response = await fetch("/api/account/delete", {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${authAccessToken}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          await getFriendlyResponseError(response, appLanguage, {
+            context: "delete",
+            fallback: isEnglish ? "Could not delete the account." : "Não foi possível eliminar a conta.",
+          }),
+        );
+      }
+
+      await supabase.auth.signOut().catch(() => undefined);
+      clearAccountSessionState(isEnglish ? "Account deleted." : "Conta eliminada.");
+      setAuthEmail("");
+      setAuthPassword("");
+    } catch (error) {
+      setAuthError(
+        getFriendlyErrorMessage(error, appLanguage, {
+          context: "delete",
+          fallback: isEnglish ? "Could not delete the account." : "Não foi possível eliminar a conta.",
+        }),
+      );
+      setAuthStatus(null);
+    } finally {
+      setIsAccountDeletionRunning(false);
+    }
+  }
+
   useEffect(() => {
     if (supabase) {
       return undefined;
@@ -1428,18 +1647,25 @@ export default function Home() {
         const response = await fetch(apiPath, { signal: controller.signal });
 
         if (!response.ok) {
-          throw new Error(`Workspace request failed: ${response.status}`);
+          throw new Error(
+            await getFriendlyResponseError(response, appLanguage, {
+              context: "workspace",
+              fallback: isEnglish ? "Could not load the workspace state." : "Não foi possível carregar a workspace.",
+            }),
+          );
         }
 
         const snapshot = (await response.json()) as WorkspaceSnapshot;
         applyWorkspaceSnapshot(snapshot, null);
       } catch (error) {
         if ((error as Error).name !== "AbortError") {
-          const savedLanguage = window.localStorage.getItem("papergraph-language");
           setLoadError(
-            savedLanguage === "en"
-              ? "Could not load the workspace state from the API."
-              : "Não foi possível carregar o estado da área de trabalho a partir da API.",
+            getFriendlyErrorMessage(error, appLanguage, {
+              context: "workspace",
+              fallback: isEnglish
+                ? "Could not load the workspace state from the API."
+                : "Não foi possível carregar o estado da área de trabalho a partir da API.",
+            }),
           );
         }
       }
@@ -1448,7 +1674,7 @@ export default function Home() {
     void loadWorkspace();
 
     return () => controller.abort();
-  }, [applyWorkspaceSnapshot, supabase]);
+  }, [appLanguage, applyWorkspaceSnapshot, isEnglish, supabase]);
 
   const selectedArticle = useMemo(
     () =>
@@ -1709,7 +1935,7 @@ export default function Home() {
         case "editor":
           return shouldUseArticleViewer ? "View" : "Editor";
         case "graph":
-          return "Graph";
+          return "Map";
         case "settings":
           return "Settings";
       }
@@ -1847,11 +2073,10 @@ export default function Home() {
       } catch (error) {
         if (saveRequestId === saveRequestIdRef.current) {
           setLoadError(
-            error instanceof Error
-              ? error.message
-              : isEnglish
-                ? "Could not save the workspace."
-                : "Não foi possível guardar a workspace.",
+            getFriendlyErrorMessage(error, appLanguage, {
+              context: "workspace",
+              fallback: isEnglish ? "Could not save the workspace." : "Não foi possível guardar a workspace.",
+            }),
           );
         }
       }
@@ -1930,16 +2155,21 @@ export default function Home() {
     activateTab(tab);
   }
 
-  function confirmWorkspaceChange() {
+  async function confirmWorkspaceChange() {
     if (!hasPendingEditorResubmission) {
       return true;
     }
 
-    return window.confirm(
-      isEnglish
-        ? "You have article edits waiting to be resubmitted. Switch workspace anyway?"
-        : "Tens alterações à espera de resubmissão no editor. Queres mudar de workspace na mesma?",
-    );
+    return requestAppConfirm({
+      body: isEnglish
+        ? "The current article has edits that have not been resubmitted to the map."
+        : "O artigo atual tem alterações que ainda não foram resubmetidas para o mapa.",
+      cancelLabel: isEnglish ? "Stay here" : "Ficar aqui",
+      confirmLabel: isEnglish ? "Continue without resubmitting" : "Continuar sem resubmeter",
+      eyebrow: isEnglish ? "Pending changes" : "Alterações pendentes",
+      title: isEnglish ? "Switch workspace anyway?" : "Mudar de workspace na mesma?",
+      tone: "warning",
+    });
   }
 
   async function switchAccountWorkspace(nextWorkspace: AccountWorkspace) {
@@ -1947,7 +2177,7 @@ export default function Home() {
       return;
     }
 
-    if (!confirmWorkspaceChange()) {
+    if (!(await confirmWorkspaceChange())) {
       return;
     }
 
@@ -1972,11 +2202,10 @@ export default function Home() {
       );
     } catch (error) {
       setAuthError(
-        error instanceof Error
-          ? error.message
-          : isEnglish
-            ? "Could not open the workspace."
-            : "Não foi possível abrir a workspace.",
+        getFriendlyErrorMessage(error, appLanguage, {
+          context: "workspace",
+          fallback: isEnglish ? "Could not open the workspace." : "Não foi possível abrir a workspace.",
+        }),
       );
     } finally {
       setIsWorkspaceActionRunning(false);
@@ -1991,7 +2220,7 @@ export default function Home() {
       return;
     }
 
-    if (!confirmWorkspaceChange()) {
+    if (!(await confirmWorkspaceChange())) {
       return;
     }
 
@@ -2032,11 +2261,10 @@ export default function Home() {
       );
     } catch (error) {
       setAuthError(
-        error instanceof Error
-          ? error.message
-          : isEnglish
-            ? "Could not create the workspace."
-            : "Não foi possível criar a workspace.",
+        getFriendlyErrorMessage(error, appLanguage, {
+          context: "workspace",
+          fallback: isEnglish ? "Could not create the workspace." : "Não foi possível criar a workspace.",
+        }),
       );
     } finally {
       setIsWorkspaceActionRunning(false);
@@ -2055,12 +2283,17 @@ export default function Home() {
     }
 
     const nextWorkspaceName = normalizeWorkspaceName(
-      window.prompt(
-        isEnglish
-          ? `New name for "${workspaceItem.name}"`
-          : `Novo nome para "${workspaceItem.name}"`,
-        workspaceItem.name,
-      ) ?? "",
+      (await requestAppPrompt({
+        body: isEnglish
+          ? "Choose a short, recognizable name for this map."
+          : "Escolhe um nome curto e reconhecível para este mapa.",
+        cancelLabel: isEnglish ? "Cancel" : "Cancelar",
+        confirmLabel: isEnglish ? "Rename workspace" : "Mudar nome",
+        eyebrow: isEnglish ? "Workspace" : "Workspace",
+        inputDefaultValue: workspaceItem.name,
+        inputLabel: isEnglish ? "New name" : "Novo nome",
+        title: isEnglish ? `Rename "${workspaceItem.name}"` : `Mudar nome de "${workspaceItem.name}"`,
+      })) ?? "",
     );
 
     if (!nextWorkspaceName || nextWorkspaceName === workspaceItem.name) {
@@ -2098,11 +2331,10 @@ export default function Home() {
       );
     } catch (error) {
       setAuthError(
-        error instanceof Error
-          ? error.message
-          : isEnglish
-            ? "Could not rename the workspace."
-            : "Não foi possível mudar o nome da workspace.",
+        getFriendlyErrorMessage(error, appLanguage, {
+          context: "workspace",
+          fallback: isEnglish ? "Could not rename the workspace." : "Não foi possível mudar o nome da workspace.",
+        }),
       );
       setAuthStatus(null);
     } finally {
@@ -2121,15 +2353,22 @@ export default function Home() {
       return;
     }
 
-    if (!confirmWorkspaceChange()) {
+    if (!(await confirmWorkspaceChange())) {
       return;
     }
 
-    const confirmation = window.prompt(
-      isEnglish
-        ? `Delete "${workspaceItem.name}" permanently? Articles, relations, invites and files will be removed. Type the workspace name to confirm.`
-        : `Eliminar "${workspaceItem.name}" permanentemente? Artigos, ligações, convites e ficheiros serão removidos. Escreve o nome da workspace para confirmar.`,
-    );
+    const confirmation = await requestAppPrompt({
+      body: isEnglish
+        ? "Articles, relations, invites and uploaded files will be removed permanently. Type the workspace name to confirm."
+        : "Artigos, ligações, convites e ficheiros carregados serão removidos permanentemente. Escreve o nome da workspace para confirmar.",
+      cancelLabel: isEnglish ? "Cancel" : "Cancelar",
+      confirmationValue: workspaceItem.name,
+      confirmLabel: isEnglish ? "Delete workspace" : "Eliminar workspace",
+      eyebrow: isEnglish ? "Danger zone" : "Zona de perigo",
+      inputLabel: isEnglish ? "Workspace name" : "Nome da workspace",
+      title: isEnglish ? `Delete "${workspaceItem.name}"?` : `Eliminar "${workspaceItem.name}"?`,
+      tone: "danger",
+    });
 
     if (confirmation?.trim() !== workspaceItem.name) {
       return;
@@ -2199,11 +2438,10 @@ export default function Home() {
       }
     } catch (error) {
       setAuthError(
-        error instanceof Error
-          ? error.message
-          : isEnglish
-            ? "Could not delete the workspace."
-            : "Não foi possível eliminar a workspace.",
+        getFriendlyErrorMessage(error, appLanguage, {
+          context: "delete",
+          fallback: isEnglish ? "Could not delete the workspace." : "Não foi possível eliminar a workspace.",
+        }),
       );
       setAuthStatus(null);
     } finally {
@@ -2246,11 +2484,10 @@ export default function Home() {
       );
     } catch (error) {
       setAuthError(
-        error instanceof Error
-          ? error.message
-          : isEnglish
-            ? "Could not create the invite."
-            : "Não foi possível criar o convite.",
+        getFriendlyErrorMessage(error, appLanguage, {
+          context: "workspace",
+          fallback: isEnglish ? "Could not create the invite." : "Não foi possível criar o convite.",
+        }),
       );
       setAuthStatus(null);
     } finally {
@@ -2281,11 +2518,10 @@ export default function Home() {
       );
     } catch (error) {
       setAuthError(
-        error instanceof Error
-          ? error.message
-          : isEnglish
-            ? "Could not update the member role."
-            : "Não foi possível atualizar o cargo do membro.",
+        getFriendlyErrorMessage(error, appLanguage, {
+          context: "workspace",
+          fallback: isEnglish ? "Could not update the member role." : "Não foi possível atualizar o cargo do membro.",
+        }),
       );
       setAuthStatus(null);
     } finally {
@@ -2300,11 +2536,16 @@ export default function Home() {
     }
 
     const memberName = member.displayName ?? member.email ?? (isEnglish ? "this member" : "este membro");
-    const confirmed = window.confirm(
-      isEnglish
-        ? `Remove ${memberName} from this workspace? They will lose access to this map.`
-        : `Remover ${memberName} desta workspace? Essa pessoa perde acesso a este mapa.`,
-    );
+    const confirmed = await requestAppConfirm({
+      body: isEnglish
+        ? "This person will lose access to this map."
+        : "Esta pessoa vai perder acesso a este mapa.",
+      cancelLabel: isEnglish ? "Cancel" : "Cancelar",
+      confirmLabel: isEnglish ? "Remove member" : "Remover membro",
+      eyebrow: isEnglish ? "Members" : "Membros",
+      title: isEnglish ? `Remove ${memberName}?` : `Remover ${memberName}?`,
+      tone: "danger",
+    });
 
     if (!confirmed) {
       return;
@@ -2325,11 +2566,10 @@ export default function Home() {
       );
     } catch (error) {
       setAuthError(
-        error instanceof Error
-          ? error.message
-          : isEnglish
-            ? "Could not remove the member."
-            : "Não foi possível remover o membro.",
+        getFriendlyErrorMessage(error, appLanguage, {
+          context: "delete",
+          fallback: isEnglish ? "Could not remove the member." : "Não foi possível remover o membro.",
+        }),
       );
       setAuthStatus(null);
     } finally {
@@ -2344,11 +2584,18 @@ export default function Home() {
     }
 
     const memberName = member.displayName ?? member.email ?? (isEnglish ? "this member" : "este membro");
-    const confirmation = window.prompt(
-      isEnglish
-        ? `Transfer ownership of "${accountWorkspace.name}" to ${memberName}? Type the workspace name to confirm.`
-        : `Transferir a propriedade de "${accountWorkspace.name}" para ${memberName}? Escreve o nome da workspace para confirmar.`,
-    );
+    const confirmation = await requestAppPrompt({
+      body: isEnglish
+        ? `${memberName} will become the workspace owner. Type the workspace name to confirm.`
+        : `${memberName} passa a ser dono da workspace. Escreve o nome da workspace para confirmar.`,
+      cancelLabel: isEnglish ? "Cancel" : "Cancelar",
+      confirmationValue: accountWorkspace.name,
+      confirmLabel: isEnglish ? "Transfer owner" : "Transferir dono",
+      eyebrow: isEnglish ? "Ownership" : "Propriedade",
+      inputLabel: isEnglish ? "Workspace name" : "Nome da workspace",
+      title: isEnglish ? `Transfer "${accountWorkspace.name}"?` : `Transferir "${accountWorkspace.name}"?`,
+      tone: "warning",
+    });
 
     if (confirmation?.trim() !== accountWorkspace.name) {
       return;
@@ -2379,11 +2626,12 @@ export default function Home() {
       );
     } catch (error) {
       setAuthError(
-        error instanceof Error
-          ? error.message
-          : isEnglish
+        getFriendlyErrorMessage(error, appLanguage, {
+          context: "workspace",
+          fallback: isEnglish
             ? "Could not transfer workspace ownership."
             : "Não foi possível transferir a propriedade da workspace.",
+        }),
       );
       setAuthStatus(null);
     } finally {
@@ -2397,7 +2645,7 @@ export default function Home() {
       return;
     }
 
-    if (!confirmWorkspaceChange()) {
+    if (!(await confirmWorkspaceChange())) {
       return;
     }
 
@@ -2421,11 +2669,10 @@ export default function Home() {
       );
     } catch (error) {
       setAuthError(
-        error instanceof Error
-          ? error.message
-          : isEnglish
-            ? "Could not accept the invite."
-            : "Não foi possível aceitar o convite.",
+        getFriendlyErrorMessage(error, appLanguage, {
+          context: "workspace",
+          fallback: isEnglish ? "Could not accept the invite." : "Não foi possível aceitar o convite.",
+        }),
       );
       setAuthStatus(null);
     } finally {
@@ -2438,11 +2685,16 @@ export default function Home() {
       return;
     }
 
-    const confirmed = window.confirm(
-      isEnglish
-        ? `Decline the invite to "${invite.workspaceName}"?`
-        : `Recusar o convite para "${invite.workspaceName}"?`,
-    );
+    const confirmed = await requestAppConfirm({
+      body: isEnglish
+        ? "The invite will disappear from your pending workspaces."
+        : "O convite desaparece das tuas workspaces pendentes.",
+      cancelLabel: isEnglish ? "Keep invite" : "Manter convite",
+      confirmLabel: isEnglish ? "Decline invite" : "Recusar convite",
+      eyebrow: isEnglish ? "Invite" : "Convite",
+      title: isEnglish ? `Decline "${invite.workspaceName}"?` : `Recusar "${invite.workspaceName}"?`,
+      tone: "danger",
+    });
 
     if (!confirmed) {
       return;
@@ -2462,11 +2714,10 @@ export default function Home() {
       );
     } catch (error) {
       setAuthError(
-        error instanceof Error
-          ? error.message
-          : isEnglish
-            ? "Could not decline the invite."
-            : "NÃ£o foi possÃ­vel recusar o convite.",
+        getFriendlyErrorMessage(error, appLanguage, {
+          context: "workspace",
+          fallback: isEnglish ? "Could not decline the invite." : "Não foi possível recusar o convite.",
+        }),
       );
       setAuthStatus(null);
     } finally {
@@ -2493,11 +2744,10 @@ export default function Home() {
       );
     } catch (error) {
       setAuthError(
-        error instanceof Error
-          ? error.message
-          : isEnglish
-            ? "Could not revoke the invite."
-            : "Não foi possível revogar o convite.",
+        getFriendlyErrorMessage(error, appLanguage, {
+          context: "workspace",
+          fallback: isEnglish ? "Could not revoke the invite." : "Não foi possível revogar o convite.",
+        }),
       );
       setAuthStatus(null);
     } finally {
@@ -2649,6 +2899,53 @@ export default function Home() {
     void saveWorkspace(snapshot);
   }
 
+  function updateArticleMetadata(nextArticle: {
+    articleId: string;
+    status: Exclude<WorkspaceArticle["status"], "Draft">;
+    tags: string[];
+    title: string;
+  }) {
+    if (!canEditCurrentWorkspace) {
+      showReadOnlyWorkspaceError();
+      return;
+    }
+
+    const articleToUpdate = currentArticles.find((article) => article.id === nextArticle.articleId);
+
+    if (!articleToUpdate) {
+      return;
+    }
+
+    const updatedArticle: WorkspaceArticle = {
+      ...articleToUpdate,
+      title: nextArticle.title,
+      status: nextArticle.status,
+      tags: nextArticle.tags,
+      updatedAt: "agora",
+    };
+
+    const nextArticles = currentArticles.map((article) =>
+      article.id === updatedArticle.id ? updatedArticle : article,
+    );
+    const nextSubmittedArticles = nextArticles.filter(isSubmittedArticle);
+    const nextRelations = rebuildExplicitRelations(nextSubmittedArticles, currentRelations);
+    const snapshot: WorkspaceSnapshot = {
+      selectedArticleId: updatedArticle.id,
+      articles: nextArticles,
+      relations: nextRelations,
+      articlePositions: currentArticlePositions,
+      ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
+      imageAssets: currentImageAssets,
+    };
+
+    setWorkspace(snapshot);
+    setConnectionValidationError(null);
+    setSelectedArticleId(updatedArticle.id);
+    rememberSelectedArticle(updatedArticle.id);
+    selectGraphArticle(updatedArticle.id);
+    void saveWorkspace(snapshot);
+  }
+
   async function compileArticleForSubmission(article: WorkspaceArticle) {
     const articleImageAssets = currentImageAssets.filter(
       (imageAsset) =>
@@ -2670,12 +2967,11 @@ export default function Home() {
     });
 
     if (!response.ok) {
-      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
       throw new Error(
-        payload?.error ??
-          (isEnglish
-            ? `Compilation failed with status ${response.status}.`
-            : `A compilação falhou com o estado ${response.status}.`),
+        await getFriendlyResponseError(response, appLanguage, {
+          context: "compile",
+          fallback: isEnglish ? "Compilation failed." : "A compilação falhou.",
+        }),
       );
     }
 
@@ -2723,11 +3019,16 @@ export default function Home() {
 
     if (otherEditors.length > 0) {
       const editorNames = otherEditors.map((presence) => presence.userName).join(", ");
-      const shouldContinue = window.confirm(
-        isEnglish
-          ? `${editorNames} ${otherEditors.length === 1 ? "is" : "are"} editing this article. Submit the current version anyway?`
-          : `${editorNames} ${otherEditors.length === 1 ? "está" : "estão"} a editar este artigo. Queres submeter a versão atual na mesma?`,
-      );
+      const shouldContinue = await requestAppConfirm({
+        body: isEnglish
+          ? `${editorNames} ${otherEditors.length === 1 ? "is" : "are"} editing this article right now.`
+          : `${editorNames} ${otherEditors.length === 1 ? "está" : "estão"} a editar este artigo neste momento.`,
+        cancelLabel: isEnglish ? "Cancel submission" : "Cancelar submissão",
+        confirmLabel: isEnglish ? "Submit anyway" : "Submeter na mesma",
+        eyebrow: isEnglish ? "Live editing" : "Edição em tempo real",
+        title: isEnglish ? "Submit current version?" : "Submeter a versão atual?",
+        tone: "warning",
+      });
 
       if (!shouldContinue) {
         return { cancelled: true, submitted: false };
@@ -2772,12 +3073,12 @@ export default function Home() {
     try {
       submittedPdfBuffer = await compileArticleForSubmission(submittedArticle);
     } catch (error) {
-      const issue =
-        error instanceof Error
-          ? error.message
-          : isEnglish
-            ? "Could not compile the article before submitting."
-            : "Não foi possível compilar o artigo antes de submeter.";
+      const issue = getFriendlyErrorMessage(error, appLanguage, {
+        context: "compile",
+        fallback: isEnglish
+          ? "Could not compile the article before submitting."
+          : "Não foi possível compilar o artigo antes de submeter.",
+      });
 
       setConnectionValidationError(issue);
       setPendingEditorNavigation(null);
@@ -3092,11 +3393,15 @@ export default function Home() {
     const articleToExport = currentArticles.find((article) => article.id === articleId);
 
     if (!articleToExport) {
-      window.alert(
-        isEnglish
+      await requestAppAlert({
+        body: isEnglish
           ? "Could not find the article to export."
           : "Não foi possível encontrar o artigo para exportar.",
-      );
+        confirmLabel: "OK",
+        eyebrow: isEnglish ? "Export" : "Exportação",
+        title: isEnglish ? "PDF export failed" : "A exportação falhou",
+        tone: "danger",
+      });
       return;
     }
 
@@ -3121,12 +3426,11 @@ export default function Home() {
       });
 
       if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
         throw new Error(
-          payload?.error ??
-            (isEnglish
-              ? `Export failed with status ${response.status}.`
-              : `A exportação falhou com o estado ${response.status}.`),
+          await getFriendlyResponseError(response, appLanguage, {
+            context: "compile",
+            fallback: isEnglish ? "Could not export the PDF." : "Não foi possível exportar o PDF.",
+          }),
         );
       }
 
@@ -3141,13 +3445,16 @@ export default function Home() {
       downloadLink.remove();
       window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
     } catch (error) {
-      window.alert(
-        error instanceof Error
-          ? error.message
-          : isEnglish
-            ? "Could not export the PDF."
-            : "Não foi possível exportar o PDF.",
-      );
+      await requestAppAlert({
+        body: getFriendlyErrorMessage(error, appLanguage, {
+          context: "compile",
+          fallback: isEnglish ? "Could not export the PDF." : "Não foi possível exportar o PDF.",
+        }),
+        confirmLabel: "OK",
+        eyebrow: isEnglish ? "Export" : "Exportação",
+        title: isEnglish ? "PDF export failed" : "A exportação falhou",
+        tone: "danger",
+      });
     }
   }
 
@@ -3169,8 +3476,12 @@ export default function Home() {
     });
 
     if (!response.ok) {
-      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-      throw new Error(payload?.error ?? (isEnglish ? "Could not import the PDF." : "Não foi possível importar o PDF."));
+      throw new Error(
+        await getFriendlyResponseError(response, appLanguage, {
+          context: "import",
+          fallback: isEnglish ? "Could not import the PDF." : "Não foi possível importar o PDF.",
+        }),
+      );
     }
 
     let uploadedPdfAsset: WorkspaceImageAsset = {
@@ -3188,7 +3499,7 @@ export default function Home() {
       author: "PaperGraph",
       status: "Published",
       updatedAt: "agora",
-      tags: isEnglish ? ["pdf", "imported"] : ["pdf", "importado"],
+      tags: [isEnglish ? "imported" : "importado"],
       source: createImportedPdfSource(uploadedPdfAsset),
     };
     const nextArticles = [...currentArticles, importedArticle];
@@ -3261,8 +3572,12 @@ export default function Home() {
     );
 
     if (!response.ok && response.status !== 404) {
-      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-      throw new Error(payload?.error ?? (isEnglish ? "Could not remove the file." : "Não foi possível remover o ficheiro."));
+      throw new Error(
+        await getFriendlyResponseError(response, appLanguage, {
+          context: "delete",
+          fallback: isEnglish ? "Could not remove the file." : "Não foi possível remover o ficheiro.",
+        }),
+      );
     }
   }
 
@@ -3282,7 +3597,12 @@ export default function Home() {
       const { error } = await supabase.storage.from(paperGraphAssetBucket).remove(batch);
 
       if (error) {
-        throw new Error(error.message);
+        throw new Error(
+          getFriendlyErrorMessage(error, appLanguage, {
+            context: "delete",
+            fallback: isEnglish ? "Could not remove workspace files." : "Não foi possível remover os ficheiros da workspace.",
+          }),
+        );
       }
     }
 
@@ -3294,7 +3614,12 @@ export default function Home() {
       const { error } = await supabase.storage.from(paperGraphAssetBucket).remove([imageAsset.storagePath]);
 
       if (error) {
-        throw new Error(error.message);
+        throw new Error(
+          getFriendlyErrorMessage(error, appLanguage, {
+            context: "delete",
+            fallback: isEnglish ? "Could not remove the file." : "Não foi possível remover o ficheiro.",
+          }),
+        );
       }
     }
 
@@ -3587,12 +3912,14 @@ export default function Home() {
             <div className="flex min-h-0 flex-1 overflow-hidden">
               {selectedArticle && shouldUseArticleViewer ? (
                 <ArticleViewerPane
-                  key={`viewer-${selectedArticle.id}`}
+                  key={`viewer-${selectedArticle.id}-${selectedArticle.status}-${selectedArticle.title}-${selectedArticle.tags.join("|")}`}
                   article={selectedArticle}
                   articleCollaborators={articlePresence}
                   authAccessToken={authAccessToken}
+                  canEditMetadata={canEditCurrentWorkspace && selectedArticleIsImportedPdf}
                   imageAssets={selectedArticleImageAssets}
                   language={appLanguage}
+                  onSaveArticleMetadata={updateArticleMetadata}
                 />
               ) : selectedArticle ? (
                 <EditorPane
@@ -3645,41 +3972,30 @@ export default function Home() {
 
           {activeTab === "graph" ? (
             <div className="relative flex min-h-0 flex-1 overflow-hidden">
-              {submittedArticles.length > 0 ? (
-                <GraphPane
-                  key={submittedArticles.map((article) => article.id).join("|")}
-                  activeArticle={activeGraphArticle}
-                  articles={submittedArticles}
-                  language={appLanguage}
-                  relations={currentRelations}
-                  unlinkedMentions={activeArticleUnlinkedMentions}
-                  articlePositions={currentArticlePositions}
-                  articlePresenceByArticleId={workspacePresenceByArticleId}
-                  canEdit={canEditCurrentWorkspace}
-                  onSelectArticle={updateGraphSelectedArticle}
-                  onArticlePositionsChange={updateArticlePositions}
-                  onCreateRelation={(fromArticleId, toArticleId) => {
-                    createRelationBetweenArticles(fromArticleId, toArticleId);
-                  }}
-                  onRemoveRelation={removeRelationBetweenArticles}
-                  onCreateWikilinkFromMention={createWikilinkFromUnlinkedMention}
-                  onIgnoreUnlinkedMention={ignoreUnlinkedMention}
-                  onEditArticle={openArticleEditor}
-                  onViewArticle={openArticleViewer}
-                  onExportArticlePdf={exportArticlePdf}
-                  onImportPdfArticle={importPdfArticle}
-                  onDeleteArticle={deleteArticle}
-                />
-              ) : (
-                <div className="flex flex-1 items-center justify-center bg-[linear-gradient(180deg,rgba(4,10,16,0.95),rgba(9,19,29,0.98))] text-sm text-[var(--muted)]">
-                  <div className="rounded-[24px] border border-[var(--border)] bg-black/30 p-5">
-                    {isEnglish
-                      ? "Submit a draft to place it on the graph."
-                      : "Submete um rascunho para o colocar no mapa."}
-                  </div>
-                </div>
-              )}
-
+              <GraphPane
+                key={submittedArticles.map((article) => article.id).join("|")}
+                activeArticle={activeGraphArticle}
+                articles={submittedArticles}
+                language={appLanguage}
+                relations={currentRelations}
+                unlinkedMentions={activeArticleUnlinkedMentions}
+                articlePositions={currentArticlePositions}
+                articlePresenceByArticleId={workspacePresenceByArticleId}
+                canEdit={canEditCurrentWorkspace}
+                onSelectArticle={updateGraphSelectedArticle}
+                onArticlePositionsChange={updateArticlePositions}
+                onCreateRelation={(fromArticleId, toArticleId) => {
+                  createRelationBetweenArticles(fromArticleId, toArticleId);
+                }}
+                onRemoveRelation={removeRelationBetweenArticles}
+                onCreateWikilinkFromMention={createWikilinkFromUnlinkedMention}
+                onIgnoreUnlinkedMention={ignoreUnlinkedMention}
+                onEditArticle={openArticleEditor}
+                onViewArticle={openArticleViewer}
+                onExportArticlePdf={exportArticlePdf}
+                onImportPdfArticle={importPdfArticle}
+                onDeleteArticle={deleteArticle}
+              />
             </div>
           ) : null}
 
@@ -3693,8 +4009,8 @@ export default function Home() {
                   <h2 className="mt-2 text-xl font-semibold text-white">PaperGraph</h2>
                   <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
                     {isEnglish
-                      ? "Control the local workspace, interface language and future account sync."
-                      : "Controla a workspace local, o idioma da interface e a futura sincronização de conta."}
+                      ? "Manage language, theme, workspaces, help and account."
+                      : "Gere idioma, tema, workspaces, ajuda e conta."}
                   </p>
                 </div>
 
@@ -3779,11 +4095,6 @@ export default function Home() {
                         <h3 className="text-base font-semibold text-white">
                           {isEnglish ? "Theme" : "Tema"}
                         </h3>
-                        <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
-                          {isEnglish
-                            ? "Dark is the default PaperGraph look. Light keeps the academic workspace brighter."
-                            : "O escuro e o visual padrao do PaperGraph. O claro deixa a workspace academica mais luminosa."}
-                        </p>
                       </div>
 
                       <div className="grid gap-3 sm:grid-cols-2">
@@ -4009,36 +4320,22 @@ export default function Home() {
 
                                           {canManageMember ? (
                                             <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
-                                              <div className="inline-grid grid-cols-2 rounded-full border border-white/10 bg-black/20 p-1">
-                                                {editableWorkspaceMemberRoles.map((role) => {
-                                                  const isSelectedRole = getEditableWorkspaceMemberRole(member.role) === role;
-
-                                                  return (
-                                                    <button
-                                                      key={role}
-                                                      type="button"
-                                                      disabled={Boolean(memberActionUserId) || isSelectedRole}
-                                                      onClick={() => {
-                                                        void handleWorkspaceMemberRoleChange(member, role);
-                                                      }}
-                                                      className={`rounded-full px-3 py-1.5 text-[11px] font-semibold transition-colors disabled:cursor-not-allowed ${
-                                                        isSelectedRole
-                                                          ? "bg-[var(--accent)] text-[#041016]"
-                                                          : "text-[var(--muted)] hover:bg-white/8 hover:text-white disabled:opacity-60"
-                                                      }`}
-                                                    >
-                                                      {formatWorkspaceRole(role, appLanguage)}
-                                                    </button>
-                                                  );
-                                                })}
-                                              </div>
+                                              <WorkspaceRoleToggle
+                                                disabled={Boolean(memberActionUserId)}
+                                                language={appLanguage}
+                                                onChange={(role) => {
+                                                  void handleWorkspaceMemberRoleChange(member, role);
+                                                }}
+                                                size="sm"
+                                                value={getEditableWorkspaceMemberRole(member.role)}
+                                              />
                                               <button
                                                 type="button"
                                                 disabled={Boolean(memberActionUserId)}
                                                 onClick={() => {
                                                   void handleTransferWorkspaceOwnership(member);
                                                 }}
-                                                className="rounded-full border border-amber-200/30 bg-amber-400/12 px-3.5 py-2 text-[11px] font-semibold text-amber-100 transition-colors hover:bg-amber-400/20 disabled:cursor-not-allowed disabled:opacity-50"
+                                                className="rounded-full border border-amber-200/35 bg-amber-400/12 px-3.5 py-2 text-[11px] font-semibold text-amber-100 transition-colors hover:bg-amber-400/20 disabled:cursor-not-allowed disabled:opacity-50 darkmode-safe-transfer-button"
                                               >
                                                 {isTransferringOwnership
                                                   ? isEnglish
@@ -4120,27 +4417,12 @@ export default function Home() {
                                       <legend className="text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
                                         {isEnglish ? "Role" : "Cargo"}
                                       </legend>
-                                      <div className="mt-2 inline-grid w-full grid-cols-2 rounded-full border border-white/10 bg-black/20 p-1 sm:w-auto">
-                                        {editableWorkspaceMemberRoles.map((role) => {
-                                          const isSelectedRole = workspaceInviteRole === role;
-
-                                          return (
-                                            <button
-                                              key={role}
-                                              type="button"
-                                              aria-pressed={isSelectedRole}
-                                              onClick={() => setWorkspaceInviteRole(role)}
-                                              className={`rounded-full px-5 py-2.5 text-sm font-semibold transition-colors ${
-                                                isSelectedRole
-                                                  ? "bg-[var(--accent)] text-[#041016]"
-                                                  : "text-[var(--muted)] hover:bg-white/8 hover:text-white"
-                                              }`}
-                                            >
-                                              {formatWorkspaceRole(role, appLanguage)}
-                                            </button>
-                                          );
-                                        })}
-                                      </div>
+                                      <WorkspaceRoleToggle
+                                        className="mt-2 w-full sm:w-[18rem]"
+                                        language={appLanguage}
+                                        onChange={(role) => setWorkspaceInviteRole(role)}
+                                        value={workspaceInviteRole}
+                                      />
                                     </fieldset>
                                     <button
                                       type="submit"
@@ -4430,15 +4712,15 @@ export default function Home() {
                   <div className="space-y-5">
                     <div>
                       <p className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
-                        {isEnglish ? "Account" : "Conta"}
+                        {isEnglish ? "Profile and session" : "Perfil e sessão"}
                       </p>
                       <h2 className="mt-2 text-xl font-semibold text-white">
-                        {isEnglish ? "Supabase account" : "Conta Supabase"}
+                        {isEnglish ? "Account" : "Conta"}
                       </h2>
                       <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
                         {isEnglish
-                          ? "Sign in to prepare cloud workspaces backed by the Supabase database."
-                          : "Inicia sessão para preparar workspaces cloud guardadas na base de dados Supabase."}
+                          ? "Manage your session and public display name."
+                          : "Gere a tua sessão e o nome visível do perfil."}
                       </p>
                     </div>
 
@@ -4450,7 +4732,7 @@ export default function Home() {
                       </div>
                     ) : null}
 
-                    <div className="grid gap-3 md:grid-cols-2">
+                    <div className="max-w-4xl">
                       <section className="rounded-[20px] border border-[var(--border)] bg-black/15 p-4">
                         <p className="text-xs uppercase tracking-[0.22em] text-[var(--muted)]">
                           {isEnglish ? "Current session" : "Sessão atual"}
@@ -4497,19 +4779,7 @@ export default function Home() {
                             <div className="flex flex-wrap gap-2">
                               <button
                                 type="button"
-                                disabled={isAuthSubmitting || isWorkspaceActionRunning}
-                                onClick={() => {
-                                  if (authUser) {
-                                    void syncAccountWorkspace(authUser);
-                                  }
-                                }}
-                                className="rounded-full border border-[var(--border)] bg-white/5 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
-                              >
-                                {isEnglish ? "Refresh workspace" : "Atualizar workspace"}
-                              </button>
-                              <button
-                                type="button"
-                                disabled={isAuthSubmitting}
+                                disabled={isAuthSubmitting || isAccountDeletionRunning}
                                 onClick={() => {
                                   void handleSignOut();
                                 }}
@@ -4522,6 +4792,22 @@ export default function Home() {
                                   : isEnglish
                                     ? "Sign out"
                                     : "Terminar sessão"}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isAuthSubmitting || isAccountDeletionRunning}
+                                onClick={() => {
+                                  void handleDeleteAccount();
+                                }}
+                                className="rounded-full border border-red-300/40 bg-red-600/20 px-4 py-2 text-xs font-semibold text-red-100 transition-colors hover:bg-red-600/30 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                {isAccountDeletionRunning
+                                  ? isEnglish
+                                    ? "Deleting..."
+                                    : "A apagar..."
+                                  : isEnglish
+                                    ? "Delete account"
+                                    : "Eliminar conta"}
                               </button>
                             </div>
                           </div>
@@ -4607,42 +4893,6 @@ export default function Home() {
                           </form>
                         )}
                       </section>
-
-                      <section className="rounded-[20px] border border-[var(--border)] bg-black/15 p-4">
-                        <p className="text-xs uppercase tracking-[0.22em] text-[var(--muted)]">
-                          {isEnglish ? "Cloud workspace" : "Workspace cloud"}
-                        </p>
-                        <p className="mt-2 text-base font-semibold text-white">
-                          {accountWorkspace?.name ?? "PaperGraph"}
-                        </p>
-                        <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-                          {accountWorkspace
-                            ? isEnglish
-                              ? `Connected as ${formatWorkspaceRole(accountWorkspace.role, appLanguage)}.`
-                              : `Ligada como ${formatWorkspaceRole(accountWorkspace.role, appLanguage)}.`
-                            : authUser
-                              ? isEnglish
-                                ? "The account is connected. The cloud workspace will appear here after bootstrap."
-                                : "A conta está ligada. A workspace cloud aparece aqui depois do bootstrap."
-                              : isEnglish
-                                ? "Sign in to create or load your cloud workspace."
-                                : "Inicia sessão para criar ou carregar a tua workspace cloud."}
-                        </p>
-
-                        {accountWorkspace ? (
-                          <div className="mt-4 space-y-2 text-xs text-[var(--muted)]">
-                            <p>
-                              <span className="font-semibold text-white">ID:</span> {accountWorkspace.id}
-                            </p>
-                            <p>
-                              <span className="font-semibold text-white">
-                                {isEnglish ? "Language" : "Idioma"}:
-                              </span>{" "}
-                              {accountWorkspace.language.toUpperCase()}
-                            </p>
-                          </div>
-                        ) : null}
-                      </section>
                     </div>
 
                     {authStatus ? (
@@ -4656,12 +4906,6 @@ export default function Home() {
                         {authError}
                       </p>
                     ) : null}
-
-                    <p className="rounded-[18px] border border-[var(--border)] bg-white/[0.03] px-4 py-3 text-sm leading-6 text-[var(--muted)]">
-                      {isEnglish
-                        ? "When this account is connected, articles, relations, graph layout and uploaded files are synced to Supabase. Files are also mirrored locally for compilation."
-                        : "Quando esta conta está ligada, artigos, relações, layout do mapa e ficheiros carregados sincronizam com o Supabase. Os ficheiros também ficam espelhados localmente para a compilação."}
-                    </p>
                   </div>
                 ) : null}
 
@@ -4709,6 +4953,94 @@ export default function Home() {
           </button>
         </div>
       ) : null}
+
+      {appDialog
+        ? (() => {
+            const isPrompt = appDialog.kind === "prompt";
+            const isAlert = appDialog.kind === "alert";
+            const isConfirmDisabled =
+              isPrompt && appDialog.confirmationValue
+                ? appDialogValue.trim() !== appDialog.confirmationValue
+                : false;
+            const confirmButtonClassName =
+              appDialog.tone === "danger"
+                ? "border-red-300/30 bg-red-500/18 text-red-50 hover:bg-red-500/26"
+                : appDialog.tone === "warning"
+                  ? "border-amber-200/30 bg-amber-300/18 text-amber-50 hover:bg-amber-300/26"
+                  : "border-[var(--accent)] bg-[var(--accent)] text-[#041016] hover:-translate-y-0.5";
+
+            return (
+              <div className="fixed inset-0 z-[140] flex items-center justify-center bg-black/60 px-4 backdrop-blur-sm">
+                <form
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="app-dialog-title"
+                  className="w-full max-w-md rounded-[24px] border border-[var(--border)] bg-[var(--surface-strong)] p-5 shadow-[0_24px_70px_rgba(0,0,0,0.45)]"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+
+                    if (isConfirmDisabled) {
+                      return;
+                    }
+
+                    closeAppDialog({ confirmed: true, value: isPrompt ? appDialogValue : undefined });
+                  }}
+                >
+                  {appDialog.eyebrow ? (
+                    <p className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">{appDialog.eyebrow}</p>
+                  ) : null}
+                  <h2 id="app-dialog-title" className="mt-2 text-xl font-semibold text-white">
+                    {appDialog.title}
+                  </h2>
+                  {appDialog.body ? (
+                    <p className="mt-3 text-sm leading-6 text-[var(--muted)]">{appDialog.body}</p>
+                  ) : null}
+
+                  {isPrompt ? (
+                    <label className="mt-5 block">
+                      <span className="text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
+                        {appDialog.inputLabel ?? (isEnglish ? "Confirmation" : "Confirmação")}
+                      </span>
+                      <input
+                        autoFocus
+                        type="text"
+                        value={appDialogValue}
+                        onChange={(event) => setAppDialogValue(event.target.value)}
+                        placeholder={appDialog.confirmationValue ?? appDialog.inputDefaultValue}
+                        className="mt-2 w-full rounded-[16px] border border-[var(--border)] bg-black/20 px-4 py-3 text-sm text-white outline-none transition-colors placeholder:text-white/35 focus:border-[var(--accent)]"
+                      />
+                      {appDialog.confirmationValue ? (
+                        <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
+                          {isEnglish ? "Type exactly" : "Escreve exatamente"}{" "}
+                          <span className="font-semibold text-white">&quot;{appDialog.confirmationValue}&quot;</span>.
+                        </p>
+                      ) : null}
+                    </label>
+                  ) : null}
+
+                  <div className={`mt-5 grid gap-3 ${isAlert ? "" : "sm:grid-cols-2"}`}>
+                    {!isAlert ? (
+                      <button
+                        type="button"
+                        onClick={() => closeAppDialog({ confirmed: false })}
+                        className="rounded-full border border-[var(--border)] bg-white/5 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-white/10"
+                      >
+                        {appDialog.cancelLabel ?? (isEnglish ? "Cancel" : "Cancelar")}
+                      </button>
+                    ) : null}
+                    <button
+                      type="submit"
+                      disabled={isConfirmDisabled}
+                      className={`rounded-full border px-4 py-3 text-sm font-semibold transition-all disabled:cursor-not-allowed disabled:opacity-50 ${confirmButtonClassName}`}
+                    >
+                      {appDialog.confirmLabel ?? (isAlert ? "OK" : isEnglish ? "Confirm" : "Confirmar")}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            );
+          })()
+        : null}
 
       {pendingEditorNavigation && pendingEditorResubmission ? (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 px-4 backdrop-blur-sm">

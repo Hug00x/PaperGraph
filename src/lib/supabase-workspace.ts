@@ -171,7 +171,10 @@ function toRelativeTimeLabel(value: string | null) {
 function isImportedPdfAsset(article: WorkspaceSnapshot["articles"][number]) {
   const tags = article.tags.map((tag) => tag.toLowerCase());
 
-  return tags.includes("pdf") && (tags.includes("importado") || tags.includes("imported"));
+  return (
+    article.source.includes("\\includepdf") ||
+    (tags.includes("pdf") && (tags.includes("importado") || tags.includes("imported")))
+  );
 }
 
 function parseIgnoredMentionKey(mentionKey: string) {

@@ -9,6 +9,7 @@ import {
 import { PdfZoomControls } from "@/components/pdf-zoom-controls";
 import deleteButtonImage from "@/imagens/Delete_button.png";
 import deleteButtonImageInverted from "@/imagens/Delete_button_inverted.png";
+import { getFriendlyErrorMessage, getFriendlyResponseError } from "@/lib/friendly-errors";
 import { getPdfFitScale } from "@/lib/pdf-preview-layout";
 import { getArticleStatusLabel, type AppLanguage } from "@/lib/portuguese-labels";
 import { getSupabaseBrowserClient } from "@/lib/supabase-client";
@@ -91,6 +92,58 @@ function isPdfAsset(imageAsset: WorkspaceImageAsset) {
 
 function getAssetKindLabel(imageAsset: WorkspaceImageAsset) {
   return isPdfAsset(imageAsset) ? "PDF" : "IMG";
+}
+
+const submittedArticleStatusOptions = ["Review", "Published"] as const;
+
+function SubmissionStatusToggle({
+  isEnglish,
+  onChange,
+  value,
+}: {
+  isEnglish: boolean;
+  onChange: (status: SubmittedArticleStatus) => void;
+  value: SubmittedArticleStatus;
+}) {
+  const selectedIndex = submittedArticleStatusOptions.indexOf(value);
+
+  return (
+    <div className="relative mt-2 grid w-full grid-cols-2 rounded-full border border-[var(--border)] bg-black/20 p-1">
+      <span
+        aria-hidden
+        className={`absolute inset-y-1 left-1 w-[calc(50%-0.25rem)] rounded-full bg-[var(--accent)] shadow-[0_10px_24px_rgba(142,231,255,0.18)] transition-transform duration-200 ease-out ${
+          selectedIndex === 1 ? "translate-x-full" : "translate-x-0"
+        }`}
+      />
+      {submittedArticleStatusOptions.map((statusOption) => {
+        const isSelectedStatus = value === statusOption;
+
+        return (
+          <button
+            key={statusOption}
+            type="button"
+            aria-pressed={isSelectedStatus}
+            onClick={() => {
+              if (!isSelectedStatus) {
+                onChange(statusOption);
+              }
+            }}
+            className={`relative z-10 rounded-full px-3 py-2 text-xs font-semibold transition-colors duration-200 ${
+              isSelectedStatus ? "text-[#041016]" : "text-[var(--muted)] hover:text-[var(--foreground)]"
+            }`}
+          >
+            {statusOption === "Review"
+              ? isEnglish
+                ? "Review"
+                : "Revisão"
+              : isEnglish
+                ? "Published"
+                : "Publicado"}
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 function normalizeKeywordTags(value: string) {
@@ -330,12 +383,11 @@ export function EditorPane({
       });
 
       if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
         throw new Error(
-          payload?.error ??
-            (isEnglish
-              ? `Compilation failed with status ${response.status}.`
-              : `A compilação falhou com o estado ${response.status}.`),
+          await getFriendlyResponseError(response, language, {
+            context: "compile",
+            fallback: isEnglish ? "Compilation failed." : "A compilação falhou.",
+          }),
         );
       }
 
@@ -344,9 +396,14 @@ export function EditorPane({
       setCompiledPreviewSignature(`${documentTitle}\n${documentSource}`);
     } catch (error) {
       setCompileState("error");
-      setCompileError((error as Error).message);
+      setCompileError(
+        getFriendlyErrorMessage(error, language, {
+          context: "compile",
+          fallback: isEnglish ? "Compilation failed." : "A compilação falhou.",
+        }),
+      );
     }
-  }, [article.id, authAccessToken, imageAssets, isEnglish]);
+  }, [article.id, authAccessToken, imageAssets, isEnglish, language]);
 
   useEffect(() => {
     if (autoCompileStartedRef.current) {
@@ -424,11 +481,12 @@ export function EditorPane({
       if (!cancelled) {
         setCompileState("error");
         setCompileError(
-          error instanceof Error
-            ? error.message
-            : isEnglish
+          getFriendlyErrorMessage(error, language, {
+            context: "preview",
+            fallback: isEnglish
               ? "Could not render the PDF preview."
               : "Não foi possível renderizar a preview do PDF.",
+          }),
         );
       }
     });
@@ -436,7 +494,7 @@ export function EditorPane({
     return () => {
       cancelled = true;
     };
-  }, [isEnglish, pdfBuffer, pdfZoom]);
+  }, [isEnglish, language, pdfBuffer, pdfZoom]);
 
   function handleTitleChange(value: string) {
     onSubmissionIssueClear();
@@ -557,8 +615,12 @@ export function EditorPane({
       });
 
       if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(payload?.error ?? (isEnglish ? "Could not upload the file." : "Não foi possível carregar o ficheiro."));
+        throw new Error(
+          await getFriendlyResponseError(response, language, {
+            context: "upload",
+            fallback: isEnglish ? "Could not upload the file." : "Não foi possível carregar o ficheiro.",
+          }),
+        );
       }
 
       let imageAsset = (await response.json()) as WorkspaceImageAsset;
@@ -571,7 +633,12 @@ export function EditorPane({
         const userId = sessionData.session?.user.id;
 
         if (sessionError || !supabase || !userId) {
-          throw new Error(sessionError?.message ?? (isEnglish ? "Could not validate the session." : "Não foi possível validar a sessão."));
+          throw new Error(
+            getFriendlyErrorMessage(sessionError, language, {
+              context: "auth",
+              fallback: isEnglish ? "Could not validate the session." : "Não foi possível validar a sessão.",
+            }),
+          );
         }
 
         imageAsset = await uploadWorkspaceAssetToSupabase(supabase, workspaceId, imageAsset, uploadedFile);
@@ -580,11 +647,10 @@ export function EditorPane({
       onImageUploaded(imageAsset);
     } catch (error) {
       setImageUploadError(
-        error instanceof Error
-          ? error.message
-          : isEnglish
-            ? "Could not upload the file."
-            : "Não foi possível carregar o ficheiro.",
+        getFriendlyErrorMessage(error, language, {
+          context: "upload",
+          fallback: isEnglish ? "Could not upload the file." : "Não foi possível carregar o ficheiro.",
+        }),
       );
     } finally {
       setImageUploadState("idle");
@@ -600,11 +666,10 @@ export function EditorPane({
       await onImageDeleted(imageAsset);
     } catch (error) {
       setImageUploadError(
-        error instanceof Error
-          ? error.message
-          : isEnglish
-            ? "Could not remove the file."
-            : "Não foi possível remover o ficheiro.",
+        getFriendlyErrorMessage(error, language, {
+          context: "delete",
+          fallback: isEnglish ? "Could not remove the file." : "Não foi possível remover o ficheiro.",
+        }),
       );
     } finally {
       setDeletingImageAssetId(null);
@@ -752,33 +817,11 @@ export function EditorPane({
                     ? "Submit as"
                     : "Submeter como"}
               </legend>
-              <div className="mt-2 inline-grid w-full grid-cols-2 rounded-full border border-[var(--border)] bg-black/20 p-1">
-                {(["Review", "Published"] as const).map((statusOption) => {
-                  const isSelectedStatus = submissionStatus === statusOption;
-
-                  return (
-                    <button
-                      key={statusOption}
-                      type="button"
-                      aria-pressed={isSelectedStatus}
-                      onClick={() => handleSubmissionStatusChange(statusOption)}
-                      className={`rounded-full px-3 py-2 text-xs font-semibold transition-colors ${
-                        isSelectedStatus
-                          ? "bg-[var(--accent)] text-[#041016]"
-                          : "text-[var(--muted)] hover:bg-white/8 hover:text-white"
-                      }`}
-                    >
-                      {statusOption === "Review"
-                        ? isEnglish
-                          ? "Review"
-                          : "Revisão"
-                        : isEnglish
-                          ? "Published"
-                          : "Publicado"}
-                    </button>
-                  );
-                })}
-              </div>
+              <SubmissionStatusToggle
+                isEnglish={isEnglish}
+                onChange={handleSubmissionStatusChange}
+                value={submissionStatus}
+              />
             </fieldset>
           </div>
 
