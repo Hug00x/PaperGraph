@@ -5,10 +5,11 @@ import { ArticleViewerPane } from "@/components/article-viewer-pane";
 import { AuthLanding } from "@/components/auth-landing";
 import { EditorPane } from "@/components/editor-pane";
 import { GraphPane } from "@/components/graph-pane";
+import deleteButtonImage from "@/imagens/Delete_button.png";
+import deleteButtonImageInverted from "@/imagens/Delete_button_inverted.png";
 import paperGraphLogoText from "@/imagens/PapergraghTexto.png";
 import type { AppLanguage } from "@/lib/portuguese-labels";
 import {
-  createInitialAppStats,
   defaultSnapshot,
   type ArticlePosition,
   type UnlinkedMention,
@@ -21,6 +22,7 @@ import {
   acceptWorkspaceInviteInSupabase,
   createUserWorkspaceInSupabase,
   createWorkspaceInviteInSupabase,
+  declineWorkspaceInviteInSupabase,
   deleteWorkspaceInSupabase,
   ensureUserWorkspace,
   listWorkspaceAssetStoragePathsFromSupabase,
@@ -58,9 +60,22 @@ const editableWorkspaceMemberRoles = ["editor", "viewer"] as const;
 type WorkspaceTab = (typeof tabs)[number];
 type SettingsSection = (typeof settingsSections)[number];
 type EditableWorkspaceMemberRole = (typeof editableWorkspaceMemberRoles)[number];
-type PendingEditorResubmission = { articleId: string; title: string; source: string };
+type SubmittedArticleStatus = Exclude<WorkspaceArticle["status"], "Draft">;
+type PendingEditorResubmission = {
+  articleId: string;
+  source: string;
+  status: SubmittedArticleStatus;
+  tags: string[];
+  title: string;
+};
 type PendingEditorNavigation = { type: "tab"; tab: WorkspaceTab };
-type ArticleSubmission = { articleId?: string; title: string; source: string };
+type ArticleSubmission = {
+  articleId?: string;
+  source: string;
+  status: SubmittedArticleStatus;
+  tags: string[];
+  title: string;
+};
 type ArticleSubmissionResult = {
   cancelled?: boolean;
   issue?: string;
@@ -122,6 +137,24 @@ function getAuthUserFallbackDisplayName(user: User | null) {
   }
 
   return user.email?.split("@")[0] ?? null;
+}
+
+function formatNotificationCount(count: number) {
+  return count > 999 ? "999+" : String(count);
+}
+
+function NotificationBadge({ className = "", count }: { className?: string; count: number }) {
+  if (count <= 0) {
+    return null;
+  }
+
+  return (
+    <span
+      className={`pointer-events-none inline-flex min-w-7 items-center justify-center rounded-full border border-white/25 bg-[#ff6b38] px-2 py-1 text-xs font-black leading-none text-white shadow-[0_10px_28px_rgba(255,107,56,0.38)] ${className}`}
+    >
+      {formatNotificationCount(count)}
+    </span>
+  );
 }
 
 function getStoredActiveWorkspaceId() {
@@ -394,6 +427,10 @@ function unlinkedMentionKey(sourceArticleId: string, targetArticleId: string) {
   return `${sourceArticleId}->${targetArticleId}`;
 }
 
+function unlinkedMentionToastKey(articleId: string, mentions: UnlinkedMention[]) {
+  return `${articleId}:${mentions.map((mention) => mention.id).join("|")}`;
+}
+
 function normalizeLinkTarget(value: string) {
   return value
     .normalize("NFD")
@@ -611,10 +648,6 @@ function validateExplicitLinkTargets(workspaceArticles: WorkspaceArticle[], lang
   });
 
   return validationIssues;
-}
-
-function countRelationsByType(relations: WorkspaceRelation[], relationType: WorkspaceRelation["relationType"]) {
-  return relations.filter((relation) => relation.relationType === relationType).length;
 }
 
 function isSubmittedArticle(article: WorkspaceArticle) {
@@ -1134,7 +1167,7 @@ export default function Home() {
         await loadAuthProfile(currentUser);
         await loadCloudWorkspace(nextAccountWorkspace.id);
         await loadWorkspaceCollaboration(nextAccountWorkspace);
-        setAuthStatus(isEnglish ? "Cloud workspace ready." : "Workspace cloud pronta.");
+        setAuthStatus(null);
       } catch (error) {
         setAccountWorkspace(null);
         setAccountWorkspaces([]);
@@ -1425,8 +1458,6 @@ export default function Home() {
     [selectedArticleId, workspace.articles],
   );
 
-  const currentWorkspaceTags = workspace.workspaceTags;
-  const currentGraphNodes = workspace.graphNodes;
   const currentArticles = workspace.articles;
   const canEditCurrentWorkspace =
     !accountWorkspace || accountWorkspace.role === "owner" || accountWorkspace.role === "editor" || accountWorkspace.role === "member";
@@ -1478,7 +1509,7 @@ export default function Home() {
     [activeGraphArticle, currentUnlinkedMentions],
   );
   const activeUnlinkedToastKey = activeGraphArticle
-    ? `${activeGraphArticle.id}:${activeArticleUnlinkedMentions.map((mention) => mention.id).join("|")}`
+    ? unlinkedMentionToastKey(activeGraphArticle.id, activeArticleUnlinkedMentions)
     : "";
   const shouldShowUnlinkedToast =
     activeTab === "graph" &&
@@ -1486,8 +1517,6 @@ export default function Home() {
     Boolean(activeGraphArticle) &&
     activeArticleUnlinkedMentions.length > 0 &&
     dismissedUnlinkedToastKey !== activeUnlinkedToastKey;
-  const currentActivityFeed = workspace.activityFeed;
-  const currentAppStats = createInitialAppStats(currentArticles, currentRelations, selectedArticle ?? undefined);
   const currentArticlePositions = useMemo(
     () => mergeArticlePositions(currentArticles, workspace.articlePositions),
     [currentArticles, workspace.articlePositions],
@@ -1549,6 +1578,7 @@ export default function Home() {
 
     return presenceByArticleId;
   }, [workspacePresence]);
+  const pendingWorkspaceInviteCount = pendingWorkspaceInvites.length;
   const onlinePresenceCount = workspacePresence.length + (authUserId && accountWorkspaceId ? 1 : 0);
 
   const getPresenceClientId = useCallback(() => {
@@ -2403,6 +2433,47 @@ export default function Home() {
     }
   }
 
+  async function handleDeclineWorkspaceInvite(invite: WorkspaceInvite) {
+    if (!authUser || !supabase) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      isEnglish
+        ? `Decline the invite to "${invite.workspaceName}"?`
+        : `Recusar o convite para "${invite.workspaceName}"?`,
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setIsInviteActionRunning(true);
+    setAuthError(null);
+    setAuthStatus(isEnglish ? "Declining invite..." : "A recusar convite...");
+
+    try {
+      await declineWorkspaceInviteInSupabase(supabase, invite.id);
+      await loadWorkspaceCollaboration(accountWorkspace);
+      setAuthStatus(
+        isEnglish
+          ? `Invite to "${invite.workspaceName}" declined.`
+          : `Convite para "${invite.workspaceName}" recusado.`,
+      );
+    } catch (error) {
+      setAuthError(
+        error instanceof Error
+          ? error.message
+          : isEnglish
+            ? "Could not decline the invite."
+            : "NÃ£o foi possÃ­vel recusar o convite.",
+      );
+      setAuthStatus(null);
+    } finally {
+      setIsInviteActionRunning(false);
+    }
+  }
+
   async function handleRevokeWorkspaceInvite(invite: WorkspaceInvite) {
     if (!supabase || !accountWorkspace) {
       return;
@@ -2475,10 +2546,6 @@ export default function Home() {
       articles: currentArticles,
       relations: currentRelations,
       articlePositions: currentArticlePositions,
-      graphNodes: currentGraphNodes,
-      workspaceTags: currentWorkspaceTags,
-      activityFeed: currentActivityFeed,
-      appStats: currentAppStats,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: currentImageAssets,
     });
@@ -2511,7 +2578,7 @@ export default function Home() {
       author: "PaperGraph",
       status: "Draft",
       updatedAt: "agora",
-      tags: isEnglish ? ["new", "draft"] : ["novo", "rascunho"],
+      tags: [],
       source: [
         "\\documentclass[12pt]{article}",
         "\\usepackage{amsmath, amssymb}",
@@ -2533,19 +2600,6 @@ export default function Home() {
       articles: nextArticles,
       relations: currentRelations,
       articlePositions: nextArticlePositions,
-      graphNodes: currentGraphNodes,
-      workspaceTags: currentWorkspaceTags,
-      activityFeed: [
-        {
-          title: `${isEnglish ? "Created" : "Criado"}: ${nextArticle.title}`,
-          description: isEnglish
-            ? "A new draft was added to the workspace library."
-            : "Foi adicionado um novo rascunho à biblioteca da área de trabalho.",
-          time: "agora",
-        },
-        ...currentActivityFeed,
-      ],
-      appStats: currentAppStats,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: currentImageAssets,
     };
@@ -2560,7 +2614,7 @@ export default function Home() {
     void saveWorkspace(snapshot);
   }
 
-  function updateArticleDetails(nextArticle: { title: string; source: string }) {
+  function updateArticleDetails(nextArticle: { source: string; tags: string[]; title: string }) {
     if (!selectedArticle) return;
 
     if (!canEditCurrentWorkspace) {
@@ -2572,6 +2626,7 @@ export default function Home() {
       ...selectedArticle,
       title: nextArticle.title,
       source: nextArticle.source,
+      tags: nextArticle.tags,
       updatedAt: "agora",
     };
 
@@ -2580,31 +2635,12 @@ export default function Home() {
     );
     const nextRelations = rebuildExplicitRelations(nextArticles, currentRelations);
     const nextArticlePositions = currentArticlePositions;
-    const currentExplicitLinkCount = countRelationsByType(currentRelations, "explicit");
-    const nextExplicitLinkCount = countRelationsByType(nextRelations, "explicit");
 
     const snapshot: WorkspaceSnapshot = {
       selectedArticleId,
       articles: nextArticles,
       relations: nextRelations,
       articlePositions: nextArticlePositions,
-      graphNodes: currentGraphNodes,
-      workspaceTags: currentWorkspaceTags,
-      activityFeed: [
-        ...(nextExplicitLinkCount > currentExplicitLinkCount
-          ? [
-              {
-                title: `${isEnglish ? "Linked from source" : "Ligado a partir do código"}: ${updatedArticle.title}`,
-                description: isEnglish
-                  ? "PaperGraph updated explicit wikilinks after saving the article."
-                  : "O PaperGraph atualizou os wikilinks explícitos depois de guardar o artigo.",
-                time: "agora",
-              },
-            ]
-          : []),
-        ...currentActivityFeed,
-      ],
-      appStats: currentAppStats,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: currentImageAssets,
     };
@@ -2698,12 +2734,12 @@ export default function Home() {
       }
     }
 
-    const wasDraft = articleToSubmit.status === "Draft";
     const submittedArticle: WorkspaceArticle = {
       ...articleToSubmit,
       title: nextArticle.title,
       source: nextArticle.source,
-      status: wasDraft ? "Review" : articleToSubmit.status,
+      status: nextArticle.status,
+      tags: nextArticle.tags,
       updatedAt: "agora",
     };
 
@@ -2754,48 +2790,24 @@ export default function Home() {
     }
 
     const nextRelations = rebuildExplicitRelations(nextSubmittedArticles, currentRelations);
-    const currentExplicitLinkCount = countRelationsByType(currentRelations, "explicit");
-    const nextExplicitLinkCount = countRelationsByType(nextRelations, "explicit");
+    const nextUnlinkedMentions = findUnlinkedMentions(
+      nextSubmittedArticles,
+      nextRelations,
+      currentIgnoredUnlinkedMentionKeys,
+    );
+    const submittedArticleUnlinkedMentions = nextUnlinkedMentions.filter(
+      (mention) => mention.sourceArticleId === submittedArticle.id,
+    );
+    const submittedArticleUnlinkedToastKey = unlinkedMentionToastKey(
+      submittedArticle.id,
+      submittedArticleUnlinkedMentions,
+    );
 
     const snapshot: WorkspaceSnapshot = {
       selectedArticleId: submittedArticle.id,
       articles: nextArticles,
       relations: nextRelations,
       articlePositions: nextArticlePositions,
-      graphNodes: currentGraphNodes,
-      workspaceTags: currentWorkspaceTags,
-      activityFeed: [
-        {
-          title: `${wasDraft
-            ? isEnglish
-              ? "Submitted"
-              : "Submetido"
-            : isEnglish
-              ? "Resubmitted"
-              : "Resubmetido"}: ${submittedArticle.title}`,
-          description: wasDraft
-            ? isEnglish
-              ? "The draft is now visible on the graph."
-              : "O rascunho já está visível no mapa."
-            : isEnglish
-              ? "The updated article is now reflected on the graph."
-              : "O artigo atualizado já está refletido no mapa.",
-          time: "agora",
-        },
-        ...(nextExplicitLinkCount > currentExplicitLinkCount
-          ? [
-              {
-                title: `${isEnglish ? "Linked from source" : "Ligado a partir do código"}: ${submittedArticle.title}`,
-                description: isEnglish
-                  ? "PaperGraph found wikilinks while indexing the submitted article."
-                  : "O PaperGraph encontrou wikilinks ao indexar o artigo submetido.",
-                time: "agora",
-              },
-            ]
-          : []),
-        ...currentActivityFeed,
-      ],
-      appStats: currentAppStats,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: currentImageAssets,
     };
@@ -2806,6 +2818,11 @@ export default function Home() {
     setSelectedArticleId(submittedArticle.id);
     rememberSelectedArticle(submittedArticle.id);
     selectGraphArticle(submittedArticle.id);
+    if (submittedArticleUnlinkedMentions.length > 0) {
+      setDismissedUnlinkedToastKey((currentDismissedKey) =>
+        currentDismissedKey === submittedArticleUnlinkedToastKey ? null : currentDismissedKey,
+      );
+    }
     activateTab(nextActiveTab);
     void saveWorkspace(snapshot);
 
@@ -2854,17 +2871,6 @@ export default function Home() {
       articles: nextArticles,
       relations: [relation, ...nextRelations],
       articlePositions: nextArticlePositions,
-      graphNodes: currentGraphNodes,
-      workspaceTags: currentWorkspaceTags,
-      activityFeed: [
-        {
-          title: `${isEnglish ? "Link created" : "Ligação criada"}: ${fromArticle.title} -> ${targetArticle.title}`,
-          description: relation.note,
-          time: "agora",
-        },
-        ...currentActivityFeed,
-      ],
-      appStats: currentAppStats,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: currentImageAssets,
     };
@@ -2927,19 +2933,6 @@ export default function Home() {
       articles: nextArticles,
       relations: nextRelations,
       articlePositions: currentArticlePositions,
-      graphNodes: currentGraphNodes,
-      workspaceTags: currentWorkspaceTags,
-      activityFeed: [
-        {
-          title: `${isEnglish ? "Link created" : "Ligação criada"}: ${updatedArticle.title} -> ${mention.targetTitle}`,
-          description: isEnglish
-            ? "An unlinked mention was converted into a wikilink in the source."
-            : "Uma menção não ligada foi convertida num wikilink no código.",
-          time: "agora",
-        },
-        ...currentActivityFeed,
-      ],
-      appStats: createInitialAppStats(nextArticles, nextRelations, updatedArticle),
       ignoredUnlinkedMentionKeys: nextIgnoredUnlinkedMentionKeys,
       imageAssets: currentImageAssets,
     };
@@ -2969,10 +2962,6 @@ export default function Home() {
       articles: currentArticles,
       relations: currentRelations,
       articlePositions: currentArticlePositions,
-      graphNodes: currentGraphNodes,
-      workspaceTags: currentWorkspaceTags,
-      activityFeed: currentActivityFeed,
-      appStats: currentAppStats,
       ignoredUnlinkedMentionKeys: nextIgnoredUnlinkedMentionKeys,
       imageAssets: currentImageAssets,
     };
@@ -3028,19 +3017,6 @@ export default function Home() {
         articles: nextArticles,
         relations: nextRelations,
         articlePositions: currentArticlePositions,
-        graphNodes: currentGraphNodes,
-        workspaceTags: currentWorkspaceTags,
-        activityFeed: [
-          {
-            title: `${isEnglish ? "Wikilink removed" : "Wikilink removido"}: ${sourceArticle.title} -> ${targetArticle.title}`,
-            description: isEnglish
-              ? `The wikilink [[${targetArticle.title}]] was converted back into plain text.`
-              : `O wikilink [[${targetArticle.title}]] foi convertido novamente em texto simples.`,
-            time: "agora",
-          },
-          ...currentActivityFeed,
-        ],
-        appStats: createInitialAppStats(nextArticles, nextRelations, updatedArticle),
         ignoredUnlinkedMentionKeys: nextIgnoredUnlinkedMentionKeys,
         imageAssets: currentImageAssets,
       };
@@ -3064,8 +3040,6 @@ export default function Home() {
       return;
     }
 
-    const fromArticle = currentArticles.find((article) => article.id === removedRelation.fromArticleId);
-    const targetArticle = currentArticles.find((article) => article.id === removedRelation.toArticleId);
     const nextRelations = currentRelations.filter(
       (relation) =>
         relation.relationType !== "manual" ||
@@ -3077,19 +3051,6 @@ export default function Home() {
       articles: currentArticles,
       relations: nextRelations,
       articlePositions: currentArticlePositions,
-      graphNodes: currentGraphNodes,
-      workspaceTags: currentWorkspaceTags,
-      activityFeed: [
-        {
-          title: `${isEnglish ? "Link removed" : "Ligação removida"}: ${
-            fromArticle?.title ?? (isEnglish ? "article" : "artigo")
-          } <-> ${targetArticle?.title ?? (isEnglish ? "article" : "artigo")}`,
-          description: removedRelation.note,
-          time: "agora",
-        },
-        ...currentActivityFeed,
-      ],
-      appStats: currentAppStats,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: currentImageAssets,
     };
@@ -3244,19 +3205,6 @@ export default function Home() {
       articles: nextArticles,
       relations: currentRelations,
       articlePositions: nextArticlePositions,
-      graphNodes: currentGraphNodes,
-      workspaceTags: currentWorkspaceTags,
-      activityFeed: [
-        {
-          title: `${isEnglish ? "Imported PDF" : "PDF importado"}: ${importedArticle.title}`,
-          description: isEnglish
-            ? "The PDF was added to the graph as a submitted article."
-            : "O PDF foi adicionado ao mapa como artigo submetido.",
-          time: "agora",
-        },
-        ...currentActivityFeed,
-      ],
-      appStats: currentAppStats,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: nextImageAssets,
     };
@@ -3290,19 +3238,6 @@ export default function Home() {
       articles: currentArticles,
       relations: currentRelations,
       articlePositions: currentArticlePositions,
-      graphNodes: currentGraphNodes,
-      workspaceTags: currentWorkspaceTags,
-      activityFeed: [
-        {
-          title: `${isEnglish ? "File uploaded" : "Ficheiro carregado"}: ${scopedImageAsset.originalName}`,
-          description: isEnglish
-            ? "The file is now available in the LaTeX editor."
-            : "O ficheiro já está disponível no editor LaTeX.",
-          time: "agora",
-        },
-        ...currentActivityFeed,
-      ],
-      appStats: currentAppStats,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: nextImageAssets,
     };
@@ -3379,19 +3314,6 @@ export default function Home() {
       articles: currentArticles,
       relations: currentRelations,
       articlePositions: currentArticlePositions,
-      graphNodes: currentGraphNodes,
-      workspaceTags: currentWorkspaceTags,
-      activityFeed: [
-        {
-          title: `${isEnglish ? "File removed" : "Ficheiro removido"}: ${imageAsset.originalName}`,
-          description: isEnglish
-            ? "The file is no longer available in this article library."
-            : "O ficheiro deixou de estar disponível na biblioteca deste artigo.",
-          time: "agora",
-        },
-        ...currentActivityFeed,
-      ],
-      appStats: currentAppStats,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: nextImageAssets,
     };
@@ -3448,27 +3370,12 @@ export default function Home() {
       graphSelectedArticleId === articleId
         ? null
         : graphSelectedArticleId;
-    const nextSelectedArticle =
-      nextArticles.find((article) => article.id === nextSelectedArticleId) ?? nextArticles[0] ?? undefined;
     const nextImageAssets = currentImageAssets.filter((imageAsset) => imageAsset.articleId !== articleId);
     const snapshot: WorkspaceSnapshot = {
       selectedArticleId: nextSelectedArticleId,
       articles: nextArticles,
       relations: nextRelations,
       articlePositions: nextArticlePositions,
-      graphNodes: currentGraphNodes,
-      workspaceTags: currentWorkspaceTags,
-      activityFeed: [
-        {
-          title: `${isEnglish ? "Article removed" : "Artigo removido"}: ${articleToDelete.title}`,
-          description: isEnglish
-            ? "The article was removed from the graph, along with its links and files."
-            : "O artigo foi removido do mapa, juntamente com as ligações e ficheiros associados.",
-          time: "agora",
-        },
-        ...currentActivityFeed,
-      ],
-      appStats: createInitialAppStats(nextArticles, nextRelations, nextSelectedArticle),
       ignoredUnlinkedMentionKeys: nextIgnoredUnlinkedMentionKeys,
       imageAssets: nextImageAssets,
     };
@@ -3500,10 +3407,6 @@ export default function Home() {
       articles: currentArticles,
       relations: currentRelations,
       articlePositions: normalizedPositions,
-      graphNodes: currentGraphNodes,
-      workspaceTags: currentWorkspaceTags,
-      activityFeed: currentActivityFeed,
-      appStats: currentAppStats,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: currentImageAssets,
     };
@@ -3593,12 +3496,18 @@ export default function Home() {
                   disabled={isDisabled}
                   title={disabledTitle}
                   onClick={() => requestTabChange(tab)}
-                  className={`rounded-[24px] border px-4 py-4 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
+                  className={`relative rounded-[24px] border px-4 py-4 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${
                     isActive
                       ? "border-[var(--accent)] bg-[rgba(142,231,255,0.14)]"
                       : "border-[var(--border)] bg-white/5 hover:bg-white/10"
                   }`}
                 >
+                  {tab === "settings" && activeTab !== "settings" ? (
+                    <NotificationBadge
+                      count={pendingWorkspaceInviteCount}
+                      className="absolute -right-2 -top-2"
+                    />
+                  ) : null}
                   <p className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
                     {getTabLabel(tab)}
                   </p>
@@ -3623,8 +3532,8 @@ export default function Home() {
           }`}
         >
           {activeTab === "drafts" ? (
-            <div className="grid min-h-0 flex-1 gap-5 lg:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.65fr)]">
-              <aside className="flex flex-col gap-5 rounded-[28px] border border-[var(--border)] bg-[var(--surface-strong)] p-5">
+            <div className="flex min-h-0 flex-1">
+              <aside className="flex min-h-0 flex-1 flex-col gap-5 rounded-[28px] border border-[var(--border)] bg-[var(--surface-strong)] p-5">
                 <div>
                   <p className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
                     {isEnglish ? "Drafts" : "Rascunhos"}
@@ -3645,43 +3554,29 @@ export default function Home() {
                 </div>
 
                 {draftArticles.length > 0 ? (
-                  <ArticleLibrary
-                    articles={draftArticles}
-                    language={appLanguage}
-                    selectedArticleId={selectedDraftArticle?.id ?? ""}
-                    onSelectArticle={updateSelectedArticle}
-                  />
+                  <div className="scrollbar-hidden min-h-0 flex-1 overflow-y-auto pr-1">
+                    <ArticleLibrary
+                      articles={draftArticles}
+                      language={appLanguage}
+                      selectedArticleId={selectedDraftArticle?.id ?? ""}
+                      onSelectArticle={updateSelectedArticle}
+                      renderArticleActions={(article) => (
+                        <button
+                          type="button"
+                          disabled={!canEditCurrentWorkspace}
+                          onClick={() => openArticleEditor(article.id)}
+                          className="rounded-full border border-[var(--border)] bg-[var(--accent)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-[#041016] transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {isEnglish ? "Edit draft" : "Editar rascunho"}
+                        </button>
+                      )}
+                    />
+                  </div>
                 ) : (
                   <div className="rounded-[24px] border border-[var(--border)] bg-black/15 p-5 text-sm leading-6 text-[var(--muted)]">
                     {isEnglish
                       ? "No drafts are waiting for submission."
                       : "Não há rascunhos à espera de submissão."}
-                  </div>
-                )}
-              </aside>
-
-              <aside className="flex flex-col gap-5 rounded-[28px] border border-[var(--border)] bg-[var(--surface-strong)] p-5">
-                {selectedDraftArticle ? (
-                  <div className="rounded-[24px] border border-[var(--border)] bg-white/5 p-4">
-                    <p className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
-                      {isEnglish ? "Selected draft" : "Rascunho selecionado"}
-                    </p>
-                    <p className="mt-2 text-lg font-semibold text-white">{selectedDraftArticle.title}</p>
-                    <p className="mt-1 text-sm text-[var(--muted)]">{selectedDraftArticle.author}</p>
-                    <button
-                      type="button"
-                      disabled={!canEditCurrentWorkspace}
-                      onClick={() => openArticleEditor(selectedDraftArticle.id)}
-                      className="mt-4 rounded-full border border-[var(--border)] bg-[var(--accent)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-[#041016] transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {isEnglish ? "Edit draft" : "Editar rascunho"}
-                    </button>
-                  </div>
-                ) : (
-                  <div className="rounded-[24px] border border-[var(--border)] bg-white/5 p-4 text-sm leading-6 text-[var(--muted)]">
-                    {isEnglish
-                      ? "Create a new draft to start writing."
-                      : "Cria um novo rascunho para começar a escrever."}
                   </div>
                 )}
               </aside>
@@ -3812,12 +3707,18 @@ export default function Home() {
                         key={section}
                         type="button"
                         onClick={() => setSettingsSection(section)}
-                        className={`w-full rounded-[18px] border p-3 text-left transition-colors ${
+                        className={`relative w-full rounded-[18px] border p-3 text-left transition-colors ${
                           isActiveSection
                             ? "border-[var(--accent)] bg-[rgba(142,231,255,0.14)]"
                             : "border-[var(--border)] bg-black/15 hover:bg-white/8"
                         }`}
                       >
+                        {section === "workspaces" ? (
+                          <NotificationBadge
+                            count={pendingWorkspaceInviteCount}
+                            className="absolute -right-2 -top-2"
+                          />
+                        ) : null}
                         <p className="text-sm font-semibold text-white">{getSettingsSectionLabel(section)}</p>
                         <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
                           {getSettingsSectionDescription(section)}
@@ -3946,8 +3847,8 @@ export default function Home() {
                       </h2>
                       <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
                         {isEnglish
-                          ? "Each workspace has its own articles, files, relations and graph layout. Later, invites will give access to the whole workspace."
-                          : "Cada workspace tem os seus próprios artigos, ficheiros, ligações e layout do mapa. Depois, os convites vão dar acesso ao workspace inteiro."}
+                          ? "Each workspace has its own articles, files, relations, graph layout and members."
+                          : "Cada workspace tem os seus próprios artigos, ficheiros, ligações, layout do mapa e membros."}
                       </p>
                     </div>
 
@@ -3967,46 +3868,6 @@ export default function Home() {
                       </div>
                     ) : (
                       <>
-                        <section className="rounded-[22px] border border-[var(--accent)] bg-[rgba(142,231,255,0.1)] p-4">
-                          <p className="text-xs uppercase tracking-[0.22em] text-[var(--muted)]">
-                            {isEnglish ? "Active workspace" : "Workspace ativa"}
-                          </p>
-                          <div className="mt-3 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-                            <div>
-                              <h3 className="text-2xl font-semibold text-white">
-                                {accountWorkspace?.name ?? "PaperGraph"}
-                              </h3>
-                              <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-                                {accountWorkspace
-                                  ? isEnglish
-                                    ? `Role: ${formatWorkspaceRole(accountWorkspace.role, appLanguage)}. Last update: ${formatWorkspaceDate(
-                                        accountWorkspace.updatedAt,
-                                        appLanguage,
-                                      )}.`
-                                    : `Cargo: ${formatWorkspaceRole(accountWorkspace.role, appLanguage)}. Última atualização: ${formatWorkspaceDate(
-                                        accountWorkspace.updatedAt,
-                                        appLanguage,
-                                      )}.`
-                                  : isEnglish
-                                    ? "No cloud workspace is active yet."
-                                    : "Ainda não há uma workspace cloud ativa."}
-                              </p>
-                            </div>
-                            <button
-                              type="button"
-                              disabled={isWorkspaceActionRunning || !authUser}
-                              onClick={() => {
-                                if (authUser) {
-                                  void syncAccountWorkspace(authUser);
-                                }
-                              }}
-                              className="rounded-full border border-[var(--border)] bg-white/10 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                              {isEnglish ? "Refresh list" : "Atualizar lista"}
-                            </button>
-                          </div>
-                        </section>
-
                         {pendingWorkspaceInvites.length > 0 ? (
                           <section className="space-y-3 rounded-[22px] border border-[var(--accent)] bg-[rgba(142,231,255,0.08)] p-4">
                             <div className="flex items-center justify-between gap-3">
@@ -4018,17 +3879,40 @@ export default function Home() {
                                   {isEnglish ? "Workspaces waiting for you" : "Workspaces à tua espera"}
                                 </h3>
                               </div>
-                              <span className="rounded-full border border-[var(--border)] bg-black/20 px-3 py-1 text-xs text-[var(--muted)]">
-                                {pendingWorkspaceInvites.length}
-                              </span>
+                              <NotificationBadge count={pendingWorkspaceInviteCount} />
                             </div>
 
                             <div className="grid gap-3 xl:grid-cols-2">
                               {pendingWorkspaceInvites.map((invite) => (
                                 <article
                                   key={invite.id}
-                                  className="rounded-[18px] border border-[var(--border)] bg-black/15 p-4"
+                                  className="relative rounded-[18px] border border-[var(--border)] bg-black/15 p-4 pr-12"
                                 >
+                                  <button
+                                    type="button"
+                                    disabled={isInviteActionRunning}
+                                    aria-label={isEnglish ? "Decline invite" : "Recusar convite"}
+                                    title={isEnglish ? "Decline invite" : "Recusar convite"}
+                                    onClick={() => {
+                                      void handleDeclineWorkspaceInvite(invite);
+                                    }}
+                                    className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center overflow-hidden rounded-full border border-red-300/30 bg-red-500/15 transition-colors hover:bg-red-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    <span className="relative h-5 w-5 overflow-hidden">
+                                      <Image
+                                        src={deleteButtonImage}
+                                        alt=""
+                                        aria-hidden
+                                        className="papergraph-delete-icon-dark absolute left-1/2 top-1/2 h-[2.7rem] w-[4rem] max-w-none -translate-x-1/2 -translate-y-1/2 object-contain"
+                                      />
+                                      <Image
+                                        src={deleteButtonImageInverted}
+                                        alt=""
+                                        aria-hidden
+                                        className="papergraph-delete-icon-light absolute left-1/2 top-1/2 h-[2.7rem] w-[4rem] max-w-none -translate-x-1/2 -translate-y-1/2 object-contain"
+                                      />
+                                    </span>
+                                  </button>
                                   <p className="text-base font-semibold text-white">{invite.workspaceName}</p>
                                   <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
                                     {isEnglish ? "Invited by" : "Convite de"}{" "}
@@ -4477,11 +4361,15 @@ export default function Home() {
                       ? [
                           {
                             title: "Wikilinks",
-                            body: "Use [[Article B]] inside LaTeX to create an explicit graph connection. Use [[Article B|visible text]] when the PDF should show only the readable alias.",
+                            body: "Use [[Article name]] inside LaTeX to create an explicit graph connection. Use [[Article name|visible text]] when the PDF should show only the readable alias.",
                           },
                           {
                             title: "Unlinked mentions",
                             body: "If an article mentions another article title without a wikilink, PaperGraph suggests converting that mention into a real connection.",
+                          },
+                          {
+                            title: "Compile vs submit",
+                            body: "Compile only refreshes the PDF preview. Submit publishes the current article version to the graph and recalculates wikilinks, mentions and relations.",
                           },
                           {
                             title: "Manual links",
@@ -4495,15 +4383,23 @@ export default function Home() {
                             title: "Right click actions",
                             body: "Right click an article node to edit, export, remove relations or remove the article after confirmation.",
                           },
+                          {
+                            title: "Collaboration",
+                            body: "Workspace members can work on the same map. Editors can change articles; viewers can inspect PDFs and the graph without editing source text.",
+                          },
                         ]
                       : [
                           {
                             title: "Wikilinks",
-                            body: "Usa [[Artigo B]] dentro do LaTeX para criar uma ligação explícita no mapa. Usa [[Artigo B|texto visível]] quando o PDF deve mostrar só o alias legível.",
+                            body: "Usa [[Nome do artigo]] dentro do LaTeX para criar uma ligação explícita no mapa. Usa [[Nome do artigo|texto visível]] quando o PDF deve mostrar só o alias legível.",
                           },
                           {
                             title: "Menções não ligadas",
                             body: "Se um artigo mencionar o título de outro artigo sem wikilink, o PaperGraph sugere converter essa menção numa ligação real.",
+                          },
+                          {
+                            title: "Compilar vs submeter",
+                            body: "Compilar só atualiza a preview do PDF. Submeter publica a versão atual no mapa e recalcula wikilinks, menções e ligações.",
                           },
                           {
                             title: "Ligações manuais",
@@ -4516,6 +4412,10 @@ export default function Home() {
                           {
                             title: "Ações com right click",
                             body: "Clica com o botão direito num node para editar, exportar, remover relações ou remover o artigo depois de confirmação.",
+                          },
+                          {
+                            title: "Colaboração",
+                            body: "Membros da workspace podem trabalhar no mesmo mapa. Editores podem alterar artigos; visualizadores podem ver PDFs e o mapa sem editar o código.",
                           },
                         ]).map((item) => (
                       <article key={item.title} className="rounded-[20px] border border-[var(--border)] bg-black/15 p-4">

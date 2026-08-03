@@ -1,17 +1,21 @@
 "use client";
 
-import { type ChangeEvent, useCallback, useEffect, useRef, useState } from "react";
+import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import {
   CollaborativeLatexEditor,
   type CollaborativeLatexEditorHandle,
 } from "@/components/collaborative-latex-editor";
+import { PdfZoomControls } from "@/components/pdf-zoom-controls";
 import deleteButtonImage from "@/imagens/Delete_button.png";
 import deleteButtonImageInverted from "@/imagens/Delete_button_inverted.png";
+import { getPdfFitScale } from "@/lib/pdf-preview-layout";
 import { getArticleStatusLabel, type AppLanguage } from "@/lib/portuguese-labels";
 import { getSupabaseBrowserClient } from "@/lib/supabase-client";
 import { uploadWorkspaceAssetToSupabase } from "@/lib/supabase-storage";
 import type { WorkspaceArticle, WorkspaceImageAsset } from "@/lib/workspace-data";
+
+type SubmittedArticleStatus = Exclude<WorkspaceArticle["status"], "Draft">;
 
 type EditorPaneProps = {
   article: WorkspaceArticle;
@@ -25,8 +29,14 @@ type EditorPaneProps = {
   }>;
   collaborationClientId?: string;
   collaborationUserName?: string;
-  onSaveArticle: (article: { title: string; source: string }) => void;
-  onSubmitArticle: (article: { articleId: string; title: string; source: string }) => Promise<{
+  onSaveArticle: (article: { source: string; tags: string[]; title: string }) => void;
+  onSubmitArticle: (article: {
+    articleId: string;
+    source: string;
+    status: SubmittedArticleStatus;
+    tags: string[];
+    title: string;
+  }) => Promise<{
     cancelled?: boolean;
     issue?: string;
     pdfBuffer?: ArrayBuffer;
@@ -35,7 +45,13 @@ type EditorPaneProps = {
   isSubmissionRunning?: boolean;
   submissionIssue: string | null;
   onSubmissionIssueClear: () => void;
-  onPendingResubmissionChange: (article: { articleId: string; title: string; source: string } | null) => void;
+  onPendingResubmissionChange: (article: {
+    articleId: string;
+    source: string;
+    status: SubmittedArticleStatus;
+    tags: string[];
+    title: string;
+  } | null) => void;
   imageAssets: WorkspaceImageAsset[];
   onImageUploaded: (imageAsset: WorkspaceImageAsset) => void;
   onImageDeleted: (imageAsset: WorkspaceImageAsset) => void | Promise<void>;
@@ -75,6 +91,24 @@ function isPdfAsset(imageAsset: WorkspaceImageAsset) {
 
 function getAssetKindLabel(imageAsset: WorkspaceImageAsset) {
   return isPdfAsset(imageAsset) ? "PDF" : "IMG";
+}
+
+function normalizeKeywordTags(value: string) {
+  const seenTags = new Set<string>();
+
+  return value
+    .split(",")
+    .map((tag) => tag.trim())
+    .filter((tag) => {
+      const normalizedTag = tag.toLowerCase();
+
+      if (!tag || seenTags.has(normalizedTag)) {
+        return false;
+      }
+
+      seenTags.add(normalizedTag);
+      return true;
+    });
 }
 
 function getImageCaption(imageAsset: WorkspaceImageAsset) {
@@ -169,6 +203,10 @@ export function EditorPane({
 }: EditorPaneProps) {
   const [title, setTitle] = useState(article.title);
   const [source, setSource] = useState(article.source);
+  const [keywordInput, setKeywordInput] = useState(article.tags.join(", "));
+  const [submissionStatus, setSubmissionStatus] = useState<SubmittedArticleStatus>(
+    article.status === "Published" ? "Published" : "Review",
+  );
   const [saveState, setSaveState] = useState<"saved" | "saving">("saved");
   const [imagePanelOpen, setImagePanelOpen] = useState(false);
   const [imageUploadState, setImageUploadState] = useState<"idle" | "uploading">("idle");
@@ -179,6 +217,7 @@ export function EditorPane({
   );
   const [compileError, setCompileError] = useState<string | null>(null);
   const [pdfBuffer, setPdfBuffer] = useState<ArrayBuffer | null>(null);
+  const [pdfZoom, setPdfZoom] = useState(100);
   const [compiledPreviewSignature, setCompiledPreviewSignature] = useState<string | null>(null);
   const didMountRef = useRef(false);
   const autoCompileStartedRef = useRef(false);
@@ -190,7 +229,15 @@ export function EditorPane({
   const previewContainerRef = useRef<HTMLDivElement | null>(null);
   const isEnglish = language === "en";
   const isSubmittedArticle = article.status !== "Draft";
-  const hasPendingResubmission = isSubmittedArticle && (title !== article.title || source !== article.source);
+  const keywordTags = useMemo(() => normalizeKeywordTags(keywordInput), [keywordInput]);
+  const keywordSignature = keywordTags.join("\u0001");
+  const articleTagSignature = article.tags.join("\u0001");
+  const hasPendingResubmission =
+    isSubmittedArticle &&
+    (title !== article.title ||
+      source !== article.source ||
+      submissionStatus !== article.status ||
+      keywordSignature !== articleTagSignature);
   const currentPreviewSignature = `${title}\n${source}`;
   const isPreviewStale = compileState === "ready" && compiledPreviewSignature !== currentPreviewSignature;
   const editingCollaborators = articleCollaborators.filter((collaborator) => collaborator.mode === "editing");
@@ -224,12 +271,12 @@ export function EditorPane({
     }
 
     const timeoutId = window.setTimeout(() => {
-      onSaveArticleRef.current({ title, source });
+      onSaveArticleRef.current({ source, tags: keywordTags, title });
       setSaveState("saved");
     }, 700);
 
     return () => window.clearTimeout(timeoutId);
-  }, [hasPendingResubmission, isSubmittedArticle, source, title]);
+  }, [hasPendingResubmission, isSubmittedArticle, keywordTags, source, title]);
 
   useEffect(() => {
     if (!isSubmittedArticle || !hasPendingResubmission) {
@@ -237,8 +284,17 @@ export function EditorPane({
       return;
     }
 
-    onPendingResubmissionChange({ articleId: article.id, title, source });
-  }, [article.id, hasPendingResubmission, isSubmittedArticle, onPendingResubmissionChange, source, title]);
+    onPendingResubmissionChange({ articleId: article.id, source, status: submissionStatus, tags: keywordTags, title });
+  }, [
+    article.id,
+    hasPendingResubmission,
+    isSubmittedArticle,
+    keywordTags,
+    onPendingResubmissionChange,
+    source,
+    submissionStatus,
+    title,
+  ]);
 
   useEffect(
     () => () => {
@@ -306,8 +362,9 @@ export function EditorPane({
 
     async function renderPreview() {
       const previewContainer = previewContainerRef.current;
+      const previewScroller = previewScrollerRef.current;
 
-      if (!pdfBuffer || !previewContainer) {
+      if (!pdfBuffer || !previewContainer || !previewScroller) {
         return;
       }
 
@@ -328,12 +385,11 @@ export function EditorPane({
         return;
       }
 
-      const previewWidth = Math.max(previewContainer.clientWidth - 32, 640);
-
       for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
         const page = await pdfDocument.getPage(pageNumber);
         const unscaledViewport = page.getViewport({ scale: 1 });
-        const scale = previewWidth / unscaledViewport.width;
+        const fitScale = getPdfFitScale(previewScroller, unscaledViewport);
+        const scale = fitScale * (pdfZoom / 100);
         const viewport = page.getViewport({ scale });
         const canvas = document.createElement("canvas");
         const context = canvas.getContext("2d");
@@ -380,7 +436,7 @@ export function EditorPane({
     return () => {
       cancelled = true;
     };
-  }, [isEnglish, pdfBuffer]);
+  }, [isEnglish, pdfBuffer, pdfZoom]);
 
   function handleTitleChange(value: string) {
     onSubmissionIssueClear();
@@ -411,6 +467,21 @@ export function EditorPane({
     }
 
     setSource(value);
+  }
+
+  function handleKeywordInputChange(value: string) {
+    onSubmissionIssueClear();
+
+    if (!isSubmittedArticle) {
+      setSaveState("saving");
+    }
+
+    setKeywordInput(value);
+  }
+
+  function handleSubmissionStatusChange(value: SubmittedArticleStatus) {
+    onSubmissionIssueClear();
+    setSubmissionStatus(value);
   }
 
   function updateLastTextSelection(selection?: { end: number; start: number }) {
@@ -548,7 +619,7 @@ export function EditorPane({
     setCompileState("rendering");
     setCompileError(null);
 
-    const result = await onSubmitArticle({ articleId: article.id, title, source });
+    const result = await onSubmitArticle({ articleId: article.id, source, status: submissionStatus, tags: keywordTags, title });
 
     if (result.submitted) {
       if (result.pdfBuffer) {
@@ -571,9 +642,13 @@ export function EditorPane({
 
   const submitButtonLabel =
     article.status === "Draft"
-      ? isEnglish
-        ? "Submit article"
-        : "Submeter artigo"
+      ? submissionStatus === "Published"
+        ? isEnglish
+          ? "Publish article"
+          : "Publicar artigo"
+        : isEnglish
+          ? "Submit for review"
+          : "Submeter para revisão"
       : isEnglish
         ? "Resubmit article"
         : "Resubmeter artigo";
@@ -583,89 +658,30 @@ export function EditorPane({
         ? "resubmission pending"
         : "resubmissão pendente"
       : isEnglish
-        ? "published version"
-        : "versão publicada"
+        ? "submitted version"
+        : "versão submetida"
     : `${saveState === "saving" ? (isEnglish ? "saving" : "a guardar") : isEnglish ? "saved" : "guardado"} • ${
         isEnglish ? "autosave enabled" : "autosave ativo"
       }`;
+  const previewStatusLabel =
+    compileState === "rendering"
+      ? isEnglish
+        ? "updating"
+        : "a atualizar"
+      : compileState === "error"
+        ? isEnglish
+          ? "error"
+          : "erro"
+        : isPreviewStale
+          ? isEnglish
+            ? "outdated"
+            : "desatualizada"
+          : isEnglish
+            ? "ready"
+            : "pronto";
 
   return (
     <section className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-transparent">
-      <div className="flex flex-col gap-4 border-b border-[var(--border)] px-0 py-4 xl:flex-row xl:items-center xl:justify-between">
-        <div>
-          <p className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">Editor</p>
-          <h2 className="mt-1 text-xl font-semibold text-white">
-            {isEnglish ? "LaTeX workspace" : "Área de trabalho LaTeX"}
-          </h2>
-          <p className="mt-2 text-sm text-[var(--muted)]">
-            {isEnglish
-              ? "Edit the source on the left and compile the PDF whenever you need."
-              : "Edita o código à esquerda e compila o PDF quando precisares."}
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/png,image/jpeg,image/webp,application/pdf,.pdf"
-            className="hidden"
-            onChange={handleImageUploadChange}
-          />
-
-          <div className="flex overflow-hidden rounded-full border border-[var(--border)] bg-white/5">
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={imageUploadState === "uploading"}
-              className="px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {imageUploadState === "uploading" ? (isEnglish ? "Uploading..." : "A carregar...") : "Upload"}
-            </button>
-            <button
-              type="button"
-              aria-label={isEnglish ? "Open file library" : "Abrir biblioteca de ficheiros"}
-              aria-expanded={imagePanelOpen}
-              title={isEnglish ? "Open file library" : "Abrir biblioteca de ficheiros"}
-              onClick={() => setImagePanelOpen((currentValue) => !currentValue)}
-              className={`border-l border-[var(--border)] px-3 py-2 text-base font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--accent)] ${
-                imagePanelOpen ? "bg-[rgba(142,231,255,0.16)] text-[var(--accent)]" : "text-white hover:bg-white/10"
-              }`}
-            >
-              ›
-            </button>
-          </div>
-
-          <button
-            type="button"
-            onClick={handleSubmitClick}
-            disabled={compileState === "rendering" || isSubmissionRunning || (isSubmittedArticle && !hasPendingResubmission)}
-            className="rounded-full border border-[var(--border)] bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {isSubmissionRunning
-              ? isEnglish
-                ? "Compiling..."
-                : "A compilar..."
-              : submitButtonLabel}
-          </button>
-
-          <button
-            type="button"
-            onClick={handleCompileClick}
-            disabled={compileState === "rendering" || isSubmissionRunning}
-            className="rounded-full border border-[var(--border)] bg-[var(--accent)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-[#041016] transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {compileState === "rendering"
-              ? isEnglish
-                ? "Compiling..."
-                : "A compilar..."
-              : isEnglish
-                ? "Compile PDF"
-                : "Compilar PDF"}
-          </button>
-        </div>
-      </div>
-
       {articleCollaborators.length > 0 ? (
         <div className="mt-4 rounded-[18px] border border-[rgba(142,231,255,0.26)] bg-[rgba(142,231,255,0.08)] px-4 py-3 text-sm leading-6 text-[var(--muted)]">
           <p className="font-semibold text-white">
@@ -690,93 +706,6 @@ export function EditorPane({
         </div>
       ) : null}
 
-      {imagePanelOpen ? (
-        <aside className="papergraph-file-panel absolute right-4 top-[6.4rem] z-40 flex w-[min(24rem,calc(100%_-_2rem))] max-h-[calc(100%_-_7.5rem)] flex-col overflow-hidden rounded-[14px] border border-[var(--border)] shadow-[0_18px_50px_rgba(0,0,0,0.28)]">
-          <div className="flex items-center justify-between gap-3 border-b border-[var(--file-panel-divider)] px-3 py-2">
-            <p className="text-xs uppercase tracking-[0.22em] text-[var(--muted)]">
-              {isEnglish ? "Files" : "Ficheiros"}
-            </p>
-            <span className="rounded-full border border-white/10 bg-black/20 px-2 py-0.5 text-[11px] text-[var(--muted)]">
-              {imageAssets.length}
-            </span>
-          </div>
-
-          {imageUploadError ? (
-            <p className="mx-2 mt-2 rounded-[10px] border border-red-300/30 bg-red-500/10 px-3 py-2 text-xs leading-5 text-red-100">
-              {imageUploadError}
-            </p>
-          ) : null}
-
-          <div className="scrollbar-hidden min-h-0 flex-1 overflow-y-auto overscroll-contain py-1">
-            {imageAssets.length === 0 ? (
-              <div className="m-2 rounded-[10px] border border-[var(--file-panel-divider)] bg-[var(--file-panel-muted-surface)] p-3 text-sm leading-6 text-[var(--muted)]">
-                {isEnglish ? "There are no uploaded files yet." : "Ainda não há ficheiros carregados."}
-              </div>
-            ) : null}
-
-            {imageAssets.map((imageAsset) => (
-              <article
-                key={imageAsset.id}
-                className="group flex min-h-11 items-center gap-2 px-2 py-1 text-white transition-colors hover:bg-[var(--file-panel-row-hover)]"
-              >
-                <div className="flex min-w-0 flex-1 items-center gap-2">
-                  <div
-                    role="img"
-                    aria-label={imageAsset.originalName}
-                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[4px] border border-[var(--file-panel-file-border)] bg-cover bg-center bg-no-repeat text-[8px] font-bold leading-none text-white"
-                    style={isPdfAsset(imageAsset) ? undefined : { backgroundImage: `url(${getImageUrl(imageAsset)})` }}
-                  >
-                    {getAssetKindLabel(imageAsset)}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-base font-medium leading-5 text-white">{imageAsset.originalName}</p>
-                    <p className="truncate text-[11px] leading-4 text-[var(--file-panel-meta)]">
-                      {formatBytes(imageAsset.size)} • {imageAsset.uploadedAt}
-                    </p>
-                    <p className="hidden">
-                      {latexImageDirectory}/{imageAsset.storedName}
-                    </p>
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => insertImageSnippet(imageAsset)}
-                  className="shrink-0 rounded-[8px] border border-white/10 bg-white/8 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-[var(--accent)] hover:text-[#041016]"
-                >
-                  {isEnglish ? "Insert" : "Inserir"}
-                </button>
-                <button
-                  type="button"
-                  aria-label={`${isEnglish ? "Remove" : "Remover"} ${imageAsset.originalName}`}
-                  title={isEnglish ? "Remove file" : "Remover ficheiro"}
-                  disabled={deletingImageAssetId === imageAsset.id}
-                  onClick={() => {
-                    void handleImageDeleteClick(imageAsset);
-                  }}
-                  className="flex h-8 w-10 shrink-0 items-center justify-center overflow-hidden rounded-[8px] border border-red-300/30 bg-red-500/15 transition-colors hover:bg-red-500/25 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <span className="relative h-6 w-6 overflow-hidden">
-                    <Image
-                      src={deleteButtonImage}
-                      alt=""
-                      aria-hidden
-                      className="papergraph-delete-icon-dark absolute left-1/2 top-1/2 h-[3.2rem] w-[4.8rem] max-w-none -translate-x-1/2 -translate-y-1/2 object-contain"
-                    />
-                    <Image
-                      src={deleteButtonImageInverted}
-                      alt=""
-                      aria-hidden
-                      className="papergraph-delete-icon-light absolute left-1/2 top-1/2 h-[3.2rem] w-[4.8rem] max-w-none -translate-x-1/2 -translate-y-1/2 object-contain"
-                    />
-                  </span>
-                </button>
-              </article>
-            ))}
-          </div>
-        </aside>
-      ) : null}
-
       {submissionIssue ? (
         <div className="mt-4 rounded-[18px] border border-red-300/30 bg-red-500/10 px-4 py-3 text-sm leading-6 text-red-100">
           <p className="font-semibold text-red-50">
@@ -799,6 +728,59 @@ export function EditorPane({
               placeholder={isEnglish ? "Untitled article" : "Artigo sem título"}
             />
           </label>
+
+          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+            <label className="min-w-0">
+              <span className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
+                {isEnglish ? "Keywords" : "Palavras-chave"}
+              </span>
+              <input
+                value={keywordInput}
+                onChange={(event) => handleKeywordInputChange(event.target.value)}
+                className="mt-2 w-full rounded-[18px] border border-[var(--border)] bg-black/20 px-4 py-3 text-sm text-white outline-none transition-colors placeholder:text-white/35 focus:border-[var(--accent)]"
+                placeholder={isEnglish ? "e.g. NLP, graph, methods" : "ex. NLP, grafo, metodologia"}
+              />
+            </label>
+
+            <fieldset className="min-w-[15rem]">
+              <legend className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
+                {isSubmittedArticle
+                  ? isEnglish
+                    ? "Resubmit as"
+                    : "Resubmeter como"
+                  : isEnglish
+                    ? "Submit as"
+                    : "Submeter como"}
+              </legend>
+              <div className="mt-2 inline-grid w-full grid-cols-2 rounded-full border border-[var(--border)] bg-black/20 p-1">
+                {(["Review", "Published"] as const).map((statusOption) => {
+                  const isSelectedStatus = submissionStatus === statusOption;
+
+                  return (
+                    <button
+                      key={statusOption}
+                      type="button"
+                      aria-pressed={isSelectedStatus}
+                      onClick={() => handleSubmissionStatusChange(statusOption)}
+                      className={`rounded-full px-3 py-2 text-xs font-semibold transition-colors ${
+                        isSelectedStatus
+                          ? "bg-[var(--accent)] text-[#041016]"
+                          : "text-[var(--muted)] hover:bg-white/8 hover:text-white"
+                      }`}
+                    >
+                      {statusOption === "Review"
+                        ? isEnglish
+                          ? "Review"
+                          : "Revisão"
+                        : isEnglish
+                          ? "Published"
+                          : "Publicado"}
+                    </button>
+                  );
+                })}
+              </div>
+            </fieldset>
+          </div>
 
           <label className="flex min-h-0 flex-1 flex-col gap-3">
             <div className="flex items-center justify-between text-xs text-[var(--muted)]">
@@ -825,28 +807,175 @@ export function EditorPane({
 
         <div className="flex min-h-[24rem] flex-col gap-4 overflow-hidden xl:min-h-0 xl:pl-4">
           <div className="papergraph-pdf-preview-shell relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[24px] border border-[var(--border)] shadow-[0_18px_40px_rgba(0,0,0,0.18)]">
-            <div className="papergraph-pdf-preview-status absolute right-4 top-4 z-10 rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.3em] backdrop-blur-xl">
-              {compileState === "rendering"
-                ? isEnglish
-                  ? "updating"
-                  : "a atualizar"
-                : compileState === "error"
-                  ? isEnglish
-                    ? "error"
-                    : "erro"
-                  : isPreviewStale
+            <div className="papergraph-pdf-preview-toolbar relative z-30 flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-3">
+              <div className="flex min-h-9 items-center">
+                {pdfBuffer ? (
+                  <PdfZoomControls
+                    className="shadow-none"
+                    language={language}
+                    onChange={setPdfZoom}
+                    value={pdfZoom}
+                  />
+                ) : null}
+              </div>
+
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,application/pdf,.pdf"
+                  className="hidden"
+                  onChange={handleImageUploadChange}
+                />
+
+                <div className="papergraph-pdf-preview-status rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.3em] backdrop-blur-xl">
+                  {previewStatusLabel}
+                </div>
+
+                <div className="flex overflow-hidden rounded-full border border-[var(--border)] bg-white/5">
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={imageUploadState === "uploading"}
+                    className="px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {imageUploadState === "uploading" ? (isEnglish ? "Uploading..." : "A carregar...") : "Upload"}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={isEnglish ? "Open file library" : "Abrir biblioteca de ficheiros"}
+                    aria-expanded={imagePanelOpen}
+                    title={isEnglish ? "Open file library" : "Abrir biblioteca de ficheiros"}
+                    onClick={() => setImagePanelOpen((currentValue) => !currentValue)}
+                    className={`border-l border-[var(--border)] px-3 py-2 text-base font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--accent)] ${
+                      imagePanelOpen ? "bg-[rgba(142,231,255,0.16)] text-[var(--accent)]" : "text-white hover:bg-white/10"
+                    }`}
+                  >
+                    ›
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleSubmitClick}
+                  disabled={compileState === "rendering" || isSubmissionRunning || (isSubmittedArticle && !hasPendingResubmission)}
+                  className="rounded-full border border-[var(--border)] bg-white/5 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isSubmissionRunning
                     ? isEnglish
-                      ? "outdated"
-                      : "desatualizada"
-                  : isEnglish
-                    ? "ready"
-                    : "pronto"}
+                      ? "Compiling..."
+                      : "A compilar..."
+                    : submitButtonLabel}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleCompileClick}
+                  disabled={compileState === "rendering" || isSubmissionRunning}
+                  className="rounded-full border border-[var(--border)] bg-[var(--accent)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-[#041016] transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {compileState === "rendering"
+                    ? isEnglish
+                      ? "Compiling..."
+                      : "A compilar..."
+                    : isEnglish
+                      ? "Compile PDF"
+                      : "Compilar PDF"}
+                </button>
+              </div>
             </div>
+
+            {imagePanelOpen ? (
+              <aside className="papergraph-file-panel absolute right-4 top-[4.75rem] z-40 flex w-[min(24rem,calc(100%_-_2rem))] max-h-[calc(100%_-_5.75rem)] flex-col overflow-hidden rounded-[14px] border border-[var(--border)] shadow-[0_18px_50px_rgba(0,0,0,0.28)]">
+                <div className="flex items-center justify-between gap-3 border-b border-[var(--file-panel-divider)] px-3 py-2">
+                  <p className="text-xs uppercase tracking-[0.22em] text-[var(--muted)]">
+                    {isEnglish ? "Files" : "Ficheiros"}
+                  </p>
+                  <span className="rounded-full border border-white/10 bg-black/20 px-2 py-0.5 text-[11px] text-[var(--muted)]">
+                    {imageAssets.length}
+                  </span>
+                </div>
+
+                {imageUploadError ? (
+                  <p className="mx-2 mt-2 rounded-[10px] border border-red-300/30 bg-red-500/10 px-3 py-2 text-xs leading-5 text-red-100">
+                    {imageUploadError}
+                  </p>
+                ) : null}
+
+                <div className="scrollbar-hidden min-h-0 flex-1 overflow-y-auto overscroll-contain py-1">
+                  {imageAssets.length === 0 ? (
+                    <div className="m-2 rounded-[10px] border border-[var(--file-panel-divider)] bg-[var(--file-panel-muted-surface)] p-3 text-sm leading-6 text-[var(--muted)]">
+                      {isEnglish ? "There are no uploaded files yet." : "Ainda não há ficheiros carregados."}
+                    </div>
+                  ) : null}
+
+                  {imageAssets.map((imageAsset) => (
+                    <article
+                      key={imageAsset.id}
+                      className="group flex min-h-11 items-center gap-2 px-2 py-1 text-white transition-colors hover:bg-[var(--file-panel-row-hover)]"
+                    >
+                      <div className="flex min-w-0 flex-1 items-center gap-2">
+                        <div
+                          role="img"
+                          aria-label={imageAsset.originalName}
+                          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[4px] border border-[var(--file-panel-file-border)] bg-cover bg-center bg-no-repeat text-[8px] font-bold leading-none text-white"
+                          style={isPdfAsset(imageAsset) ? undefined : { backgroundImage: `url(${getImageUrl(imageAsset)})` }}
+                        >
+                          {getAssetKindLabel(imageAsset)}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-base font-medium leading-5 text-white">{imageAsset.originalName}</p>
+                          <p className="truncate text-[11px] leading-4 text-[var(--file-panel-meta)]">
+                            {formatBytes(imageAsset.size)} • {imageAsset.uploadedAt}
+                          </p>
+                          <p className="hidden">
+                            {latexImageDirectory}/{imageAsset.storedName}
+                          </p>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => insertImageSnippet(imageAsset)}
+                        className="shrink-0 rounded-[8px] border border-white/10 bg-white/8 px-2.5 py-1 text-xs font-semibold text-white transition hover:bg-[var(--accent)] hover:text-[#041016]"
+                      >
+                        {isEnglish ? "Insert" : "Inserir"}
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`${isEnglish ? "Remove" : "Remover"} ${imageAsset.originalName}`}
+                        title={isEnglish ? "Remove file" : "Remover ficheiro"}
+                        disabled={deletingImageAssetId === imageAsset.id}
+                        onClick={() => {
+                          void handleImageDeleteClick(imageAsset);
+                        }}
+                        className="flex h-8 w-10 shrink-0 items-center justify-center overflow-hidden rounded-[8px] border border-red-300/30 bg-red-500/15 transition-colors hover:bg-red-500/25 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <span className="relative h-6 w-6 overflow-hidden">
+                          <Image
+                            src={deleteButtonImage}
+                            alt=""
+                            aria-hidden
+                            className="papergraph-delete-icon-dark absolute left-1/2 top-1/2 h-[3.2rem] w-[4.8rem] max-w-none -translate-x-1/2 -translate-y-1/2 object-contain"
+                          />
+                          <Image
+                            src={deleteButtonImageInverted}
+                            alt=""
+                            aria-hidden
+                            className="papergraph-delete-icon-light absolute left-1/2 top-1/2 h-[3.2rem] w-[4.8rem] max-w-none -translate-x-1/2 -translate-y-1/2 object-contain"
+                          />
+                        </span>
+                      </button>
+                    </article>
+                  ))}
+                </div>
+              </aside>
+            ) : null}
 
             <div className="papergraph-pdf-preview-stage relative flex min-h-0 flex-1 flex-col">
               {pdfBuffer ? (
-                <div ref={previewScrollerRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-6">
-                  <div ref={previewContainerRef} className="flex w-full min-w-0 flex-col items-center" />
+                <div ref={previewScrollerRef} className="min-h-0 flex-1 overflow-auto overscroll-contain p-6">
+                  <div ref={previewContainerRef} className="flex w-max min-w-full flex-col items-center" />
                 </div>
               ) : (
                 <div className="flex min-h-0 flex-1 items-center justify-center px-8 text-center text-sm leading-6 text-[var(--muted)]">

@@ -1,7 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  createInitialActivityFeed,
-  createInitialAppStats,
   defaultSnapshot,
   type WorkspaceImageAsset,
   type WorkspaceRelation,
@@ -184,10 +182,6 @@ function parseIgnoredMentionKey(mentionKey: string) {
   }
 
   return { sourceArticleId, targetArticleId };
-}
-
-function collectWorkspaceTags(snapshot: WorkspaceSnapshot) {
-  return [...new Set(snapshot.articles.flatMap((article) => article.tags))];
 }
 
 function getStoredNameFromStoragePath(storagePath: string) {
@@ -438,6 +432,17 @@ export async function acceptWorkspaceInviteInSupabase(
   return mapAccountWorkspaceRow(acceptedWorkspace);
 }
 
+export async function declineWorkspaceInviteInSupabase(
+  supabase: SupabaseClient,
+  inviteId: string,
+) {
+  const { error } = await supabase.rpc("decline_workspace_invite", {
+    invite_uuid: inviteId,
+  });
+
+  assertSupabaseResult(error, "Could not decline workspace invite.");
+}
+
 export async function revokeWorkspaceInviteInSupabase(
   supabase: SupabaseClient,
   inviteId: string,
@@ -581,13 +586,6 @@ export async function loadWorkspaceSnapshotFromSupabase(
     articles,
     relations,
     articlePositions,
-    graphNodes: [],
-    workspaceTags: collectWorkspaceTags({
-      ...defaultSnapshot,
-      articles,
-    }),
-    activityFeed: createInitialActivityFeed(articles, relations),
-    appStats: createInitialAppStats(articles, relations, undefined),
     ignoredUnlinkedMentionKeys,
     imageAssets,
   };

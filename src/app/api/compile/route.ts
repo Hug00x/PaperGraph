@@ -14,14 +14,12 @@ const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
 const imageDirectoryName = "papergraph-images";
 const storageBucket = "papergraph-assets";
-const missingImageFileName = "papergraph-missing-image.png";
 
 function getProjectPath(...segments: string[]) {
   return join(/*turbopackIgnore: true*/ process.cwd(), ...segments);
 }
 
 const uploadedImagesDirectory = getProjectPath("data", "images");
-const placeholderImagePath = getProjectPath("public", "papergraph-icon.png");
 
 type CompileRequestBody = {
   articleId?: string;
@@ -115,6 +113,17 @@ function escapeLatexText(value: string) {
     .replace(/~/g, String.raw`\textasciitilde{}`);
 }
 
+function createMissingPreviewBox(label: string, assetPath: string) {
+  return [
+    String.raw`\begingroup`,
+    String.raw`\setlength{\fboxsep}{5pt}`,
+    `\\fbox{\\parbox{0.82\\linewidth}{\\footnotesize\\raggedright ${label}: ${escapeLatexText(
+      assetPath.trim(),
+    )}}}`,
+    String.raw`\endgroup`,
+  ].join("\n");
+}
+
 function getLatexSourceLine(source: string, lineNumber: number) {
   return source.split(/\r?\n/)[lineNumber - 1]?.trim();
 }
@@ -193,25 +202,17 @@ function formatLatexCompileError(error: unknown, source: string) {
   return cleanedOutput || error.message || "A compilacao LaTeX falhou.";
 }
 
-function rewriteMissingImageReferences(
-  source: string,
-  compileDirectory: string,
-  hasMissingImagePlaceholder: boolean,
-) {
-  if (!hasMissingImagePlaceholder) {
-    return source;
-  }
-
+function rewriteMissingImageReferences(source: string, compileDirectory: string) {
   return source.replace(
-    /(\\includegraphics(?:\[[^\]]*\])?\{)([^}]+)(\})/g,
-    (fullMatch, prefix: string, imagePath: string, suffix: string) => {
+    /\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}/g,
+    (fullMatch, imagePath: string) => {
       const resolvedImagePath = resolveCompileImagePath(compileDirectory, imagePath.trim());
 
       if (resolvedImagePath && existsSync(resolvedImagePath)) {
         return fullMatch;
       }
 
-      return `${prefix}${missingImageFileName}${suffix}`;
+      return createMissingPreviewBox("Imagem em falta na preview", imagePath);
     },
   );
 }
@@ -229,9 +230,7 @@ function rewriteMissingPdfIncludes(source: string, compileDirectory: string) {
       return [
         String.raw`\clearpage`,
         String.raw`\begin{center}`,
-        `\\fbox{\\parbox{0.82\\linewidth}{PDF externo em falta na preview: ${escapeLatexText(
-          pdfPath.trim(),
-        )}}}`,
+        createMissingPreviewBox("PDF externo em falta na preview", pdfPath),
         String.raw`\end{center}`,
         String.raw`\clearpage`,
       ].join("\n");
@@ -317,15 +316,6 @@ async function copyUploadedImagesToCompileDirectory(
   );
 }
 
-async function writeMissingImagePlaceholder(compileDirectory: string) {
-  if (!existsSync(placeholderImagePath)) {
-    return false;
-  }
-
-  await cp(placeholderImagePath, join(compileDirectory, missingImageFileName), { force: true });
-  return true;
-}
-
 async function compileLatexToPdf(
   source: string,
   tectonicPath: string,
@@ -339,12 +329,7 @@ async function compileLatexToPdf(
 
   try {
     await copyUploadedImagesToCompileDirectory(compileDirectory, articleId, accessToken, requestImageAssets);
-    const hasMissingImagePlaceholder = await writeMissingImagePlaceholder(compileDirectory);
-    const sourceWithImagePlaceholders = rewriteMissingImageReferences(
-      source,
-      compileDirectory,
-      hasMissingImagePlaceholder,
-    );
+    const sourceWithImagePlaceholders = rewriteMissingImageReferences(source, compileDirectory);
     const sourceForCompile = rewriteMissingPdfIncludes(sourceWithImagePlaceholders, compileDirectory);
     await writeFile(texPath, sourceForCompile, "utf8");
 

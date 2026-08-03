@@ -962,6 +962,10 @@ export function GraphPane({
         <div className="mt-4 min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain pr-1">
           {filteredLibraryArticles.map((article) => {
             const isActive = article.id === activeArticle?.id;
+            const articleKeywordLabel = article.tags
+              .slice(0, 2)
+              .map((tag) => getArticleTagLabel(tag, language))
+              .join(" • ");
 
             return (
               <button
@@ -989,8 +993,8 @@ export function GraphPane({
               >
                 <p className="text-sm font-medium leading-5 text-white">{article.title}</p>
                 <p className="mt-2 text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
-                  {getArticleStatusLabel(article.status, language)} •{" "}
-                  {article.tags.slice(0, 2).map((tag) => getArticleTagLabel(tag, language)).join(" • ")}
+                  {getArticleStatusLabel(article.status, language)}
+                  {articleKeywordLabel ? ` • ${articleKeywordLabel}` : ""}
                 </p>
               </button>
             );

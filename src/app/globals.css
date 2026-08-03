@@ -247,6 +247,7 @@ html[data-papergraph-theme="light"] .papergraph-app .papergraph-graph-pane {
 
 .papergraph-pdf-preview-shell {
   --pdf-preview-shell-background: #23272d;
+  --pdf-preview-toolbar-background: rgba(18, 25, 37, 0.9);
   --pdf-preview-stage-background:
     linear-gradient(180deg, rgba(142, 231, 255, 0.08), rgba(7, 16, 24, 0.72));
   --pdf-preview-status-background: rgba(0, 0, 0, 0.45);
@@ -257,6 +258,7 @@ html[data-papergraph-theme="light"] .papergraph-app .papergraph-graph-pane {
 
 html[data-papergraph-theme="light"] .papergraph-app .papergraph-pdf-preview-shell {
   --pdf-preview-shell-background: rgba(248, 252, 255, 0.96);
+  --pdf-preview-toolbar-background: rgba(248, 252, 255, 0.92);
   --pdf-preview-stage-background:
     radial-gradient(circle at top, rgba(14, 165, 233, 0.12), transparent 34%),
     linear-gradient(180deg, rgba(234, 244, 251, 0.86), rgba(248, 252, 255, 0.96));
@@ -269,10 +271,33 @@ html[data-papergraph-theme="light"] .papergraph-app .papergraph-pdf-preview-shel
   background: var(--pdf-preview-stage-background);
 }
 
+.papergraph-pdf-preview-toolbar {
+  background: var(--pdf-preview-toolbar-background);
+}
+
 .papergraph-pdf-preview-status {
   background: var(--pdf-preview-status-background);
   border-color: var(--pdf-preview-status-border);
   color: var(--pdf-preview-status-color);
+}
+
+.papergraph-pdf-zoom-select {
+  color: var(--foreground);
+  color-scheme: dark;
+}
+
+.papergraph-pdf-zoom-select option {
+  background: #121925;
+  color: #e5edf6;
+}
+
+html[data-papergraph-theme="light"] .papergraph-app .papergraph-pdf-zoom-select {
+  color-scheme: light;
+}
+
+html[data-papergraph-theme="light"] .papergraph-app .papergraph-pdf-zoom-select option {
+  background: #f8fcff;
+  color: #102132;
 }
 
 html[data-papergraph-theme="light"] .papergraph-app .papergraph-pdf-page {

@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { PdfZoomControls } from "@/components/pdf-zoom-controls";
+import { getPdfFitScale } from "@/lib/pdf-preview-layout";
 import type { AppLanguage } from "@/lib/portuguese-labels";
 import type { WorkspaceArticle, WorkspaceImageAsset } from "@/lib/workspace-data";
 
@@ -28,6 +30,7 @@ export function ArticleViewerPane({
   );
   const [compileError, setCompileError] = useState<string | null>(null);
   const [pdfBuffer, setPdfBuffer] = useState<ArrayBuffer | null>(null);
+  const [pdfZoom, setPdfZoom] = useState(100);
   const previewScrollerRef = useRef<HTMLDivElement | null>(null);
   const previewContainerRef = useRef<HTMLDivElement | null>(null);
   const isEnglish = language === "en";
@@ -97,8 +100,9 @@ export function ArticleViewerPane({
 
     async function renderPreview() {
       const previewContainer = previewContainerRef.current;
+      const previewScroller = previewScrollerRef.current;
 
-      if (!pdfBuffer || !previewContainer) {
+      if (!pdfBuffer || !previewContainer || !previewScroller) {
         return;
       }
 
@@ -119,12 +123,11 @@ export function ArticleViewerPane({
         return;
       }
 
-      const previewWidth = Math.max(previewContainer.clientWidth - 32, 640);
-
       for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
         const page = await pdfDocument.getPage(pageNumber);
         const unscaledViewport = page.getViewport({ scale: 1 });
-        const scale = previewWidth / unscaledViewport.width;
+        const fitScale = getPdfFitScale(previewScroller, unscaledViewport, { maxWidth: 880 });
+        const scale = fitScale * (pdfZoom / 100);
         const viewport = page.getViewport({ scale });
         const canvas = document.createElement("canvas");
         const context = canvas.getContext("2d");
@@ -145,7 +148,7 @@ export function ArticleViewerPane({
 
         if (pageNumber < pdfDocument.numPages) {
           const spacer = document.createElement("div");
-          spacer.style.height = "20px";
+          spacer.style.height = "32px";
           previewContainer.appendChild(spacer);
         }
       }
@@ -171,7 +174,7 @@ export function ArticleViewerPane({
     return () => {
       cancelled = true;
     };
-  }, [isEnglish, pdfBuffer]);
+  }, [isEnglish, pdfBuffer, pdfZoom]);
 
   return (
     <section className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-transparent">
@@ -230,8 +233,16 @@ export function ArticleViewerPane({
         </div>
       ) : null}
 
-      <div className="min-h-0 flex-1 overflow-hidden py-5">
-        <div className="papergraph-pdf-preview-shell relative flex h-full min-h-[24rem] flex-col overflow-hidden rounded-[24px] border border-[var(--border)] shadow-[0_18px_40px_rgba(0,0,0,0.18)]">
+      <div className="flex min-h-0 flex-1 justify-center overflow-hidden py-6 lg:py-8">
+        <div className="papergraph-pdf-preview-shell relative flex h-full min-h-[24rem] w-full max-w-[1120px] flex-col overflow-hidden rounded-[24px] border border-[var(--border)] shadow-[0_18px_40px_rgba(0,0,0,0.18)]">
+          {pdfBuffer ? (
+            <PdfZoomControls
+              className="absolute left-4 top-4 z-10"
+              language={language}
+              onChange={setPdfZoom}
+              value={pdfZoom}
+            />
+          ) : null}
           <div className="papergraph-pdf-preview-status absolute right-4 top-4 z-10 rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.3em] backdrop-blur-xl">
             {compileState === "rendering"
               ? isEnglish
@@ -248,8 +259,8 @@ export function ArticleViewerPane({
 
           <div className="papergraph-pdf-preview-stage relative flex min-h-0 flex-1 flex-col">
             {pdfBuffer ? (
-              <div ref={previewScrollerRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-6">
-                <div ref={previewContainerRef} className="flex w-full min-w-0 flex-col items-center" />
+              <div ref={previewScrollerRef} className="min-h-0 flex-1 overflow-auto overscroll-contain px-8 py-10 lg:px-14 lg:py-12">
+                <div ref={previewContainerRef} className="flex w-max min-w-full flex-col items-center" />
               </div>
             ) : (
               <div className="flex min-h-0 flex-1 items-center justify-center px-8 text-center text-sm leading-6 text-[var(--muted)]">

@@ -451,6 +451,7 @@ drop function if exists public.list_workspace_invites(uuid);
 drop function if exists public.list_my_pending_workspace_invites();
 drop function if exists public.create_workspace_invite(uuid, text, text);
 drop function if exists public.accept_workspace_invite(uuid);
+drop function if exists public.decline_workspace_invite(uuid);
 drop function if exists public.revoke_workspace_invite(uuid);
 drop function if exists public.update_workspace_member_role(uuid, uuid, text);
 drop function if exists public.remove_workspace_member(uuid, uuid);
@@ -1049,6 +1050,37 @@ begin
 end;
 $$;
 
+create function public.decline_workspace_invite(invite_uuid uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_user_email text := lower(coalesce(auth.jwt() ->> 'email', ''));
+begin
+  if auth.uid() is null then
+    raise exception 'not authenticated';
+  end if;
+
+  if current_user_email = '' then
+    raise exception 'account email unavailable';
+  end if;
+
+  update public.workspace_invites
+  set
+    status = 'revoked',
+    revoked_at = now()
+  where workspace_invites.id = invite_uuid
+    and lower(workspace_invites.invited_email) = current_user_email
+    and workspace_invites.status = 'pending';
+
+  if not found then
+    raise exception 'invite not available';
+  end if;
+end;
+$$;
+
 create function public.revoke_workspace_invite(invite_uuid uuid)
 returns void
 language plpgsql
@@ -1274,6 +1306,7 @@ grant execute on function public.list_workspace_invites(uuid) to authenticated;
 grant execute on function public.list_my_pending_workspace_invites() to authenticated;
 grant execute on function public.create_workspace_invite(uuid, text, text) to authenticated;
 grant execute on function public.accept_workspace_invite(uuid) to authenticated;
+grant execute on function public.decline_workspace_invite(uuid) to authenticated;
 grant execute on function public.revoke_workspace_invite(uuid) to authenticated;
 grant execute on function public.update_workspace_member_role(uuid, uuid, text) to authenticated;
 grant execute on function public.remove_workspace_member(uuid, uuid) to authenticated;

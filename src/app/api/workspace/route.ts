@@ -2,8 +2,6 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { NextResponse } from "next/server";
 import {
-  createInitialActivityFeed,
-  createInitialAppStats,
   defaultSnapshot,
   type ArticlePosition,
   type WorkspaceArticle,
@@ -13,12 +11,6 @@ import {
 
 const dataDirectory = join(process.cwd(), "data");
 const dataFile = join(dataDirectory, "workspace.json");
-
-const legacyActivityTitles = new Set([
-  "Imported 3 articles",
-  "Semantic link suggestion",
-  "Compile pipeline ready",
-]);
 
 function normalizeRelationType(value: unknown): WorkspaceRelation["relationType"] {
   if (value === "auto" || value === "explicit" || value === "manual" || value === "suggested") {
@@ -65,38 +57,6 @@ function normalizeSnapshotForStorage(snapshot: WorkspaceSnapshot): WorkspaceSnap
   };
 }
 
-function normalizeActivityFeed(snapshot: Partial<WorkspaceSnapshot>, workspaceSnapshot: Pick<WorkspaceSnapshot, "articles" | "relations">) {
-  const feed = snapshot.activityFeed ?? [];
-
-  if (feed.length === 0) {
-    return createInitialActivityFeed(workspaceSnapshot.articles, workspaceSnapshot.relations);
-  }
-
-  if (feed.some((item) => legacyActivityTitles.has(item.title) || item.title.includes("automatic relations"))) {
-    return createInitialActivityFeed(workspaceSnapshot.articles, workspaceSnapshot.relations);
-  }
-
-  return feed;
-}
-
-function normalizeAppStats(
-  snapshot: Partial<WorkspaceSnapshot>,
-  workspaceSnapshot: Pick<WorkspaceSnapshot, "articles" | "relations" | "selectedArticleId">,
-) {
-  const selectedArticle = workspaceSnapshot.articles.find((article) => article.id === workspaceSnapshot.selectedArticleId) ?? workspaceSnapshot.articles[0];
-  const appStats = snapshot.appStats ?? [];
-
-  if (appStats.length === 0) {
-    return createInitialAppStats(workspaceSnapshot.articles, workspaceSnapshot.relations, selectedArticle);
-  }
-
-  if (appStats.some((item) => item.value === "128" || item.value === "842" || item.value === "8s")) {
-    return createInitialAppStats(workspaceSnapshot.articles, workspaceSnapshot.relations, selectedArticle);
-  }
-
-  return appStats;
-}
-
 async function readSnapshot(): Promise<WorkspaceSnapshot> {
   try {
     const fileContents = await readFile(dataFile, "utf8");
@@ -114,19 +74,11 @@ async function readSnapshot(): Promise<WorkspaceSnapshot> {
         parsed.articles ?? defaultSnapshot.articles,
         parsed.articlePositions ?? defaultSnapshot.articlePositions,
       ),
-      graphNodes: parsed.graphNodes ?? defaultSnapshot.graphNodes,
-      workspaceTags: parsed.workspaceTags ?? defaultSnapshot.workspaceTags,
-      activityFeed: parsed.activityFeed ?? defaultSnapshot.activityFeed,
-      appStats: parsed.appStats ?? defaultSnapshot.appStats,
       ignoredUnlinkedMentionKeys: parsed.ignoredUnlinkedMentionKeys ?? defaultSnapshot.ignoredUnlinkedMentionKeys,
       imageAssets: parsed.imageAssets ?? defaultSnapshot.imageAssets,
     } satisfies WorkspaceSnapshot;
 
-    return {
-      ...workspaceSnapshot,
-      activityFeed: normalizeActivityFeed(parsed, workspaceSnapshot),
-      appStats: normalizeAppStats(parsed, workspaceSnapshot),
-    };
+    return workspaceSnapshot;
   } catch {
     return defaultSnapshot;
   }
