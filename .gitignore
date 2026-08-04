@@ -35,6 +35,7 @@ yarn-error.log*
 
 # local temporary files
 .utmp/
+supabase/.temp/
 
 # local app data
 data/workspace.json
