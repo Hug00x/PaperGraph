@@ -1,6 +1,6 @@
 {
   "name": "papergraph",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A collaborative LaTeX research workspace with article maps.",
   "author": "PaperGraph",
   "main": "electron/main.cjs",
@@ -21,6 +21,7 @@
     "appId": "com.papergraph.desktop",
     "productName": "PaperGraph",
     "copyright": "Copyright (c) 2026 PaperGraph",
+    "afterPack": "scripts/electron-after-pack.cjs",
     "directories": {
       "output": "desktop-dist"
     },

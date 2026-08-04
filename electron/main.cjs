@@ -1,6 +1,6 @@
 const { app, BrowserWindow, dialog, shell } = require("electron");
 const { spawn } = require("node:child_process");
-const { existsSync } = require("node:fs");
+const { createWriteStream, existsSync } = require("node:fs");
 const { mkdir } = require("node:fs/promises");
 const net = require("node:net");
 const path = require("node:path");
@@ -91,10 +91,16 @@ function findAvailablePort(preferredPort = 34173) {
   );
 }
 
-async function waitForServer(url, timeoutMs = 30000) {
+async function waitForServer(url, getStartupError, timeoutMs = 90000) {
   const startedAt = Date.now();
 
   while (Date.now() - startedAt < timeoutMs) {
+    const startupError = getStartupError?.();
+
+    if (startupError) {
+      throw startupError;
+    }
+
     try {
       const response = await fetch(url, { method: "HEAD" });
 
@@ -129,10 +135,17 @@ async function startPackagedNextServer() {
   }
 
   const dataDirectory = path.join(app.getPath("userData"), "data");
+  const logDirectory = path.join(app.getPath("userData"), "logs");
   await mkdir(dataDirectory, { recursive: true });
+  await mkdir(logDirectory, { recursive: true });
 
   const port = await findAvailablePort();
   const appUrl = `http://127.0.0.1:${port}`;
+  const serverLogPath = path.join(logDirectory, "next-server.log");
+  const serverLogStream = createWriteStream(serverLogPath, { flags: "a" });
+  let startupError = null;
+
+  serverLogStream.write(`\n[${new Date().toISOString()}] Starting PaperGraph server on ${appUrl}\n`);
 
   nextServerProcess = spawn(process.execPath, [serverFile], {
     cwd: serverDirectory,
@@ -145,11 +158,30 @@ async function startPackagedNextServer() {
       PAPERGRAPH_TECTONIC_PATH: tectonicPath,
       PORT: String(port),
     },
-    stdio: "ignore",
+    stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
 
-  nextServerProcess.once("exit", (code) => {
+  nextServerProcess.stdout?.pipe(serverLogStream, { end: false });
+  nextServerProcess.stderr?.pipe(serverLogStream, { end: false });
+
+  nextServerProcess.once("error", (error) => {
+    startupError = new Error(
+      `Nao foi possivel iniciar o servidor local do PaperGraph. Detalhes: ${error.message}`,
+    );
+  });
+
+  nextServerProcess.once("exit", (code, signal) => {
+    serverLogStream.write(
+      `[${new Date().toISOString()}] Server exited with code ${code ?? "null"} signal ${signal ?? "null"}\n`,
+    );
+
+    if (!startupError && code !== 0) {
+      startupError = new Error(
+        `O servidor local do PaperGraph fechou durante o arranque. Logs: ${serverLogPath}`,
+      );
+    }
+
     if (code !== 0 && mainWindow && !mainWindow.isDestroyed()) {
       dialog.showErrorBox(
         "PaperGraph",
@@ -158,7 +190,7 @@ async function startPackagedNextServer() {
     }
   });
 
-  await waitForServer(appUrl);
+  await waitForServer(appUrl, () => startupError);
   return appUrl;
 }
 
