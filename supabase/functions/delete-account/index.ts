@@ -49,6 +49,7 @@ function getDefaultKeyFromJson(rawValue: string | undefined) {
 
 function getSupabasePublishableKey() {
   return (
+    Deno.env.get("PAPERGRAPH_PUBLISHABLE_KEY") ??
     Deno.env.get("SUPABASE_ANON_KEY") ??
     Deno.env.get("SUPABASE_PUBLISHABLE_KEY") ??
     getDefaultKeyFromJson(Deno.env.get("SUPABASE_PUBLISHABLE_KEYS"))
@@ -57,6 +58,8 @@ function getSupabasePublishableKey() {
 
 function getSupabasePrivateKey() {
   return (
+    Deno.env.get("PAPERGRAPH_SERVICE_ROLE_KEY") ??
+    Deno.env.get("PAPERGRAPH_SECRET_KEY") ??
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ??
     Deno.env.get("SUPABASE_SECRET_KEY") ??
     getDefaultKeyFromJson(Deno.env.get("SUPABASE_SECRET_KEYS"))

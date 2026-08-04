@@ -16,12 +16,12 @@ Deploy:
 npx supabase functions deploy delete-account --project-ref gdpmlzwvfdyrgdquicyl
 ```
 
-Se a função ficar sem chave privada, adiciona uma secret no Supabase:
+Normalmente não é preciso adicionar a chave privada manualmente: o Supabase disponibiliza as keys da função através das variáveis internas do projeto.
+
+Se a função ficar sem chave privada, adiciona uma secret própria sem o prefixo reservado `SUPABASE_`:
 
 ```bash
-npx supabase secrets set SUPABASE_SECRET_KEY=... --project-ref gdpmlzwvfdyrgdquicyl
+npx supabase secrets set PAPERGRAPH_SERVICE_ROLE_KEY=... --project-ref gdpmlzwvfdyrgdquicyl
 ```
-
-Também podes usar `SUPABASE_SERVICE_ROLE_KEY` se preferires a chave service role clássica.
 
 Nunca coloques `SUPABASE_SECRET_KEY` ou `SUPABASE_SERVICE_ROLE_KEY` no `.exe`, em GitHub Pages, nem em variáveis `NEXT_PUBLIC_*`.
