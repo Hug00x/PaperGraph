@@ -33,6 +33,36 @@ function getBearerToken(request: Request) {
   return token;
 }
 
+function getDefaultKeyFromJson(rawValue: string | undefined) {
+  if (!rawValue) {
+    return null;
+  }
+
+  try {
+    const parsedValue = JSON.parse(rawValue) as Record<string, string>;
+
+    return parsedValue.default ?? Object.values(parsedValue).find(Boolean) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function getSupabasePublishableKey() {
+  return (
+    Deno.env.get("SUPABASE_ANON_KEY") ??
+    Deno.env.get("SUPABASE_PUBLISHABLE_KEY") ??
+    getDefaultKeyFromJson(Deno.env.get("SUPABASE_PUBLISHABLE_KEYS"))
+  );
+}
+
+function getSupabasePrivateKey() {
+  return (
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ??
+    Deno.env.get("SUPABASE_SECRET_KEY") ??
+    getDefaultKeyFromJson(Deno.env.get("SUPABASE_SECRET_KEYS"))
+  );
+}
+
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -44,10 +74,8 @@ Deno.serve(async (request) => {
 
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
-    const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
-    const serviceRoleKey =
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ??
-      Deno.env.get("SUPABASE_SECRET_KEY");
+    const anonKey = getSupabasePublishableKey();
+    const serviceRoleKey = getSupabasePrivateKey();
     const accessToken = getBearerToken(request);
 
     if (!supabaseUrl || !anonKey || !serviceRoleKey) {

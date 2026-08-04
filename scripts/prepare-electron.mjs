@@ -1,5 +1,6 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -44,6 +45,46 @@ function createIcoFromPng(source, target) {
 
   mkdirSync(path.dirname(target), { recursive: true });
   writeFileSync(target, Buffer.concat([header, pngBuffer]));
+}
+
+function toPowerShellString(value) {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+function createWindowsIconPng(source, target) {
+  const script = `
+$SourcePath = ${toPowerShellString(source)}
+$TargetPath = ${toPowerShellString(target)}
+Add-Type -AssemblyName System.Drawing
+$size = 256
+$sourceImage = [System.Drawing.Image]::FromFile($SourcePath)
+$bitmap = New-Object System.Drawing.Bitmap $size, $size
+$bitmap.SetResolution(96, 96)
+$graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+$graphics.Clear([System.Drawing.Color]::Transparent)
+$graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+$graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+$scale = [Math]::Min($size / $sourceImage.Width, $size / $sourceImage.Height) * 0.9
+$drawWidth = [int][Math]::Round($sourceImage.Width * $scale)
+$drawHeight = [int][Math]::Round($sourceImage.Height * $scale)
+$x = [int][Math]::Round(($size - $drawWidth) / 2)
+$y = [int][Math]::Round(($size - $drawHeight) / 2)
+$graphics.DrawImage($sourceImage, $x, $y, $drawWidth, $drawHeight)
+[System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($TargetPath)) | Out-Null
+$bitmap.Save($TargetPath, [System.Drawing.Imaging.ImageFormat]::Png)
+$graphics.Dispose()
+$bitmap.Dispose()
+$sourceImage.Dispose()
+`;
+  const result = spawnSync(
+    "powershell.exe",
+    ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+    { encoding: "utf8" },
+  );
+
+  if (result.status !== 0) {
+    throw new Error(`Failed to prepare Windows icon PNG: ${result.stderr || result.stdout}`);
+  }
 }
 
 function removeStandaloneBuildNoise() {
@@ -92,9 +133,12 @@ copyDirectory(
   path.join(standaloneNodeModulesDirectory, "@node-latex-compiler", "bin-win32-x64"),
 );
 
-createIcoFromPng(
-  path.join(projectDirectory, "src", "imagens", "PapergraghTexto.png"),
-  path.join(projectDirectory, "build", "papergraph-icon.ico"),
+const windowsIconPngPath = path.join(projectDirectory, "build", "papergraph-icon.png");
+
+createWindowsIconPng(
+  path.join(projectDirectory, "src", "imagens", "PapergraphLogo.png"),
+  windowsIconPngPath,
 );
+createIcoFromPng(windowsIconPngPath, path.join(projectDirectory, "build", "papergraph-icon.ico"));
 
 console.log("Electron standalone bundle prepared.");

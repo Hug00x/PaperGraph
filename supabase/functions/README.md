@@ -2,18 +2,26 @@
 
 ## `delete-account`
 
-Esta função elimina a conta autenticada e os dados associados sem colocar a service role key dentro da app desktop.
+Esta função elimina a conta autenticada e os dados associados sem colocar a chave privada dentro da app desktop.
+
+O projeto Supabase usado pela app é:
+
+```bash
+gdpmlzwvfdyrgdquicyl
+```
 
 Deploy:
 
 ```bash
-supabase functions deploy delete-account --project-ref gdpmlzwvfdyrgdquicyl
+npx supabase functions deploy delete-account --project-ref gdpmlzwvfdyrgdquicyl
 ```
 
-Se o projeto não expuser `SUPABASE_SERVICE_ROLE_KEY` automaticamente nas Edge Functions, adiciona-a como secret no Supabase:
+Se a função ficar sem chave privada, adiciona uma secret no Supabase:
 
 ```bash
-supabase secrets set SUPABASE_SERVICE_ROLE_KEY=...
+npx supabase secrets set SUPABASE_SECRET_KEY=... --project-ref gdpmlzwvfdyrgdquicyl
 ```
 
-Não coloques a service role key no `.exe`, no GitHub Pages, nem em variáveis `NEXT_PUBLIC_*`.
+Também podes usar `SUPABASE_SERVICE_ROLE_KEY` se preferires a chave service role clássica.
+
+Nunca coloques `SUPABASE_SECRET_KEY` ou `SUPABASE_SERVICE_ROLE_KEY` no `.exe`, em GitHub Pages, nem em variáveis `NEXT_PUBLIC_*`.

@@ -58,6 +58,13 @@ function getAccountDeletionFunctionUrl() {
   return supabaseUrl ? `${supabaseUrl}/functions/v1/delete-account` : null;
 }
 
+function getSupabasePublishableKey() {
+  return (
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ??
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  );
+}
+
 async function deleteAccountThroughEdgeFunction(accessToken: string) {
   const functionUrl = getAccountDeletionFunctionUrl();
 
@@ -68,12 +75,19 @@ async function deleteAccountThroughEdgeFunction(accessToken: string) {
     );
   }
 
+  const publishableKey = getSupabasePublishableKey();
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${accessToken}`,
+    "Content-Type": "application/json",
+  };
+
+  if (publishableKey) {
+    headers.apikey = publishableKey;
+  }
+
   const response = await fetch(functionUrl, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
+    headers,
     body: "{}",
   });
   const payload = (await response.json().catch(() => null)) as AccountDeletionResponse | null;
