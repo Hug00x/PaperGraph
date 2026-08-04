@@ -53,6 +53,14 @@
       ],
       "icon": "build/papergraph-icon.ico"
     },
+    "protocols": [
+      {
+        "name": "PaperGraph",
+        "schemes": [
+          "papergraph"
+        ]
+      }
+    ],
     "nsis": {
       "oneClick": false,
       "perMachine": false,

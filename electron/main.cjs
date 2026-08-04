@@ -10,6 +10,51 @@ let nextServerProcess = null;
 
 const isDev = !app.isPackaged;
 const devServerUrl = process.env.ELECTRON_START_URL || "http://localhost:3000";
+const protocolScheme = "papergraph";
+
+function getDeepLinkUrl(argv) {
+  return argv.find((argument) => argument.startsWith(`${protocolScheme}://`)) ?? null;
+}
+
+function focusMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function handleDeepLink(url) {
+  if (!url || !url.startsWith(`${protocolScheme}://`)) {
+    return;
+  }
+
+  focusMainWindow();
+}
+
+function setupDeepLinkProtocol() {
+  if (process.defaultApp && process.argv.length >= 2) {
+    app.setAsDefaultProtocolClient(protocolScheme, process.execPath, [
+      path.resolve(process.argv[1]),
+    ]);
+  } else {
+    app.setAsDefaultProtocolClient(protocolScheme);
+  }
+
+  app.on("second-instance", (_event, argv) => {
+    handleDeepLink(getDeepLinkUrl(argv));
+  });
+
+  app.on("open-url", (event, url) => {
+    event.preventDefault();
+    handleDeepLink(url);
+  });
+}
 
 function getAutoUpdater() {
   if (isDev) {
@@ -276,10 +321,19 @@ app.on("before-quit", () => {
   }
 });
 
-app.whenReady().then(boot);
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
-app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
-    void boot();
-  }
-});
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  setupDeepLinkProtocol();
+  handleDeepLink(getDeepLinkUrl(process.argv));
+
+  app.whenReady().then(boot);
+
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      void boot();
+    }
+  });
+}
