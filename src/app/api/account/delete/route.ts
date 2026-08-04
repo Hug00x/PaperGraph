@@ -13,6 +13,12 @@ type StoragePathRow = {
   storage_path: string | null;
 };
 
+type AccountDeletionResponse = {
+  ok?: boolean;
+  error?: string;
+  storagePaths?: unknown;
+};
+
 function getBearerToken(request: Request) {
   const authorizationHeader = request.headers.get("authorization") ?? "";
   const [scheme, token] = authorizationHeader.split(" ");
@@ -38,19 +44,63 @@ async function deleteLocalAssetMirror(storagePath: string) {
   await unlink(join(assetDirectory, storedName)).catch(() => undefined);
 }
 
+function getAccountDeletionFunctionUrl() {
+  const configuredUrl =
+    process.env.SUPABASE_DELETE_ACCOUNT_FUNCTION_URL ??
+    process.env.NEXT_PUBLIC_SUPABASE_DELETE_ACCOUNT_FUNCTION_URL;
+
+  if (configuredUrl) {
+    return configuredUrl;
+  }
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/+$/, "");
+
+  return supabaseUrl ? `${supabaseUrl}/functions/v1/delete-account` : null;
+}
+
+async function deleteAccountThroughEdgeFunction(accessToken: string) {
+  const functionUrl = getAccountDeletionFunctionUrl();
+
+  if (!functionUrl) {
+    return NextResponse.json(
+      { error: "A eliminação segura de contas ainda não está configurada no Supabase." },
+      { status: 500 },
+    );
+  }
+
+  const response = await fetch(functionUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: "{}",
+  });
+  const payload = (await response.json().catch(() => null)) as AccountDeletionResponse | null;
+
+  if (!response.ok || !payload?.ok) {
+    throw new Error(payload?.error ?? "Não foi possível eliminar a conta no Supabase.");
+  }
+
+  const storagePaths = Array.isArray(payload.storagePaths)
+    ? payload.storagePaths.filter((storagePath): storagePath is string => typeof storagePath === "string")
+    : [];
+
+  await Promise.all(storagePaths.map(deleteLocalAssetMirror)).catch(() => undefined);
+
+  return NextResponse.json({ ok: true });
+}
+
 export async function DELETE(request: Request) {
   try {
-    if (!process.env.SUPABASE_SERVICE_ROLE_KEY && !process.env.SUPABASE_SECRET_KEY) {
-      return NextResponse.json(
-        { error: "A chave privada do Supabase não está configurada no servidor." },
-        { status: 500 },
-      );
-    }
-
     const accessToken = getBearerToken(request);
 
     if (!accessToken) {
       return NextResponse.json({ error: "Sessão Supabase inválida." }, { status: 401 });
+    }
+
+    if (!process.env.SUPABASE_SERVICE_ROLE_KEY && !process.env.SUPABASE_SECRET_KEY) {
+      return deleteAccountThroughEdgeFunction(accessToken);
     }
 
     const userClient = getSupabaseServerStorageClient(accessToken);

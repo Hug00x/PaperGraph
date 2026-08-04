@@ -185,6 +185,14 @@ export function getFriendlyErrorMessage(
     );
   }
 
+  if (/delete-account|eliminação segura|função .*não está configurada|chave privada do supabase/i.test(normalizedMessage)) {
+    return text(
+      language,
+      "A eliminação de contas ainda não está ativa no Supabase. Configura a função delete-account e tenta novamente.",
+      "Account deletion is not active in Supabase yet. Configure the delete-account function and try again.",
+    );
+  }
+
   if (/workspace owners cannot|workspace owner cannot|owner role cannot|owner can only be changed/i.test(normalizedMessage)) {
     return text(
       language,

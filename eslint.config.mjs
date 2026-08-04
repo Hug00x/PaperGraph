@@ -12,6 +12,7 @@ const eslintConfig = defineConfig([
     "desktop-dist/**",
     "out/**",
     "build/**",
+    "supabase/functions/**",
     "next-env.d.ts",
   ]),
   {
