@@ -1176,6 +1176,13 @@ export function GraphPane({
               {graphRelationFilterTypes.map((relationType) => {
                 const relationCount = relations.filter((relation) => relation.relationType === relationType).length;
                 const isEnabled = activeRelationFilters.has(relationType);
+                const relationColor = relationType === "manual"
+                  ? "var(--graph-link-manual)"
+                  : relationType === "explicit"
+                    ? "var(--graph-link-explicit)"
+                    : relationType === "citation"
+                      ? "var(--graph-link-citation)"
+                      : "var(--graph-link-semantic)";
 
                 return (
                   <button
@@ -1198,9 +1205,8 @@ export function GraphPane({
                   >
                     <span className="flex min-w-0 items-center gap-2">
                       <span
-                        className={`h-2.5 w-2.5 rounded-full ${
-                          isEnabled ? "bg-[var(--accent)]" : "bg-[var(--muted)] opacity-35"
-                        }`}
+                        className={`h-2.5 w-2.5 rounded-full ${isEnabled ? "" : "opacity-35"}`}
+                        style={{ backgroundColor: relationColor }}
                       />
                       <span className="truncate text-sm font-semibold text-[var(--foreground)]">
                         {getRelationTypeLabel(relationType, language)}
