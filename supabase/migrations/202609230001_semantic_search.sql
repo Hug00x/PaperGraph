@@ -27,6 +27,16 @@ alter table public.articles
   add column if not exists embedding_model text,
   add column if not exists embedding_input_hash text;
 
+update public.articles set authors = '[]'::jsonb where authors is null;
+alter table public.articles alter column authors set default '[]'::jsonb;
+alter table public.articles alter column authors set not null;
+update public.articles set topics = '[]'::jsonb where topics is null;
+alter table public.articles alter column topics set default '[]'::jsonb;
+alter table public.articles alter column topics set not null;
+update public.articles set referenced_work_ids = '{}'::text[] where referenced_work_ids is null;
+alter table public.articles alter column referenced_work_ids set default '{}'::text[];
+alter table public.articles alter column referenced_work_ids set not null;
+
 alter table public.articles drop constraint if exists articles_embedding_state_check;
 alter table public.articles add constraint articles_embedding_state_check check (
   (embedding is null and embedding_model is null and embedding_input_hash is null) or

@@ -18,6 +18,7 @@
     "lint": "eslint",
     "embeddings:backfill": "node --experimental-strip-types --env-file=.env.local scripts/backfill-embeddings.mjs",
     "test:semantic": "node --experimental-strip-types --test tests/semantic.test.mjs",
+    "test:recommendations": "node --experimental-strip-types --test tests/recommendations.test.mjs",
     "runtime:prepare": "node scripts/fetch-ollama-runtime.mjs",
     "test:runtime": "node --test tests/ollama-runtime.test.cjs"
   },

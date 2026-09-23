@@ -218,7 +218,10 @@ class OllamaManager extends EventEmitter {
         if (Buffer.byteLength(body) > 1024 * 1024) throw new Error("request-too-large");
       }
       const data = JSON.parse(body);
-      if (typeof data.input !== "string" || !data.input.trim()) { res.writeHead(400); res.end('{}'); return; }
+      const inputs = Array.isArray(data.input) ? data.input : [data.input];
+      if (!inputs.length || inputs.length > 8 || inputs.some((text) => typeof text !== "string" || !text.trim() || text.length > 32000)) {
+        res.writeHead(400); res.end('{}'); return;
+      }
       const response = await this.request("/api/embed", { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: config.model, input: data.input, truncate: false }) }, 120000);
       res.writeHead(response.status); res.end(await response.text());

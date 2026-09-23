@@ -1,5 +1,11 @@
 @import "tailwindcss";
 
+.recommendations-panel { border-top: 1px solid var(--border); padding-top: 1rem; }
+.recommendation-item { padding: 1rem 0; border-bottom: 1px solid var(--border); }
+.recommendations-action { border: 1px solid var(--border); border-radius: 999px; padding: .4rem .7rem; font-size: .75rem; font-weight: 600; color: var(--accent); }
+.recommendations-action:hover { background: var(--surface-strong); }
+.recommendations-action:disabled { opacity: .45; cursor: not-allowed; }
+
 :root {
   --background: #0a0f14;
   --foreground: #e5edf6;

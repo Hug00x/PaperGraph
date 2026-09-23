@@ -1,4 +1,6 @@
 import { decodeImportedPdfText, importedPdfMetadata } from "./pdf-metadata.ts";
+import { openAlexClient } from "./openalex-client.ts";
+import { normalizeDoi, discoveredMetadata } from "./discovery/identity.ts";
 type AppLanguage = "en" | "pt";
 
 export type ArticleInput = {
@@ -17,7 +19,7 @@ export type AcademicRelation = {
   relationType: "citation" | "semantic";
 };
 
-type OpenAlexWork = {
+export type OpenAlexWork = {
   abstract_inverted_index?: Record<string, number[]> | null;
   doi?: string | null;
   display_name?: string | null;
@@ -51,15 +53,6 @@ function normalizeText(value: string) {
     .trim();
 }
 
-function normalizeDoi(value: string) {
-  return value
-    .trim()
-    .replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "")
-    .replace(/^doi:\s*/i, "")
-    .replace(/[)\].,;:]+$/, "")
-    .toLowerCase();
-}
-
 function extractDois(value: string) {
   const matches = value.match(/\b10\.\d{4,9}\/[-._;()/:a-z0-9]+\b/gi) ?? [];
   const dois = matches.map(normalizeDoi).filter(Boolean);
@@ -83,23 +76,24 @@ function extractArxivIds(value: string) {
   );
 }
 
-export function abstractFromInvertedIndex(index: Record<string, number[]> | null | undefined) {
-  if (!index) {
+export function abstractFromInvertedIndex(index: unknown) {
+  if (!index || typeof index !== "object" || Array.isArray(index)) {
     return "";
   }
 
   const words: Array<{ position: number; word: string }> = [];
 
-  Object.entries(index).forEach(([word, positions]) => {
-    positions.forEach((position) => {
-      words.push({ position, word });
+  Object.entries(index).slice(0, 16000).forEach(([word, positions]) => {
+    if (!Array.isArray(positions)) return;
+    positions.slice(0, 16000).forEach((position: unknown) => {
+      if (typeof position === "number" && Number.isInteger(position) && position >= 0 && position < 16000 && words.length < 16000) words.push({ position, word });
     });
   });
 
   return words
     .sort((firstWord, secondWord) => firstWord.position - secondWord.position)
     .map((item) => item.word)
-    .join(" ");
+    .join(" ").slice(0, 16000);
 }
 
 function getArticleDoi(article: ArticleInput) {
@@ -108,36 +102,8 @@ function getArticleDoi(article: ArticleInput) {
 
 }
 
-let requestQueue: Promise<unknown> = Promise.resolve();
-let nextRequestAt = 0;
-const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-async function requestOpenAlex(url: string) {
-  const target = new URL(url);
-  if (process.env.OPENALEX_API_KEY) target.searchParams.set("api_key", process.env.OPENALEX_API_KEY);
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const delay = nextRequestAt - Date.now();
-    if (delay > 5000) throw new Error("OpenAlex requests temporarily paused after rate limiting");
-    if (delay > 0) await wait(delay);
-    nextRequestAt = Date.now() + 350;
-    const response = await fetch(target, { signal: AbortSignal.timeout(15000) });
-    if (response.status === 429 || response.status === 503) {
-      const retry = response.headers.get("retry-after");
-      const retryMs = retry === null ? 1500 : /^\d+$/.test(retry)
-        ? Number(retry) * 1000 : Date.parse(retry) - Date.now();
-      nextRequestAt = Date.now() + Math.max(350, Number.isFinite(retryMs) ? retryMs : 1500);
-      if (attempt === 0) continue;
-    }
-    if (!response.ok && response.status !== 404) throw new Error(`OpenAlex request failed (${response.status})`);
-    return response;
-  }
-  throw new Error("OpenAlex unavailable");
-}
-
 function fetchOpenAlex(url: string) {
-  const result = requestQueue.then(() => requestOpenAlex(url));
-  requestQueue = result.catch(() => undefined);
-  return result;
+  return openAlexClient.fetch(url);
 }
 
 async function fetchOpenAlexWorkByDoi(doi: string) {
@@ -193,6 +159,11 @@ async function searchOpenAlexWorkByTitle(title: string) {
 }
 
 export async function resolveOpenAlexWork(article: ArticleInput) {
+  const discovered = discoveredMetadata(article.source);
+  if (discovered) return { id: discovered.externalId, title: discovered.title, doi: discovered.doi,
+    authorships: discovered.authors.map((author) => ({ author: { id: author.id, display_name: author.name } })),
+    publication_year: discovered.year ?? undefined, cited_by_count: discovered.citationCount,
+    topics: discovered.topics.map((topic) => ({ id: topic.id, display_name: topic.name })), referenced_works: discovered.references };
   const doi = getArticleDoi(article);
 
   if (doi) {

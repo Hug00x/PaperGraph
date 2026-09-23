@@ -12,8 +12,13 @@ import darkFilterIcon from "@/imagens/dark_filter.png";
 import lightFilterIcon from "@/imagens/white_filter.png";
 import { getFriendlyErrorMessage } from "@/lib/friendly-errors";
 import type { ArticlePosition, UnlinkedMention, WorkspaceArticle, WorkspaceRelation } from "@/lib/workspace-data";
+import { RecommendationsPanel } from "@/components/recommendations-panel";
+import type { RecommendedPaper } from "@/lib/academic/discovery/types";
 
 type GraphPaneProps = {
+  workspaceId: string;
+  accessToken: string;
+  onAddRecommendation: (paper: RecommendedPaper, signal: AbortSignal) => Promise<void>;
   activeArticle: WorkspaceArticle | null;
   articles: WorkspaceArticle[];
   language: AppLanguage;
@@ -183,6 +188,7 @@ export function GraphPane({
   onImportPdfArticle,
   onDeleteArticle,
   onRefreshAcademicRelations,
+  workspaceId, accessToken, onAddRecommendation,
 }: GraphPaneProps) {
   const isEnglish = language === "en";
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -1614,6 +1620,9 @@ export function GraphPane({
           ) : null}
 
           <div className="scrollbar-hidden mt-4 max-h-[22rem] space-y-3 overflow-y-auto overscroll-contain pr-1">
+            <RecommendationsPanel key={`${workspaceId}:${activeArticle.id}`} article={activeArticle}
+              workspaceId={workspaceId} accessToken={accessToken} language={language} articles={articles}
+              canEdit={canEdit} onAdd={onAddRecommendation} />
             {renderUnlinkedMentionGroup()}
             {renderRelationGroup(
               isEnglish ? "Outgoing" : "Saída",

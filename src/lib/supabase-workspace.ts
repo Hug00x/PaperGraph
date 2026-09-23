@@ -7,6 +7,7 @@ import {
   type WorkspaceSnapshot,
 } from "@/lib/workspace-data";
 import type { AppLanguage } from "@/lib/portuguese-labels";
+import { discoveredMetadata } from "./academic/discovery/identity";
 
 type ArticleStatus = "Draft" | "Review" | "Published";
 type RelationType = WorkspaceRelation["relationType"];
@@ -646,7 +647,9 @@ export async function loadWorkspaceSnapshotFromSupabase(
 }
 
 export async function saveWorkspaceArticles(supabase: SupabaseClient, workspaceId: string, articles: WorkspaceSnapshot["articles"]) {
-  const articleRows = articles.map((article) => ({
+  const articleRows = articles.map((article) => {
+    const discovered = discoveredMetadata(article.source);
+    return ({
     id: article.id,
     workspace_id: workspaceId,
     title: article.title,
@@ -656,7 +659,14 @@ export async function saveWorkspaceArticles(supabase: SupabaseClient, workspaceI
     source: article.source,
     tags: article.tags,
     updated_at: new Date().toISOString(),
-  }));
+    authors: discovered ? discovered.authors.map((a) => ({ id: a.id, display_name: a.name })) : [],
+    topics: discovered ? discovered.topics.map((t) => ({ id: t.id, display_name: t.name })) : [],
+    referenced_work_ids: discovered ? discovered.references : [],
+    ...(discovered ? { openalex_id: discovered.externalId, openalex_title: discovered.title,
+      abstract: discovered.abstract || null, doi: discovered.doi || null,
+      publication_year: discovered.year || null, cited_by_count: discovered.citationCount,
+    } : {}),
+  }); });
   if (articleRows.length) {
     const { error } = await supabase.from("articles").upsert(articleRows, { onConflict: "workspace_id,id" });
     assertSupabaseResult(error, "Could not save articles.");

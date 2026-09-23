@@ -6,6 +6,8 @@ import { ArticleViewerPane } from "@/components/article-viewer-pane";
 import { AuthLanding } from "@/components/auth-landing";
 import { EditorPane } from "@/components/editor-pane";
 import { GraphPane } from "@/components/graph-pane";
+import { articleIdentity, samePaper } from "@/lib/academic/discovery/identity";
+import type { RecommendedPaper } from "@/lib/academic/discovery/types";
 import deleteButtonImage from "@/imagens/Delete_button.png";
 import deleteButtonImageInverted from "@/imagens/Delete_button_inverted.png";
 import paperGraphLogoText from "@/imagens/PapergraghTexto.png";
@@ -2346,6 +2348,8 @@ export default function Home() {
   const authUserId = authUser?.id ?? null;
   const authUserEmail = authUser?.email ?? null;
   const accountWorkspaceId = accountWorkspace?.id ?? null;
+  const displayedWorkspaceIdRef = useRef(accountWorkspaceId);
+  useEffect(() => { displayedWorkspaceIdRef.current = accountWorkspaceId; }, [accountWorkspaceId]);
   const isWorkspaceSetupRequired = Boolean(authUser && !accountWorkspace);
   const currentPresenceArticle = activeTab === "editor" && !shouldUseArticleViewer ? selectedArticle : null;
   const currentEditorSelection =
@@ -2670,7 +2674,7 @@ export default function Home() {
     );
   }
 
-  function saveWorkspace(snapshot: WorkspaceSnapshot) {
+  function saveWorkspace(snapshot: WorkspaceSnapshot, throwOnError = false) {
     if (!canEditCurrentWorkspace) {
       setWorkspace(snapshot);
       setLoadError(null);
@@ -2695,7 +2699,7 @@ export default function Home() {
           );
         }
 
-        if (saveRequestId === saveRequestIdRef.current) {
+        if (saveRequestId === saveRequestIdRef.current && displayedWorkspaceIdRef.current === accountWorkspace?.id) {
           setWorkspace(snapshot);
           setLoadError(null);
         }
@@ -2708,6 +2712,7 @@ export default function Home() {
             }),
           );
         }
+        if (throwOnError) throw error;
       }
     };
 
@@ -4319,11 +4324,32 @@ export default function Home() {
       tags: Array.from(new Set([isEnglish ? "imported" : "importado", ...importedPdfDois, ...importedArxivDois])),
       source: createImportedPdfSource(uploadedPdfAsset, importedAcademicText, extractedPdf.metadata),
     };
+    await commitImportedArticle(importedArticle, uploadedPdfAsset);
+  }
+
+  async function addRecommendedArticle(paper: RecommendedPaper, signal: AbortSignal) {
+    if (!canEditCurrentWorkspace || !accountWorkspaceId || !authAccessToken || !activeGraphArticle) throw new Error("read-only");
+    if (currentArticles.some((article) => samePaper(paper, articleIdentity(article)))) return;
+    const response = await fetch("/api/recommendations", { method: "POST", signal,
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${authAccessToken}` },
+      body: JSON.stringify({ action: "prepare-add", workspaceId: accountWorkspaceId, articleId: activeGraphArticle.id, externalId: paper.externalId }) });
+    if (!response.ok) throw new Error("Could not prepare article import");
+    const payload = await response.json() as { existingId: string | null; article: WorkspaceArticle | null };
+    signal.throwIfAborted();
+    if (payload.existingId) return;
+    if (!payload.article) throw new Error("Missing article metadata");
+    await commitImportedArticle(payload.article, undefined, true, signal);
+  }
+
+  async function commitImportedArticle(importedArticle: WorkspaceArticle, uploadedPdfAsset?: WorkspaceImageAsset, keepSelection = false, signal?: AbortSignal) {
+    signal?.throwIfAborted();
+    if (displayedWorkspaceIdRef.current !== accountWorkspaceId) throw new Error("Workspace changed");
+    if (currentArticles.some((article) => article.id === importedArticle.id || (keepSelection && samePaper(articleIdentity(article), articleIdentity(importedArticle))))) return;
     const nextArticles = [...currentArticles, importedArticle];
-    const nextImageAssets = [
+    const nextImageAssets = uploadedPdfAsset ? [
       uploadedPdfAsset,
       ...currentImageAssets.filter((imageAsset) => imageAsset.id !== uploadedPdfAsset.id),
-    ];
+    ] : currentImageAssets;
     const nextArticlePositions = {
       ...currentArticlePositions,
       [importedArticle.id]: calculateNextArticlePosition(currentArticles),
@@ -4332,7 +4358,7 @@ export default function Home() {
     const nextSubmittedArticles = nextArticles.filter(isSubmittedArticle);
     const academicRefresh = await refreshAcademicRelations(nextSubmittedArticles, currentRelations);
     const snapshot: WorkspaceSnapshot = {
-      selectedArticleId: importedArticle.id,
+      selectedArticleId: keepSelection ? selectedArticleId : importedArticle.id,
       articles: nextArticles,
       relations: academicRefresh.relations,
       articlePositions: nextArticlePositions,
@@ -4341,15 +4367,18 @@ export default function Home() {
       articleVersions: nextArticleVersions,
     };
 
+    await saveWorkspace(snapshot, true);
+    if (displayedWorkspaceIdRef.current !== accountWorkspaceId) return;
     setWorkspace(snapshot);
     setAcademicRelationStatus(academicRefresh.status ?? null);
     setConnectionValidationError(academicRefresh.issue ?? null);
     setPendingEditorNavigation(null);
-    setSelectedArticleId(importedArticle.id);
-    rememberSelectedArticle(importedArticle.id);
-    selectGraphArticle(importedArticle.id);
-    activateTab("graph");
-    void saveWorkspace(snapshot);
+    if (!keepSelection) {
+      setSelectedArticleId(importedArticle.id);
+      rememberSelectedArticle(importedArticle.id);
+      selectGraphArticle(importedArticle.id);
+    }
+    if (!keepSelection) activateTab("graph");
   }
 
   function addImageAsset(imageAsset: WorkspaceImageAsset) {
@@ -4810,7 +4839,10 @@ export default function Home() {
           {activeTab === "graph" ? (
             <div className="relative flex min-h-0 flex-1 overflow-hidden">
               <GraphPane
-                key={submittedArticles.map((article) => article.id).join("|")}
+                key={accountWorkspaceId}
+                workspaceId={accountWorkspaceId ?? ""}
+                accessToken={authAccessToken ?? ""}
+                onAddRecommendation={addRecommendedArticle}
                 activeArticle={activeGraphArticle}
                 articles={submittedArticles}
                 language={appLanguage}
