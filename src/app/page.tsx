@@ -1,5 +1,6 @@
 "use client";
 
+import { extractPdfMetadata, titleFromPdfItems, type PdfMetadata, type PdfTextItem } from "@/lib/academic/pdf-metadata";
 import { ArticleLibrary } from "@/components/article-library";
 import { ArticleViewerPane } from "@/components/article-viewer-pane";
 import { AuthLanding } from "@/components/auth-landing";
@@ -36,6 +37,7 @@ import {
   renameWorkspaceInSupabase,
   revokeWorkspaceInviteInSupabase,
   saveWorkspaceSnapshotToSupabase,
+  saveWorkspaceArticles,
   transferWorkspaceOwnerInSupabase,
   updateWorkspaceMemberRoleInSupabase,
   type AccountWorkspace,
@@ -102,6 +104,22 @@ type ArticleSubmissionResult = {
   pdfBuffer?: ArrayBuffer;
   submitted: boolean;
 };
+type AcademicRelationDiagnostics = {
+  articleCount?: number;
+  citationRelationCount?: number;
+  doiArticleCount?: number;
+  openAlexArticleCount?: number;
+  semanticCandidateCount?: number;
+  semanticRelationCount?: number;
+  semanticThreshold?: number;
+  semanticTopScore?: number | null;
+};
+type AcademicRelationRefreshResult = {
+  diagnostics?: AcademicRelationDiagnostics | null;
+  issue?: string;
+  relations: WorkspaceRelation[];
+  status?: string;
+};
 type AuthMode = "sign-in" | "sign-up";
 type AppTheme = "dark" | "light";
 type UserProfileRow = {
@@ -161,6 +179,46 @@ function getAuthUserFallbackDisplayName(user: User | null) {
 
 function formatNotificationCount(count: number) {
   return count > 999 ? "999+" : String(count);
+}
+
+function isAcademicRelationDiagnostics(value: unknown): value is AcademicRelationDiagnostics {
+  return Boolean(value) && typeof value === "object";
+}
+
+function formatAcademicRelationStatus(
+  relations: WorkspaceRelation[],
+  diagnostics: AcademicRelationDiagnostics | null,
+  language: AppLanguage,
+) {
+  const isEnglish = language === "en";
+  const citationCount = relations.filter((relation) => relation.relationType === "citation").length;
+  const semanticCount = relations.filter((relation) => relation.relationType === "semantic").length;
+
+  if (!diagnostics) {
+    return isEnglish
+      ? `Academic scan finished: ${citationCount} citations, ${semanticCount} semantic links.`
+      : `Análise académica concluída: ${citationCount} citações, ${semanticCount} ligações semânticas.`;
+  }
+
+  const articleCount = diagnostics.articleCount ?? 0;
+  const doiArticleCount = diagnostics.doiArticleCount ?? 0;
+  const openAlexArticleCount = diagnostics.openAlexArticleCount ?? 0;
+  const topScore =
+    typeof diagnostics.semanticTopScore === "number"
+      ? `${Math.round(diagnostics.semanticTopScore * 100)}%`
+      : isEnglish
+        ? "none"
+        : "nenhum";
+
+  const minimum = typeof diagnostics.semanticThreshold === "number"
+    ? `${Number((diagnostics.semanticThreshold * 100).toFixed(2))}%`
+    : null;
+  const thresholdNote = minimum === null ? "" : isEnglish
+    ? ` Minimum for semantic links: ${minimum}.`
+    : ` Mínimo para ligações semânticas: ${minimum}.`;
+  return (isEnglish
+    ? `Academic scan: ${articleCount} articles, ${doiArticleCount} DOI, ${openAlexArticleCount} OpenAlex, ${citationCount} citations, ${semanticCount} semantic links. Top score: ${topScore}.`
+    : `Análise académica: ${articleCount} artigos, ${doiArticleCount} DOI, ${openAlexArticleCount} OpenAlex, ${citationCount} citações, ${semanticCount} ligações semânticas. Maior score: ${topScore}.`) + thresholdNote;
 }
 
 function NotificationBadge({ className = "", count }: { className?: string; count: number }) {
@@ -525,6 +583,10 @@ function HelpSection({ language }: { language: AppLanguage }) {
               body: "If an article mentions another article title without a wikilink, PaperGraph can suggest turning that mention into a real link.",
             },
             {
+              title: "Citations and semantic links",
+              body: "After submitting, PaperGraph can create citation links from OpenAlex and semantic links from embeddings automatically.",
+            },
+            {
               title: "Validation",
               body: "When submitting or resubmitting, PaperGraph checks whether wikilinks point to existing submitted articles.",
             },
@@ -663,6 +725,10 @@ function HelpSection({ language }: { language: AppLanguage }) {
             {
               title: "Menções não ligadas",
               body: "Se um artigo mencionar o título de outro artigo sem wikilink, o PaperGraph pode sugerir transformar essa menção numa ligação real.",
+            },
+            {
+              title: "Citações e semântica",
+              body: "Depois de submeter, o PaperGraph pode criar automaticamente ligações por citação via OpenAlex e por similaridade semântica via embeddings.",
             },
             {
               title: "Validação",
@@ -893,6 +959,18 @@ function normalizeLinkTarget(value: string) {
     .trim();
 }
 
+function extractArxivIdsFromText(value: string) {
+  const matches = value.match(/\b(?:arxiv:)?\d{4}\.\d{4,5}(?:v\d+)?\b/gi) ?? [];
+
+  return Array.from(
+    new Set(
+      matches
+        .map((match) => match.replace(/^arxiv:/i, "").replace(/v\d+$/i, "").toLowerCase())
+        .filter(Boolean),
+    ),
+  );
+}
+
 function parseWikilinkTarget(value: string) {
   return value.split("|")[0].split("#")[0].trim();
 }
@@ -930,6 +1008,17 @@ function getWikilinkRanges(source: string) {
   return ranges;
 }
 
+function stripLatexComments(source: string) {
+  return source
+    .split(/\r?\n/)
+    .map((line) => {
+      const commentIndex = line.search(/(?<!\\)%/);
+
+      return commentIndex >= 0 ? line.slice(0, commentIndex) : line;
+    })
+    .join("\n");
+}
+
 function isIndexInsideRanges(index: number, ranges: Array<{ start: number; end: number }>) {
   return ranges.some((range) => index >= range.start && index < range.end);
 }
@@ -948,13 +1037,14 @@ function findUnlinkedTitleMentions(source: string, targetTitle: string) {
     return [];
   }
 
-  const wikilinkRanges = getWikilinkRanges(source);
+  const searchableSource = stripLatexComments(source);
+  const wikilinkRanges = getWikilinkRanges(searchableSource);
   const titlePattern = new RegExp(
     `(?<![\\p{L}\\p{N}_])${escapeRegExp(targetTitle)}(?![\\p{L}\\p{N}_])`,
     "giu",
   );
 
-  return [...source.matchAll(titlePattern)].filter(
+  return [...searchableSource.matchAll(titlePattern)].filter(
     (match) => !isIndexInsideRanges(match.index, wikilinkRanges),
   );
 }
@@ -965,12 +1055,18 @@ function findUnlinkedMentions(
   ignoredMentionKeys: string[],
 ): UnlinkedMention[] {
   const relationPairs = new Set(
-    relations.map((relation) => relationPairKey(relation.fromArticleId, relation.toArticleId)),
+    relations
+      .filter((relation) => relation.relationType === "explicit" || relation.relationType === "manual")
+      .map((relation) => relationPairKey(relation.fromArticleId, relation.toArticleId)),
   );
   const ignoredMentionKeySet = new Set(ignoredMentionKeys);
   const mentions: UnlinkedMention[] = [];
 
   workspaceArticles.forEach((sourceArticle) => {
+    if (sourceArticle.source.includes("\\includepdf")) {
+      return;
+    }
+
     workspaceArticles.forEach((targetArticle) => {
       if (sourceArticle.id === targetArticle.id) {
         return;
@@ -1140,17 +1236,55 @@ function getSafePdfDownloadName(title: string) {
   return `${safeName}.pdf`;
 }
 
-function createImportedPdfSource(pdfAsset: WorkspaceImageAsset) {
+function encodeImportedPdfText(value: string) {
+  if (!value.trim()) {
+    return null;
+  }
+
+  return btoa(unescape(encodeURIComponent(value.trim().slice(0, 12000))));
+}
+
+async function extractPdfTextForAcademicRelations(pdfFile: File) {
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+    "pdfjs-dist/legacy/build/pdf.worker.min.mjs",
+    import.meta.url,
+  ).toString();
+
+  const loadingTask = pdfjs.getDocument({ data: new Uint8Array(await pdfFile.arrayBuffer()) });
+  const pdfDocument = await loadingTask.promise;
+  try {
+    const pageTexts: string[] = [];
+    let title: string | null = null;
+    for (let pageNumber = 1; pageNumber <= Math.min(pdfDocument.numPages, 3); pageNumber++) {
+      const page = await pdfDocument.getPage(pageNumber);
+      const content = await page.getTextContent();
+      const items = content.items.filter((item): item is PdfTextItem & typeof item => "str" in item);
+      if (pageNumber === 1) title = titleFromPdfItems(items);
+      pageTexts.push(items.map((item) => item.str + (item.hasEOL ? "\n" : " ")).join(""));
+    }
+    const text = pageTexts.join("\n\f\n").slice(0, 12000);
+    return { text, metadata: extractPdfMetadata(text, title) };
+  } finally {
+    await loadingTask.destroy();
+  }
+}
+
+function createImportedPdfSource(pdfAsset: WorkspaceImageAsset, academicText?: string, metadata?: PdfMetadata) {
+  const encodedAcademicText = encodeImportedPdfText(academicText ?? "");
+
   return [
     "\\documentclass[12pt]{article}",
     "\\usepackage{pdfpages}",
+    encodedAcademicText ? `% papergraph-import-text:${encodedAcademicText}` : "",
+    metadata ? `% papergraph-import-metadata:${btoa(unescape(encodeURIComponent(JSON.stringify(metadata))))}` : "",
     "\\begin{document}",
     "\\includepdf[",
     "    pages=-,",
     "    pagecommand={\\thispagestyle{empty}}",
     `]{papergraph-images/${pdfAsset.storedName}}`,
     "\\end{document}",
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 function createFallbackPositions(workspaceArticles: WorkspaceArticle[]) {
@@ -1255,9 +1389,13 @@ function rebuildExplicitRelations(
   workspaceArticles: WorkspaceArticle[],
   relations: WorkspaceRelation[],
 ) {
-  const manualRelations = relations.filter((relation) => relation.relationType === "manual");
-  const manualPairs = new Set(
-    manualRelations.map((relation) => relationPairKey(relation.fromArticleId, relation.toArticleId)),
+  const articleIds = new Set(workspaceArticles.map((article) => article.id));
+  const persistentRelations = relations.filter(
+    (relation) =>
+      relation.relationType !== "explicit" &&
+      relation.fromArticleId !== relation.toArticleId &&
+      articleIds.has(relation.fromArticleId) &&
+      articleIds.has(relation.toArticleId),
   );
   const explicitPairs = new Set<string>();
   const articleTitleIndex = createArticleTitleIndex(workspaceArticles);
@@ -1271,9 +1409,9 @@ function rebuildExplicitRelations(
         return;
       }
 
-      const pairKey = relationPairKey(sourceArticle.id, targetArticle.id);
+      const pairKey = `${sourceArticle.id}->${targetArticle.id}`;
 
-      if (manualPairs.has(pairKey) || explicitPairs.has(pairKey)) {
+      if (explicitPairs.has(pairKey)) {
         return;
       }
 
@@ -1289,7 +1427,54 @@ function rebuildExplicitRelations(
     });
   });
 
-  return [...manualRelations, ...explicitRelations];
+  return [...persistentRelations, ...explicitRelations];
+}
+
+function isAcademicRelation(relation: WorkspaceRelation) {
+  return relation.relationType === "citation" || relation.relationType === "semantic";
+}
+
+function academicRelationKey(relation: Pick<WorkspaceRelation, "fromArticleId" | "relationType" | "toArticleId">) {
+  return `${relation.relationType}:${relation.fromArticleId}->${relation.toArticleId}`;
+}
+
+function mergeAcademicRelations(
+  baseRelations: WorkspaceRelation[],
+  academicRelations: WorkspaceRelation[],
+  workspaceArticles: WorkspaceArticle[],
+) {
+  const articleIds = new Set(workspaceArticles.map((article) => article.id));
+  const existingRelations = baseRelations.filter(
+    (relation) =>
+      !isAcademicRelation(relation) &&
+      relation.fromArticleId !== relation.toArticleId &&
+      articleIds.has(relation.fromArticleId) &&
+      articleIds.has(relation.toArticleId),
+  );
+  const nextAcademicRelations: WorkspaceRelation[] = [];
+  const seenAcademicKeys = new Set<string>();
+
+  academicRelations.forEach((relation) => {
+    if (
+      !isAcademicRelation(relation) ||
+      relation.fromArticleId === relation.toArticleId ||
+      !articleIds.has(relation.fromArticleId) ||
+      !articleIds.has(relation.toArticleId)
+    ) {
+      return;
+    }
+
+    const key = academicRelationKey(relation);
+
+    if (seenAcademicKeys.has(key)) {
+      return;
+    }
+
+    seenAcademicKeys.add(key);
+    nextAcademicRelations.push(relation);
+  });
+
+  return [...existingRelations, ...nextAcademicRelations];
 }
 
 function mergeArticlePositions(
@@ -1348,6 +1533,8 @@ export default function Home() {
   const [appDialog, setAppDialog] = useState<AppDialogState | null>(null);
   const [appDialogValue, setAppDialogValue] = useState("");
   const [isArticleSubmissionRunning, setIsArticleSubmissionRunning] = useState(false);
+  const [isAcademicRelationsRunning, setIsAcademicRelationsRunning] = useState(false);
+  const [academicRelationStatus, setAcademicRelationStatus] = useState<string | null>(null);
   const [connectionValidationError, setConnectionValidationError] = useState<string | null>(null);
   const [dismissedUnlinkedToastKey, setDismissedUnlinkedToastKey] = useState<string | null>(null);
   const [authMode, setAuthMode] = useState<AuthMode>("sign-in");
@@ -1439,6 +1626,7 @@ export default function Home() {
 
   useEffect(() => {
     window.localStorage.setItem("papergraph-language", appLanguage);
+    window.dispatchEvent(new Event("papergraph-language-changed"));
   }, [appLanguage]);
 
   useEffect(() => {
@@ -2427,7 +2615,7 @@ export default function Home() {
       case "help":
         return "Como o PaperGraph funciona";
       case "account":
-        return "Sessão e sincronização futura";
+        return "Perfil e sessão";
     }
   }
 
@@ -3348,7 +3536,7 @@ export default function Home() {
     void saveWorkspace(snapshot);
   }
 
-  function updateArticleMetadata(nextArticle: {
+  async function updateArticleMetadata(nextArticle: {
     articleId: string;
     status: Exclude<WorkspaceArticle["status"], "Draft">;
     tags: string[];
@@ -3377,7 +3565,8 @@ export default function Home() {
       article.id === updatedArticle.id ? updatedArticle : article,
     );
     const nextSubmittedArticles = nextArticles.filter(isSubmittedArticle);
-    const nextRelations = rebuildExplicitRelations(nextSubmittedArticles, currentRelations);
+    const academicRefresh = await refreshAcademicRelations(nextSubmittedArticles, currentRelations);
+    const nextRelations = academicRefresh.relations;
     const nextArticleVersions = addArticleVersion(currentArticleVersions, updatedArticle);
     const snapshot: WorkspaceSnapshot = {
       selectedArticleId: updatedArticle.id,
@@ -3390,7 +3579,8 @@ export default function Home() {
     };
 
     setWorkspace(snapshot);
-    setConnectionValidationError(null);
+    setAcademicRelationStatus(academicRefresh.status ?? null);
+    setConnectionValidationError(academicRefresh.issue ?? null);
     setSelectedArticleId(updatedArticle.id);
     rememberSelectedArticle(updatedArticle.id);
     selectGraphArticle(updatedArticle.id);
@@ -3464,6 +3654,120 @@ export default function Home() {
     }
 
     return response.arrayBuffer();
+  }
+
+  async function refreshAcademicRelations(
+    nextSubmittedArticles: WorkspaceArticle[],
+    baseRelations: WorkspaceRelation[],
+  ): Promise<AcademicRelationRefreshResult> {
+    const rebuiltRelations = rebuildExplicitRelations(nextSubmittedArticles, baseRelations);
+
+    if (nextSubmittedArticles.length === 0) {
+      return {
+        relations: mergeAcademicRelations(rebuiltRelations, [], nextSubmittedArticles),
+        status: isEnglish
+          ? "No submitted articles to scan."
+          : "Não existem artigos submetidos para analisar.",
+      };
+    }
+
+    if (!authAccessToken || !supabase || !accountWorkspaceId) {
+      const issue = isEnglish
+        ? "Academic relations need an active Supabase session."
+        : "As relações académicas precisam de uma sessão Supabase ativa.";
+
+      return {
+        issue: isEnglish
+          ? "Academic relations need an active Supabase session."
+          : "As relações académicas precisam de uma sessão Supabase ativa.",
+        relations: mergeAcademicRelations(rebuiltRelations, [], nextSubmittedArticles),
+        status: issue,
+      };
+    }
+
+    setIsAcademicRelationsRunning(true);
+
+    try {
+      await saveQueueRef.current;
+      await saveWorkspaceArticles(supabase, accountWorkspaceId, nextSubmittedArticles);
+      const response = await fetch("/api/academic-relations", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${authAccessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          articleIds: nextSubmittedArticles.map((article) => article.id),
+          language: appLanguage,
+          workspaceId: accountWorkspaceId,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          await getFriendlyResponseError(response, appLanguage, {
+            context: "workspace",
+            fallback: isEnglish
+              ? "Could not update citation and semantic links."
+              : "Não foi possível atualizar ligações por citação e semântica.",
+          }),
+        );
+      }
+
+      const payload = (await response.json()) as {
+        diagnostics?: unknown;
+        warnings?: string[];
+        relations?: WorkspaceRelation[];
+      };
+      const academicRelations = Array.isArray(payload.relations) ? payload.relations : [];
+      const diagnostics = isAcademicRelationDiagnostics(payload.diagnostics) ? payload.diagnostics : null;
+      const nextRelations = mergeAcademicRelations(rebuiltRelations, academicRelations, nextSubmittedArticles);
+
+      return {
+        diagnostics,
+        relations: nextRelations,
+        issue: payload.warnings?.length ? payload.warnings.map((warning) => getFriendlyErrorMessage(warning, appLanguage)).join(" ") : undefined,
+        status: formatAcademicRelationStatus(academicRelations, diagnostics, appLanguage),
+      };
+    } catch (error) {
+      const issue = getFriendlyErrorMessage(error, appLanguage, {
+        context: "workspace",
+        fallback: isEnglish
+          ? "Could not update citation and semantic links."
+          : "Não foi possível atualizar ligações por citação e semântica.",
+      });
+
+      return {
+        issue,
+        relations: rebuiltRelations,
+        status: issue,
+      };
+    } finally {
+      setIsAcademicRelationsRunning(false);
+    }
+  }
+
+  async function refreshCurrentWorkspaceAcademicRelations() {
+    if (!canEditCurrentWorkspace) {
+      showReadOnlyWorkspaceError();
+      return;
+    }
+
+    const academicRefresh = await refreshAcademicRelations(submittedArticles, currentRelations);
+    const snapshot: WorkspaceSnapshot = {
+      selectedArticleId,
+      articles: currentArticles,
+      relations: academicRefresh.relations,
+      articlePositions: currentArticlePositions,
+      ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
+      imageAssets: currentImageAssets,
+      articleVersions: currentArticleVersions,
+    };
+
+    setWorkspace(snapshot);
+    setAcademicRelationStatus(academicRefresh.status ?? null);
+    setConnectionValidationError(academicRefresh.issue ?? null);
+    void saveWorkspace(snapshot);
   }
 
   async function submitArticle(
@@ -3578,7 +3882,8 @@ export default function Home() {
       setIsArticleSubmissionRunning(false);
     }
 
-    const nextRelations = rebuildExplicitRelations(nextSubmittedArticles, currentRelations);
+    const academicRefresh = await refreshAcademicRelations(nextSubmittedArticles, currentRelations);
+    const nextRelations = academicRefresh.relations;
     const nextUnlinkedMentions = findUnlinkedMentions(
       nextSubmittedArticles,
       nextRelations,
@@ -3604,7 +3909,8 @@ export default function Home() {
     };
 
     setWorkspace(snapshot);
-    setConnectionValidationError(null);
+    setAcademicRelationStatus(academicRefresh.status ?? null);
+    setConnectionValidationError(academicRefresh.issue ?? null);
     setPendingEditorResubmission(null);
     setRestoredEditorVersion(null);
     setSelectedArticleId(submittedArticle.id);
@@ -3825,11 +4131,16 @@ export default function Home() {
       return;
     }
 
-    const relationPair = relationPairKey(fromArticleId, toArticleId);
+    const relationPair =
+      relationType === "manual"
+        ? relationPairKey(fromArticleId, toArticleId)
+        : `${fromArticleId}->${toArticleId}`;
     const removedRelation = currentRelations.find(
       (relation) =>
-        relation.relationType === "manual" &&
-        relationPairKey(relation.fromArticleId, relation.toArticleId) === relationPair,
+        relation.relationType === relationType &&
+        (relationType === "manual"
+          ? relationPairKey(relation.fromArticleId, relation.toArticleId) === relationPair
+          : `${relation.fromArticleId}->${relation.toArticleId}` === relationPair),
     );
 
     if (!removedRelation) {
@@ -3838,8 +4149,10 @@ export default function Home() {
 
     const nextRelations = currentRelations.filter(
       (relation) =>
-        relation.relationType !== "manual" ||
-        relationPairKey(relation.fromArticleId, relation.toArticleId) !== relationPair,
+        relation.relationType !== relationType ||
+        (relationType === "manual"
+          ? relationPairKey(relation.fromArticleId, relation.toArticleId) !== relationPair
+          : `${relation.fromArticleId}->${relation.toArticleId}` !== relationPair),
     );
 
     const snapshot: WorkspaceSnapshot = {
@@ -3960,7 +4273,15 @@ export default function Home() {
     }
 
     const importedArticleId = createBrowserUuid();
-    const importedArticleTitle = getTitleFromPdfFileName(pdfFile.name, appLanguage);
+    const extractedPdf = await extractPdfTextForAcademicRelations(pdfFile).catch(() => ({
+      text: "", metadata: { title: null, doi: null, abstract: null } as PdfMetadata,
+    }));
+    const importedArticleTitle = extractedPdf.metadata.title ?? getTitleFromPdfFileName(pdfFile.name, appLanguage);
+    const importedAcademicText = extractedPdf.text;
+    const importedPdfDois = extractedPdf.metadata.doi ? [extractedPdf.metadata.doi] : [];
+    const importedArxivDois = extractArxivIdsFromText(`${pdfFile.name}\n${importedArticleTitle}\n${importedAcademicText.split("\f")[0]}`).map(
+      (arxivId) => `10.48550/arXiv.${arxivId}`,
+    );
     const formData = new FormData();
 
     formData.append("asset", pdfFile);
@@ -3995,8 +4316,8 @@ export default function Home() {
       author: "PaperGraph",
       status: "Published",
       updatedAt: "agora",
-      tags: [isEnglish ? "imported" : "importado"],
-      source: createImportedPdfSource(uploadedPdfAsset),
+      tags: Array.from(new Set([isEnglish ? "imported" : "importado", ...importedPdfDois, ...importedArxivDois])),
+      source: createImportedPdfSource(uploadedPdfAsset, importedAcademicText, extractedPdf.metadata),
     };
     const nextArticles = [...currentArticles, importedArticle];
     const nextImageAssets = [
@@ -4008,10 +4329,12 @@ export default function Home() {
       [importedArticle.id]: calculateNextArticlePosition(currentArticles),
     };
     const nextArticleVersions = addArticleVersion(currentArticleVersions, importedArticle);
+    const nextSubmittedArticles = nextArticles.filter(isSubmittedArticle);
+    const academicRefresh = await refreshAcademicRelations(nextSubmittedArticles, currentRelations);
     const snapshot: WorkspaceSnapshot = {
       selectedArticleId: importedArticle.id,
       articles: nextArticles,
-      relations: currentRelations,
+      relations: academicRefresh.relations,
       articlePositions: nextArticlePositions,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: nextImageAssets,
@@ -4019,7 +4342,8 @@ export default function Home() {
     };
 
     setWorkspace(snapshot);
-    setConnectionValidationError(null);
+    setAcademicRelationStatus(academicRefresh.status ?? null);
+    setConnectionValidationError(academicRefresh.issue ?? null);
     setPendingEditorNavigation(null);
     setSelectedArticleId(importedArticle.id);
     rememberSelectedArticle(importedArticle.id);
@@ -4172,13 +4496,12 @@ export default function Home() {
 
     const nextArticles = currentArticles.filter((article) => article.id !== articleId);
     const nextSubmittedArticles = nextArticles.filter(isSubmittedArticle);
-    const nextManualRelations = currentRelations.filter(
+    const nextPersistentRelations = currentRelations.filter(
       (relation) =>
-        relation.relationType === "manual" &&
         relation.fromArticleId !== articleId &&
         relation.toArticleId !== articleId,
     );
-    const nextRelations = rebuildExplicitRelations(nextSubmittedArticles, nextManualRelations);
+    const nextRelations = rebuildExplicitRelations(nextSubmittedArticles, nextPersistentRelations);
     const nextArticlePositions = Object.fromEntries(
       Object.entries(currentArticlePositions).filter(([currentArticleId]) => currentArticleId !== articleId),
     ) as Record<string, ArticlePosition>;
@@ -4440,6 +4763,7 @@ export default function Home() {
                   onSaveArticle={updateArticleDetails}
                   onSubmitArticle={submitArticle}
                   onRestoreArticleVersion={restoreArticleVersion}
+                  isAcademicRelationsRunning={isAcademicRelationsRunning}
                   isSubmissionRunning={isArticleSubmissionRunning}
                   submissionIssue={connectionValidationError}
                   language={appLanguage}
@@ -4495,6 +4819,8 @@ export default function Home() {
                 articlePositions={currentArticlePositions}
                 articlePresenceByArticleId={workspacePresenceByArticleId}
                 canEdit={canEditCurrentWorkspace}
+                academicRelationStatus={academicRelationStatus}
+                isAcademicRelationsRunning={isAcademicRelationsRunning}
                 onSelectArticle={updateGraphSelectedArticle}
                 onArticlePositionsChange={updateArticlePositions}
                 onCreateRelation={(fromArticleId, toArticleId) => {
@@ -4508,6 +4834,7 @@ export default function Home() {
                 onExportArticlePdf={exportArticlePdf}
                 onImportPdfArticle={importPdfArticle}
                 onDeleteArticle={deleteArticle}
+                onRefreshAcademicRelations={refreshCurrentWorkspaceAcademicRelations}
               />
             </div>
           ) : null}

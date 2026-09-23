@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import type { CSSProperties } from "react";
 import "./globals.css";
+import { SemanticRuntimeStatus } from "@/components/semantic-runtime-status";
 
 const fontVariables = {
   "--font-space-grotesk":
@@ -26,7 +27,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="pt-PT" className="h-full antialiased" style={fontVariables}>
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">{children}<SemanticRuntimeStatus /></body>
     </html>
   );
 }

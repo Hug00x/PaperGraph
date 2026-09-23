@@ -1,4 +1,5 @@
-const { app, BrowserWindow, dialog, shell } = require("electron");
+const { app, BrowserWindow, dialog, shell, ipcMain } = require("electron");
+const { OllamaManager } = require("./ollama-manager.cjs");
 const { spawn } = require("node:child_process");
 const { createWriteStream, existsSync } = require("node:fs");
 const { mkdir } = require("node:fs/promises");
@@ -7,9 +8,13 @@ const path = require("node:path");
 
 let mainWindow = null;
 let nextServerProcess = null;
+let embeddingRuntime = null;
+let embeddingEnvironment = {};
+let trustedAppOrigin = null;
+let quitFinished = false;
+let quitting = false;
 
 const isDev = !app.isPackaged;
-const devServerUrl = process.env.ELECTRON_START_URL || "http://localhost:3000";
 const protocolScheme = "papergraph";
 
 function getDeepLinkUrl(argv) {
@@ -75,6 +80,7 @@ function getIconPath() {
 }
 
 function createWindow(appUrl) {
+  trustedAppOrigin = new URL(appUrl).origin;
   mainWindow = new BrowserWindow({
     width: 1480,
     height: 980,
@@ -88,16 +94,22 @@ function createWindow(appUrl) {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      preload: path.join(__dirname, "preload.cjs"),
     },
   });
 
   mainWindow.once("ready-to-show", () => {
     mainWindow.show();
+    void embeddingRuntime.start();
+  });
+
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    if (new URL(url).origin !== trustedAppOrigin) { event.preventDefault(); void shell.openExternal(url); }
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith("http://127.0.0.1:") || url.startsWith("http://localhost:")) {
-      return { action: "allow" };
+      return { action: "deny" };
     }
 
     void shell.openExternal(url);
@@ -147,7 +159,7 @@ async function waitForServer(url, getStartupError, timeoutMs = 90000) {
     }
 
     try {
-      const response = await fetch(url, { method: "HEAD" });
+      const response = await fetch(url, { method: "HEAD", signal: AbortSignal.timeout(2000) });
 
       if (response.ok || response.status < 500) {
         return;
@@ -163,8 +175,8 @@ async function waitForServer(url, getStartupError, timeoutMs = 90000) {
 }
 
 async function startPackagedNextServer() {
-  const serverDirectory = path.join(process.resourcesPath, "server");
-  const serverFile = path.join(serverDirectory, "server.js");
+  const serverDirectory = isDev ? app.getAppPath() : path.join(process.resourcesPath, "server");
+  const serverFile = isDev ? path.join(serverDirectory, "node_modules/next/dist/bin/next") : path.join(serverDirectory, "server.js");
   const tectonicPath = path.join(
     process.resourcesPath,
     "app.asar.unpacked",
@@ -192,13 +204,16 @@ async function startPackagedNextServer() {
 
   serverLogStream.write(`\n[${new Date().toISOString()}] Starting PaperGraph server on ${appUrl}\n`);
 
-  nextServerProcess = spawn(process.execPath, [serverFile], {
+  const serverEnvironment = { ...process.env };
+  for (const key of ["SUPABASE_SECRET_KEY", "SUPABASE_SERVICE_ROLE_KEY", "OPENAI_API_KEY", "PAPERGRAPH_OPENAI_API_KEY"]) delete serverEnvironment[key];
+  nextServerProcess = spawn(process.execPath, isDev ? [serverFile, "dev", "--hostname", "127.0.0.1", "--port", String(port)] : [serverFile], {
     cwd: serverDirectory,
     env: {
-      ...process.env,
+      ...serverEnvironment,
+      ...embeddingEnvironment,
       ELECTRON_RUN_AS_NODE: "1",
       HOSTNAME: "127.0.0.1",
-      NODE_ENV: "production",
+      NODE_ENV: isDev ? "development" : "production",
       PAPERGRAPH_DATA_DIR: dataDirectory,
       PAPERGRAPH_TECTONIC_PATH: tectonicPath,
       PORT: String(port),
@@ -227,7 +242,7 @@ async function startPackagedNextServer() {
       );
     }
 
-    if (code !== 0 && mainWindow && !mainWindow.isDestroyed()) {
+    if (!quitting && code !== 0 && mainWindow && !mainWindow.isDestroyed()) {
       dialog.showErrorBox(
         "PaperGraph",
         "O servidor local da app fechou inesperadamente. Fecha e volta a abrir o PaperGraph.",
@@ -296,7 +311,15 @@ function setupAutoUpdates() {
 
 async function boot() {
   try {
-    const appUrl = isDev ? devServerUrl : await startPackagedNextServer();
+    embeddingRuntime = new OllamaManager({
+      runtimeDirectory: isDev ? path.join(app.getAppPath(), "build/ollama") : path.join(process.resourcesPath, "ollama"),
+      dataDirectory: path.join(process.env.LOCALAPPDATA || app.getPath("userData"), "PaperGraph", "ollama"),
+    });
+    embeddingEnvironment = await embeddingRuntime.prepare();
+    embeddingRuntime.on("state", (state) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("semantic-runtime:changed", state);
+    });
+    const appUrl = await startPackagedNextServer();
 
     createWindow(appUrl);
     setupAutoUpdates();
@@ -315,11 +338,36 @@ app.on("window-all-closed", () => {
   }
 });
 
-app.on("before-quit", () => {
-  if (nextServerProcess && !nextServerProcess.killed) {
-    nextServerProcess.kill();
-  }
+app.on("before-quit", (event) => {
+  if (quitFinished) return;
+  event.preventDefault();
+  if (quitting) return;
+  quitting = true;
+  void (async () => {
+    await embeddingRuntime?.stop().catch(() => {});
+    if (nextServerProcess && nextServerProcess.exitCode === null) {
+      if (process.platform === "win32") {
+        await new Promise((resolve) => {
+          const killer = spawn(path.join(process.env.SystemRoot || "C:\\Windows", "System32/taskkill.exe"),
+            ["/PID", String(nextServerProcess.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+          const timeout = setTimeout(resolve, 10000);
+          const done = () => { clearTimeout(timeout); resolve(); };
+          killer.once("exit", done); killer.once("error", done);
+        });
+      } else nextServerProcess.kill();
+    }
+    quitFinished = true;
+    app.quit();
+  })();
 });
+
+function validateSender(event) {
+  if (!mainWindow || event.sender !== mainWindow.webContents ||
+      event.senderFrame !== mainWindow.webContents.mainFrame ||
+      new URL(event.senderFrame.url).origin !== trustedAppOrigin) throw new Error("Invalid runtime IPC sender");
+}
+ipcMain.handle("semantic-runtime:state", (event) => { validateSender(event); return embeddingRuntime.state; });
+ipcMain.handle("semantic-runtime:retry", (event) => { validateSender(event); void embeddingRuntime.start(); return embeddingRuntime.state; });
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 

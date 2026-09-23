@@ -12,11 +12,13 @@ const eslintConfig = defineConfig([
     "desktop-dist/**",
     "out/**",
     "build/**",
+    ".utmp/**",
+    "Microsoft/**",
     "supabase/functions/**",
     "next-env.d.ts",
   ]),
   {
-    files: ["electron/**/*.cjs", "scripts/**/*.cjs"],
+    files: ["electron/**/*.cjs", "scripts/**/*.cjs", "tests/**/*.cjs"],
     rules: {
       "@typescript-eslint/no-require-imports": "off",
     },

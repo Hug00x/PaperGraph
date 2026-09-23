@@ -30,7 +30,7 @@ export type WorkspaceRelation = {
   toArticleId: string;
   note: string;
   createdAt: string;
-  relationType: "auto" | "explicit" | "manual" | "suggested";
+  relationType: "citation" | "explicit" | "manual" | "semantic";
 };
 
 export type UnlinkedMention = {

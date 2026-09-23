@@ -8,14 +8,18 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "desktop:dev": "electron .",
+    "desktop:dev": "npm run runtime:prepare && electron .",
     "desktop:clean": "node scripts/clean-desktop-dist.mjs",
-    "desktop:prepare": "node scripts/prepare-electron.mjs",
+    "desktop:prepare": "npm run runtime:prepare && node scripts/prepare-electron.mjs",
     "desktop:dir": "npm run desktop:clean && npm run build && npm run desktop:prepare && electron-builder --dir",
     "desktop:build": "npm run desktop:clean && npm run build && npm run desktop:prepare && electron-builder --win nsis",
     "desktop:publish": "npm run desktop:clean && npm run build && npm run desktop:prepare && electron-builder --win nsis --publish always",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "embeddings:backfill": "node --experimental-strip-types --env-file=.env.local scripts/backfill-embeddings.mjs",
+    "test:semantic": "node --experimental-strip-types --test tests/semantic.test.mjs",
+    "runtime:prepare": "node scripts/fetch-ollama-runtime.mjs",
+    "test:runtime": "node --test tests/ollama-runtime.test.cjs"
   },
   "build": {
     "appId": "com.papergraph.desktop",
@@ -31,12 +35,20 @@
       "package.json"
     ],
     "asarUnpack": [
+      "electron/ollama-guardian.ps1",
       "node_modules/@node-latex-compiler/bin-win32-x64/**/*"
     ],
     "extraResources": [
       {
         "from": ".next/standalone",
         "to": "server",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "build/ollama",
+        "to": "ollama",
         "filter": [
           "**/*"
         ]
@@ -67,7 +79,8 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "PaperGraph"
+      "shortcutName": "PaperGraph",
+      "deleteAppDataOnUninstall": false
     },
     "publish": [
       {

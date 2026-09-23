@@ -193,6 +193,34 @@ export function getFriendlyErrorMessage(
     );
   }
 
+  if (/embedding service unavailable/i.test(normalizedMessage)) {
+    return text(language,
+      "O motor de pesquisa semântica está indisponível. Tenta novamente na preparação da pesquisa semântica.",
+      "The semantic search engine is unavailable. Retry from semantic search setup.");
+  }
+
+  if (/semantic search is being prepared/i.test(normalizedMessage)) {
+    return text(language, "A pesquisa semântica está a ser preparada. O artigo foi guardado; podes recalcular as ligações quando estiver pronta.",
+      "Semantic search is being prepared. Your article was saved; recalculate links when it is ready.");
+  }
+
+  if (/openalex metadata unavailable/i.test(normalizedMessage)) {
+    return text(language, "OpenAlex indisponível; foram usados o título e abstract guardados.",
+      "OpenAlex unavailable; saved title and abstract were used.");
+  }
+
+  if (/abstract unavailable/i.test(normalizedMessage)) {
+    return text(language,
+      "Não foi possível extrair o abstract deste PDF; a comparação usa apenas o título.",
+      "Could not extract an abstract from this PDF; similarity uses only the title.");
+  }
+
+  if (/academic-relations|academic relations|semantic search|citation and semantic|semantic links|embedding/i.test(normalizedMessage)) {
+    return text(language,
+      "Não foi possível atualizar todas as ligações académicas. Confirma a ligação à Internet e o estado da pesquisa semântica.",
+      "Could not update all academic links. Check your Internet connection and semantic search status.");
+  }
+
   if (/workspace owners cannot|workspace owner cannot|owner role cannot|owner can only be changed/i.test(normalizedMessage)) {
     return text(
       language,

@@ -99,10 +99,21 @@ create table if not exists public.relations (
   workspace_id uuid not null references public.workspaces (id) on delete cascade,
   from_article_id text not null,
   to_article_id text not null,
-  relation_type text not null default 'manual' check (relation_type in ('auto', 'explicit', 'manual', 'suggested')),
+  relation_type text not null default 'manual' check (relation_type in ('citation', 'explicit', 'manual', 'semantic')),
   note text,
   created_at timestamptz not null default now()
 );
+
+update public.relations
+set relation_type = 'semantic'
+where relation_type in ('auto', 'suggested');
+
+alter table public.relations
+drop constraint if exists relations_relation_type_check;
+
+alter table public.relations
+add constraint relations_relation_type_check
+check (relation_type in ('citation', 'explicit', 'manual', 'semantic'));
 
 create table if not exists public.article_positions (
   workspace_id uuid not null references public.workspaces (id) on delete cascade,

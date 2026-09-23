@@ -7,6 +7,9 @@ import {
   getRelationNoteLabel,
   type AppLanguage,
 } from "@/lib/portuguese-labels";
+import Image from "next/image";
+import darkFilterIcon from "@/imagens/dark_filter.png";
+import lightFilterIcon from "@/imagens/white_filter.png";
 import { getFriendlyErrorMessage } from "@/lib/friendly-errors";
 import type { ArticlePosition, UnlinkedMention, WorkspaceArticle, WorkspaceRelation } from "@/lib/workspace-data";
 
@@ -26,6 +29,8 @@ type GraphPaneProps = {
     }>
   >;
   canEdit: boolean;
+  academicRelationStatus?: string | null;
+  isAcademicRelationsRunning?: boolean;
   onSelectArticle: (articleId: string | null) => void;
   onArticlePositionsChange: (positions: Record<string, ArticlePosition>) => void;
   onCreateRelation: (fromArticleId: string, toArticleId: string) => void;
@@ -41,12 +46,22 @@ type GraphPaneProps = {
   onExportArticlePdf: (articleId: string) => void | Promise<void>;
   onImportPdfArticle: (file: File) => void | Promise<void>;
   onDeleteArticle: (articleId: string) => void | Promise<void>;
+  onRefreshAcademicRelations?: () => void | Promise<void>;
 };
 
 type ArticleRelationEntry = {
   relation: WorkspaceRelation;
   article: WorkspaceArticle;
 };
+
+const graphRelationFilterTypes = ["manual", "explicit", "citation", "semantic"] as const;
+type GraphRelationFilterType = (typeof graphRelationFilterTypes)[number];
+
+function isGraphRelationFilterType(
+  relationType: WorkspaceRelation["relationType"],
+): relationType is GraphRelationFilterType {
+  return graphRelationFilterTypes.includes(relationType as GraphRelationFilterType);
+}
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
@@ -85,10 +100,10 @@ function getRelationTypeLabel(relationType: WorkspaceRelation["relationType"], l
       return "Manual";
     case "explicit":
       return "Wikilink";
-    case "auto":
-      return language === "en" ? "Automatic" : "Automática";
-    case "suggested":
-      return language === "en" ? "Suggestion" : "Sugestão";
+    case "citation":
+      return language === "en" ? "Citation" : "Cita\u00e7\u00e3o";
+    case "semantic":
+      return language === "en" ? "Semantic" : "Sem\u00e2ntica";
   }
 }
 
@@ -99,6 +114,14 @@ function getRelationBadgeClass(relationType: WorkspaceRelation["relationType"]) 
 
   if (relationType === "explicit") {
     return "border-white/20 bg-white/10 text-white/80";
+  }
+
+  if (relationType === "citation") {
+    return "border-emerald-200/30 bg-emerald-300/10 text-emerald-100";
+  }
+
+  if (relationType === "semantic") {
+    return "border-violet-200/30 bg-violet-300/10 text-violet-100";
   }
 
   return "border-amber-200/25 bg-amber-300/10 text-amber-100";
@@ -146,6 +169,8 @@ export function GraphPane({
   articlePositions,
   articlePresenceByArticleId = {},
   canEdit,
+  academicRelationStatus = null,
+  isAcademicRelationsRunning = false,
   onSelectArticle,
   onArticlePositionsChange,
   onCreateRelation,
@@ -157,6 +182,7 @@ export function GraphPane({
   onExportArticlePdf,
   onImportPdfArticle,
   onDeleteArticle,
+  onRefreshAcademicRelations,
 }: GraphPaneProps) {
   const isEnglish = language === "en";
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -166,6 +192,15 @@ export function GraphPane({
   const [viewport, setViewport] = useState({ x: 0, y: 0, scale: 1 });
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [isPanning, setIsPanning] = useState(false);
+  const [filterPanelOpen, setFilterPanelOpen] = useState(false);
+  const [activeRelationFilters, setActiveRelationFilters] = useState<Set<GraphRelationFilterType>>(
+    () => new Set(graphRelationFilterTypes),
+  );
+  const [appTheme, setAppTheme] = useState<"dark" | "light">(() =>
+    typeof document !== "undefined" && document.documentElement.dataset.papergraphTheme === "light"
+      ? "light"
+      : "dark",
+  );
   const [manualConnectionSourceId, setManualConnectionSourceId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ articleId: string; x: number; y: number } | null>(null);
   const [librarySearch, setLibrarySearch] = useState("");
@@ -195,6 +230,21 @@ export function GraphPane({
   }, [onArticlePositionsChange]);
 
   const worldSize = 3000;
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+
+    const el = document.documentElement;
+    const update = () => setAppTheme(el.dataset.papergraphTheme === "light" ? "light" : "dark");
+
+    // initial
+    update();
+
+    const obs = new MutationObserver(() => update());
+    obs.observe(el, { attributes: true, attributeFilter: ["data-papergraph-theme"] });
+
+    return () => obs.disconnect();
+  }, []);
 
   const stopViewportAnimation = useCallback(() => {
     if (viewportAnimationRef.current === null) {
@@ -353,6 +403,14 @@ export function GraphPane({
     () => new Map(articles.map((article) => [article.id, article])),
     [articles],
   );
+  const visibleRelations = useMemo(
+    () =>
+      relations.filter((relation) =>
+        isGraphRelationFilterType(relation.relationType) &&
+        activeRelationFilters.has(relation.relationType),
+      ),
+    [activeRelationFilters, relations],
+  );
   const filteredLibraryArticles = useMemo(() => {
     const normalizedSearch = librarySearch.trim().toLowerCase();
 
@@ -373,7 +431,7 @@ export function GraphPane({
         return [];
       }
 
-      return relations
+      return visibleRelations
         .filter((relation) => relation.fromArticleId === activeArticle.id)
         .map((relation) => ({
           relation,
@@ -384,7 +442,7 @@ export function GraphPane({
             Boolean(entry.article),
         );
     },
-    [activeArticle, articleById, relations],
+    [activeArticle, articleById, visibleRelations],
   );
   const activeIncomingRelations = useMemo(
     () => {
@@ -392,7 +450,7 @@ export function GraphPane({
         return [];
       }
 
-      return relations
+      return visibleRelations
         .filter(
           (relation) =>
             relation.toArticleId === activeArticle.id &&
@@ -407,7 +465,7 @@ export function GraphPane({
             Boolean(entry.article),
         );
     },
-    [activeArticle, articleById, relations],
+    [activeArticle, articleById, visibleRelations],
   );
   const activeRelationCount = activeIncomingRelations.length + activeOutgoingRelations.length;
   const activeArticlePresence = activeArticle ? articlePresenceByArticleId[activeArticle.id] ?? [] : [];
@@ -433,7 +491,7 @@ export function GraphPane({
 
   const relationEntries = useMemo(
     () =>
-      relations
+      visibleRelations
         .map((relation) => {
           const fromPosition = screenPositions[relation.fromArticleId];
           const toPosition = screenPositions[relation.toArticleId];
@@ -459,7 +517,7 @@ export function GraphPane({
             toPosition: { x: number; y: number };
           } => Boolean(entry),
         ),
-    [relations, screenPositions],
+    [screenPositions, visibleRelations],
   );
 
   const contextMenuRemovableRelations = useMemo(() => {
@@ -467,8 +525,12 @@ export function GraphPane({
       return [];
     }
 
-    const removableRelations = relations.filter(
-      (relation) => relation.relationType === "manual" || relation.relationType === "explicit",
+    const removableRelations = visibleRelations.filter(
+      (relation) =>
+        relation.relationType === "manual" ||
+        relation.relationType === "explicit" ||
+        relation.relationType === "citation" ||
+        relation.relationType === "semantic",
     );
 
     if (activeArticle && contextMenu.articleId !== activeArticle.id) {
@@ -485,7 +547,7 @@ export function GraphPane({
         relation.fromArticleId === contextMenu.articleId ||
         relation.toArticleId === contextMenu.articleId,
     );
-  }, [activeArticle, canEdit, contextMenu, relations]);
+  }, [activeArticle, canEdit, contextMenu, visibleRelations]);
   const contextMenuArticle = contextMenu ? articleById.get(contextMenu.articleId) ?? null : null;
   const canEditContextMenuArticle = canEdit && contextMenuArticle ? !isImportedPdfArticle(contextMenuArticle) : false;
   const canEditActiveArticle = canEdit && activeArticle ? !isImportedPdfArticle(activeArticle) : false;
@@ -705,7 +767,11 @@ export function GraphPane({
       <div className="mt-3 space-y-2">
         {entries.map(({ relation, article }) => {
           const isManualRelation = relation.relationType === "manual";
-          const isRemovableRelation = isManualRelation || relation.relationType === "explicit";
+          const isRemovableRelation =
+            isManualRelation ||
+            relation.relationType === "explicit" ||
+            relation.relationType === "citation" ||
+            relation.relationType === "semantic";
 
           return (
             <article
@@ -752,9 +818,13 @@ export function GraphPane({
                       ? isEnglish
                         ? "Remove"
                         : "Remover"
-                      : isEnglish
-                        ? "Remove wikilink"
-                        : "Remover wikilink"}
+                      : relation.relationType === "explicit"
+                        ? isEnglish
+                          ? "Remove wikilink"
+                          : "Remover wikilink"
+                        : isEnglish
+                          ? "Remove"
+                          : "Remover"}
                   </button>
                 ) : null}
               </div>
@@ -1060,6 +1130,112 @@ export function GraphPane({
       >
         <div className="papergraph-graph-backdrop absolute inset-0 z-0" />
 
+        {isAcademicRelationsRunning ? (
+          <div className="absolute left-1/2 top-4 z-30 -translate-x-1/2 rounded-full border border-[var(--accent)]/40 bg-black/35 px-4 py-2 text-xs font-semibold text-[var(--accent)] shadow-[0_14px_34px_rgba(0,0,0,0.22)] backdrop-blur-md">
+            {isEnglish ? "Updating academic links..." : "A atualizar ligações académicas..."}
+          </div>
+        ) : null}
+
+        {/* Filter button (top-right) */}
+        <div className="absolute right-4 top-4 z-30">
+          <button
+            type="button"
+            onClick={() => setFilterPanelOpen((s) => !s)}
+            className="rounded-full border border-[var(--border)] bg-black/20 p-[5.333px] transition-transform hover:scale-105"
+            aria-label={isEnglish ? "Filters" : "Filtros"}
+          >
+            <Image
+              src={appTheme === "light" ? lightFilterIcon : darkFilterIcon}
+              alt={isEnglish ? "Filters" : "Filtros"}
+              width={70}
+              height={70}
+            />
+          </button>
+        </div>
+
+        {filterPanelOpen ? (
+          <aside className="papergraph-file-panel absolute right-4 top-[4.75rem] z-40 flex w-[min(20rem,calc(100%_-_2rem))] max-h-[calc(100%_-_5.75rem)] flex-col overflow-hidden rounded-[14px] border border-[var(--border)] shadow-[0_18px_50px_rgba(0,0,0,0.28)]">
+            <div className="flex items-center justify-between gap-3 border-b border-[var(--file-panel-divider)] px-3 py-2">
+              <p className="text-xs uppercase tracking-[0.22em] text-[var(--muted)]">{isEnglish ? "Filters" : "Filtros"}</p>
+              <button
+                type="button"
+                onClick={() => setFilterPanelOpen(false)}
+                className="rounded-full border border-white/10 bg-black/20 px-2 py-0.5 text-[11px] text-[var(--muted)]"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="scrollbar-hidden min-h-0 flex-1 overflow-y-auto overscroll-contain py-1">
+              {graphRelationFilterTypes.map((relationType) => {
+                const relationCount = relations.filter((relation) => relation.relationType === relationType).length;
+                const isEnabled = activeRelationFilters.has(relationType);
+
+                return (
+                  <button
+                    key={relationType}
+                    type="button"
+                    onClick={() => {
+                      setActiveRelationFilters((currentFilters) => {
+                        const nextFilters = new Set(currentFilters);
+
+                        if (nextFilters.has(relationType)) {
+                          nextFilters.delete(relationType);
+                        } else {
+                          nextFilters.add(relationType);
+                        }
+
+                        return nextFilters;
+                      });
+                    }}
+                    className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition-colors hover:bg-[var(--file-panel-row-hover)]"
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span
+                        className={`h-2.5 w-2.5 rounded-full ${
+                          isEnabled ? "bg-[var(--accent)]" : "bg-[var(--muted)] opacity-35"
+                        }`}
+                      />
+                      <span className="truncate text-sm font-semibold text-[var(--foreground)]">
+                        {getRelationTypeLabel(relationType, language)}
+                      </span>
+                    </span>
+                    <span className="rounded-full border border-[var(--border)] bg-black/20 px-2 py-0.5 text-[11px] text-[var(--muted)]">
+                      {relationCount}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {onRefreshAcademicRelations ? (
+              <div className="border-t border-[var(--file-panel-divider)] p-3">
+                {academicRelationStatus ? (
+                  <p className="mb-3 rounded-[12px] border border-[var(--border)] bg-black/15 px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+                    {academicRelationStatus}
+                  </p>
+                ) : null}
+                <button
+                  type="button"
+                  disabled={isAcademicRelationsRunning || articles.length < 2}
+                  onClick={() => {
+                    void onRefreshAcademicRelations();
+                  }}
+                  className="w-full rounded-full border border-[var(--accent)] bg-[var(--accent)] px-4 py-2 text-xs font-semibold text-[#041016] transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isAcademicRelationsRunning
+                    ? isEnglish
+                      ? "Updating..."
+                      : "A atualizar..."
+                    : isEnglish
+                      ? "Refresh academic links"
+                      : "Recalcular ligações"}
+                </button>
+              </div>
+            ) : null}
+          </aside>
+        ) : null}
+
         <svg className="pointer-events-none absolute inset-0 z-10 h-full w-full">
           <defs>
             <filter id="glow">
@@ -1074,7 +1250,8 @@ export function GraphPane({
           {relationEntries.map((entry) => {
             const isManualRelation = entry.relation.relationType === "manual";
             const isExplicitRelation = entry.relation.relationType === "explicit";
-            const isSuggestedRelation = entry.relation.relationType === "auto" || entry.relation.relationType === "suggested";
+            const isCitationRelation = entry.relation.relationType === "citation";
+            const isSemanticRelation = entry.relation.relationType === "semantic";
             const isActiveRelation =
               activeArticle !== null &&
               (entry.relation.fromArticleId === activeArticle.id ||
@@ -1083,14 +1260,20 @@ export function GraphPane({
               ? "var(--graph-link-manual)"
               : isExplicitRelation
                 ? "var(--graph-link-explicit)"
-                : "var(--graph-link-muted)";
+                : isCitationRelation
+                  ? "var(--graph-link-citation)"
+                  : isSemanticRelation
+                    ? "var(--graph-link-semantic)"
+                    : "var(--graph-link-muted)";
             const baseStrokeWidth = isActiveRelation
               ? 2.4
               : isManualRelation
                 ? 2.1
                 : isExplicitRelation
                   ? 1.55
-                  : 1.15;
+                  : isCitationRelation || isSemanticRelation
+                    ? 1.75
+                    : 1.15;
 
             return (
               <line
@@ -1103,7 +1286,6 @@ export function GraphPane({
                 strokeOpacity={activeArticle === null ? 0.7 : isActiveRelation ? 1 : 0.38}
                 strokeWidth={baseStrokeWidth * relationStrokeScale}
                 strokeLinecap="round"
-                strokeDasharray={isSuggestedRelation ? "6 8" : undefined}
                 filter={isManualRelation || isActiveRelation ? "url(#glow)" : undefined}
               />
             );
@@ -1294,7 +1476,7 @@ export function GraphPane({
                       ? "Remove connection"
                       : "Remover conexão"
                   : `${isEnglish ? "Remove" : "Remover"} ${
-                      relation.relationType === "explicit" ? "wikilink" : isEnglish ? "connection" : "conexão"
+                      getRelationTypeLabel(relation.relationType, language).toLowerCase()
                     } ${isEnglish ? "with" : "com"} ${
                       otherArticle?.title ?? (isEnglish ? "article" : "artigo")
                     }`;

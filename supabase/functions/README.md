@@ -1,14 +1,14 @@
 # Supabase Edge Functions
 
-## `delete-account`
-
-Esta função elimina a conta autenticada e os dados associados sem colocar a chave privada dentro da app desktop.
-
-O projeto Supabase usado pela app é:
+O projeto Supabase usado pela app e:
 
 ```bash
 gdpmlzwvfdyrgdquicyl
 ```
+
+## `delete-account`
+
+Elimina a conta autenticada e os dados associados sem colocar a chave privada dentro da app desktop.
 
 Deploy:
 
@@ -16,12 +16,17 @@ Deploy:
 npx supabase functions deploy delete-account --project-ref gdpmlzwvfdyrgdquicyl
 ```
 
-Normalmente não é preciso adicionar a chave privada manualmente: o Supabase disponibiliza as keys da função através das variáveis internas do projeto.
+Normalmente nao e preciso adicionar a chave privada manualmente: o Supabase disponibiliza as keys da funcao atraves das variaveis internas do projeto.
 
-Se a função ficar sem chave privada, adiciona uma secret própria sem o prefixo reservado `SUPABASE_`:
+Se a funcao ficar sem chave privada, adiciona uma secret propria sem o prefixo reservado `SUPABASE_`:
 
 ```bash
 npx supabase secrets set PAPERGRAPH_SERVICE_ROLE_KEY=... --project-ref gdpmlzwvfdyrgdquicyl
 ```
 
-Nunca coloques `SUPABASE_SECRET_KEY` ou `SUPABASE_SERVICE_ROLE_KEY` no `.exe`, em GitHub Pages, nem em variáveis `NEXT_PUBLIC_*`.
+## Academic relations
+
+Academic relations now run in the Next.js server, using Ollama and pgvector.
+See [semantic search setup](../../docs/semantic-search.md).
+The former Edge Function is obsolete and can be removed from the deployed project.
+The `delete-account` function remains unchanged.

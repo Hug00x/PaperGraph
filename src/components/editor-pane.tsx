@@ -45,6 +45,7 @@ type EditorPaneProps = {
     submitted: boolean;
   }>;
   isSubmissionRunning?: boolean;
+  isAcademicRelationsRunning?: boolean;
   submissionIssue: string | null;
   onSubmissionIssueClear: () => void;
   onPendingResubmissionChange: (article: {
@@ -247,6 +248,7 @@ export function EditorPane({
   collaborationUserName,
   onSaveArticle,
   onSubmitArticle,
+  isAcademicRelationsRunning = false,
   isSubmissionRunning = false,
   submissionIssue,
   onSubmissionIssueClear,
@@ -812,6 +814,12 @@ export function EditorPane({
             {isEnglish ? "Submission blocked" : "Submissão bloqueada"}
           </p>
           <p className="mt-1">{submissionIssue}</p>
+        </div>
+      ) : null}
+
+      {isAcademicRelationsRunning ? (
+        <div className="mt-4 rounded-[18px] border border-[var(--accent)]/40 bg-[rgba(142,231,255,0.1)] px-4 py-3 text-sm font-semibold text-[var(--accent)]">
+          {isEnglish ? "Updating citation and semantic links..." : "A atualizar citações e ligações semânticas..."}
         </div>
       ) : null}
 

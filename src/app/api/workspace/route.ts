@@ -14,8 +14,17 @@ const dataDirectory = getPaperGraphDataDirectory();
 const dataFile = join(dataDirectory, "workspace.json");
 
 function normalizeRelationType(value: unknown): WorkspaceRelation["relationType"] {
-  if (value === "auto" || value === "explicit" || value === "manual" || value === "suggested") {
+  if (
+    value === "citation" ||
+    value === "explicit" ||
+    value === "manual" ||
+    value === "semantic"
+  ) {
     return value;
+  }
+
+  if (value === "auto" || value === "suggested") {
+    return "semantic";
   }
 
   return "manual";

@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -92,6 +92,10 @@ function removeStandaloneBuildNoise() {
     "build",
     "data",
     "desktop-dist",
+    "docs",
+    "tests",
+    "Microsoft",
+    ".utmp",
     "electron",
     "eslint.config.mjs",
     "package-lock.json",
@@ -110,6 +114,19 @@ function removeStandaloneBuildNoise() {
   }
 
   rmSync(path.join(standaloneNextDirectory, "cache"), { recursive: true, force: true });
+
+  // Next may copy .env.local into standalone output. Never distribute developer secrets.
+  for (const entry of readdirSync(standaloneDirectory)) {
+    if (entry === ".env" || entry.startsWith(".env.")) rmSync(path.join(standaloneDirectory, entry), { force: true });
+  }
+  const allowed = ["NEXT_PUBLIC_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "NEXT_PUBLIC_AUTH_CONFIRMATION_URL"];
+  const sourceEnv = existsSync(path.join(projectDirectory, ".env.local"))
+    ? readFileSync(path.join(projectDirectory, ".env.local"), "utf8").split(/\r?\n/) : [];
+  const publicLines = sourceEnv.filter((line) => allowed.includes(line.split("=", 1)[0]) && !process.env[line.split("=", 1)[0]]);
+  for (const key of allowed) {
+    if (process.env[key]) publicLines.push(`${key}=${JSON.stringify(process.env[key])}`);
+  }
+  writeFileSync(path.join(standaloneDirectory, ".env.production"), publicLines.join("\n") + "\n");
 }
 
 if (!existsSync(standaloneDirectory)) {

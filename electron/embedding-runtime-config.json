@@ -1,0 +1,13 @@
+{
+  "version": "0.34.3",
+  "archive": "ollama-windows-amd64.zip",
+  "sha256": "306ce9e81e3491d147f558e60d7a389499f244d10f71859c6e4e899241d1b4ae",
+  "host": "127.0.0.1",
+  "preferredPort": 11435,
+  "model": "bge-m3",
+  "dimensions": 1024,
+  "startupTimeoutMs": 60000,
+  "requestTimeoutMs": 10000,
+  "downloadTimeoutMs": 7200000,
+  "downloadIdleTimeoutMs": 180000
+}

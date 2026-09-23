@@ -143,8 +143,17 @@ function normalizeStatus(value: string): ArticleStatus {
 }
 
 function normalizeRelationType(value: string): RelationType {
-  if (value === "manual" || value === "explicit" || value === "auto" || value === "suggested") {
+  if (
+    value === "manual" ||
+    value === "explicit" ||
+    value === "citation" ||
+    value === "semantic"
+  ) {
     return value;
+  }
+
+  if (value === "auto" || value === "suggested") {
+    return "semantic";
   }
 
   return "manual";
@@ -636,14 +645,10 @@ export async function loadWorkspaceSnapshotFromSupabase(
   };
 }
 
-export async function saveWorkspaceSnapshotToSupabase(
-  supabase: SupabaseClient,
-  workspace: WorkspaceRow,
-  snapshot: WorkspaceSnapshot,
-) {
-  const articleRows = snapshot.articles.map((article) => ({
+export async function saveWorkspaceArticles(supabase: SupabaseClient, workspaceId: string, articles: WorkspaceSnapshot["articles"]) {
+  const articleRows = articles.map((article) => ({
     id: article.id,
-    workspace_id: workspace.id,
+    workspace_id: workspaceId,
     title: article.title,
     author: article.author,
     status: article.status,
@@ -652,6 +657,17 @@ export async function saveWorkspaceSnapshotToSupabase(
     tags: article.tags,
     updated_at: new Date().toISOString(),
   }));
+  if (articleRows.length) {
+    const { error } = await supabase.from("articles").upsert(articleRows, { onConflict: "workspace_id,id" });
+    assertSupabaseResult(error, "Could not save articles.");
+  }
+}
+
+export async function saveWorkspaceSnapshotToSupabase(
+  supabase: SupabaseClient,
+  workspace: WorkspaceRow,
+  snapshot: WorkspaceSnapshot,
+) {
   const articleIds = new Set(snapshot.articles.map((article) => article.id));
   const positionRows = Object.entries(snapshot.articlePositions)
     .filter(([articleId]) => articleIds.has(articleId))
@@ -732,15 +748,21 @@ export async function saveWorkspaceSnapshotToSupabase(
 
   assertSupabaseResult(workspaceUpdate.error, "Could not update workspace.");
 
-  for (const table of ["ignored_unlinked_mentions", "relations", "article_positions", "assets", "article_versions", "articles"]) {
+  for (const table of ["ignored_unlinked_mentions", "relations", "article_positions", "assets", "article_versions"]) {
     const result = await supabase.from(table).delete().eq("workspace_id", workspace.id);
     assertSupabaseResult(result.error, `Could not clear ${table}.`);
   }
 
-  if (articleRows.length > 0) {
-    const result = await supabase.from("articles").insert(articleRows);
-    assertSupabaseResult(result.error, "Could not save articles.");
+  // Keep metadata and embeddings on surviving articles. Delete only removed IDs.
+  const stored = await supabase.from("articles").select("id").eq("workspace_id", workspace.id);
+  assertSupabaseResult(stored.error, "Could not load stored article IDs.");
+  const removedIds = (stored.data ?? []).map((row) => row.id as string).filter((id) => !articleIds.has(id));
+  for (let offset = 0; offset < removedIds.length; offset += 100) {
+    const result = await supabase.from("articles").delete().eq("workspace_id", workspace.id)
+      .in("id", removedIds.slice(offset, offset + 100));
+    assertSupabaseResult(result.error, "Could not remove deleted articles.");
   }
+  await saveWorkspaceArticles(supabase, workspace.id, snapshot.articles);
 
   if (positionRows.length > 0) {
     const result = await supabase.from("article_positions").insert(positionRows);

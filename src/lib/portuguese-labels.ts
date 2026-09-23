@@ -115,6 +115,38 @@ export function getRelationNoteLabel(note: string, language: AppLanguage = "pt")
     return note;
   }
 
+  const openAlexCitationMatch = note.match(/^OpenAlex citation: (.+) references (.+)\.$/);
+
+  if (openAlexCitationMatch) {
+    return language === "en"
+      ? note
+      : `Citação OpenAlex: ${openAlexCitationMatch[1]} referencia ${openAlexCitationMatch[2]}.`;
+  }
+
+  const portugueseOpenAlexCitationMatch = note.match(/^Citação OpenAlex: (.+) referencia (.+)\.$/);
+
+  if (portugueseOpenAlexCitationMatch) {
+    return language === "en"
+      ? `OpenAlex citation: ${portugueseOpenAlexCitationMatch[1]} references ${portugueseOpenAlexCitationMatch[2]}.`
+      : note;
+  }
+
+  const semanticSimilarityMatch = note.match(/^Semantic similarity: (-?\d+)%\.$/);
+
+  if (semanticSimilarityMatch) {
+    return language === "en"
+      ? note
+      : `Similaridade semântica: ${semanticSimilarityMatch[1]}%.`;
+  }
+
+  const portugueseSemanticSimilarityMatch = note.match(/^Similaridade semântica: (-?\d+)%\.$/);
+
+  if (portugueseSemanticSimilarityMatch) {
+    return language === "en"
+      ? `Semantic similarity: ${portugueseSemanticSimilarityMatch[1]}%.`
+      : note;
+  }
+
   return note;
 }
 

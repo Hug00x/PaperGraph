@@ -200,6 +200,8 @@ html[data-papergraph-theme="light"] .papergraph-app .backdrop-blur-xl {
   --graph-node-ring: #07111b;
   --graph-link-manual: rgba(142, 231, 255, 0.72);
   --graph-link-explicit: rgba(255, 255, 255, 0.5);
+  --graph-link-citation: rgba(74, 222, 128, 0.64);
+  --graph-link-semantic: rgba(196, 181, 253, 0.66);
   --graph-link-muted: rgba(255, 255, 255, 0.26);
   background: var(--graph-shell-background);
 }
@@ -220,6 +222,8 @@ html[data-papergraph-theme="light"] .papergraph-app .papergraph-graph-pane {
   --graph-node-ring: #f8fcff;
   --graph-link-manual: rgba(2, 132, 199, 0.76);
   --graph-link-explicit: rgba(51, 65, 85, 0.44);
+  --graph-link-citation: rgba(22, 163, 74, 0.62);
+  --graph-link-semantic: rgba(124, 58, 237, 0.6);
   --graph-link-muted: rgba(100, 116, 139, 0.3);
 }
 
@@ -597,3 +601,17 @@ a {
   color: inherit;
   text-decoration: none;
 }
+/* Non-blocking desktop first-run setup; regular editor/library remain usable. */
+.semantic-runtime-status {
+  position: fixed; right: 20px; bottom: 20px; z-index: 80;
+  width: min(360px, calc(100vw - 40px)); padding: 16px;
+  border: 1px solid #6cb6c6; border-radius: 14px;
+  background: #17242d; color: #eef7fa; box-shadow: 0 6px 24px #0005;
+  font-size: 13px;
+}
+.semantic-runtime-heading { display: flex; justify-content: space-between; gap: 12px; }
+.semantic-runtime-heading button { cursor: pointer; }
+.semantic-runtime-status p { margin: 10px 0; line-height: 1.5; }
+.semantic-runtime-status progress { display: block; width: 100%; accent-color: #93e7fa; margin: 10px 0; }
+.semantic-runtime-status small { color: #bdd0d9; }
+.semantic-runtime-retry { margin-top: 10px; border-radius: 8px; padding: 8px 14px; background: #93e7fa; color: #17242d; cursor: pointer; }
