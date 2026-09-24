@@ -89,6 +89,7 @@ type ArticleRow = {
   author: string | null;
   status: string;
   source: string | null;
+  abstract: string | null;
   tags: string[] | null;
   updated_at: string | null;
 };
@@ -537,7 +538,7 @@ export async function loadWorkspaceSnapshotFromSupabase(
     await Promise.all([
       supabase
         .from("articles")
-        .select("id,title,author,status,source,tags,updated_at")
+        .select("id,title,author,status,source,abstract,tags,updated_at")
         .eq("workspace_id", workspaceId)
         .order("created_at", { ascending: true }),
       supabase
@@ -577,6 +578,7 @@ export async function loadWorkspaceSnapshotFromSupabase(
     title: article.title,
     author: article.author ?? "PaperGraph",
     status: normalizeStatus(article.status),
+    abstract: article.abstract ?? "",
     updatedAt: toRelativeTimeLabel(article.updated_at),
     tags: article.tags ?? [],
     source: article.source ?? "",
@@ -654,6 +656,7 @@ export async function saveWorkspaceArticles(supabase: SupabaseClient, workspaceI
     workspace_id: workspaceId,
     title: article.title,
     author: article.author,
+    abstract: article.abstract ?? "",
     status: article.status,
     source_type: isImportedPdfAsset(article) ? "pdf" : "latex",
     source: article.source,
@@ -663,7 +666,7 @@ export async function saveWorkspaceArticles(supabase: SupabaseClient, workspaceI
     topics: discovered ? discovered.topics.map((t) => ({ id: t.id, display_name: t.name })) : [],
     referenced_work_ids: discovered ? discovered.references : [],
     ...(discovered ? { openalex_id: discovered.externalId, openalex_title: discovered.title,
-      abstract: discovered.abstract || null, doi: discovered.doi || null,
+      abstract: article.abstract?.trim() || discovered.abstract || null, doi: discovered.doi || null,
       publication_year: discovered.year || null, cited_by_count: discovered.citationCount,
     } : {}),
   }); });

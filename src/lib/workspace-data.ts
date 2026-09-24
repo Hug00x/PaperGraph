@@ -8,6 +8,7 @@ export type Article = {
 };
 
 export type WorkspaceArticle = Article & {
+  abstract?: string;
   source: string;
 };
 

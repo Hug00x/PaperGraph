@@ -237,6 +237,42 @@ html[data-papergraph-theme="light"] .papergraph-app .papergraph-graph-pane {
   background: var(--graph-canvas-background);
 }
 
+.abstract-editor-field {
+  max-height: 4.5rem;
+  opacity: 0.82;
+  overflow: hidden;
+  transform: translateY(-0.15rem);
+  transition: max-height 420ms ease, opacity 260ms ease, transform 420ms ease;
+}
+
+.abstract-editor-field.is-expanded {
+  max-height: 12rem;
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.abstract-editor-input {
+  min-height: 2.75rem;
+  max-height: 8rem;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+  transition: min-height 420ms ease;
+}
+
+.abstract-editor-field:not(.is-expanded) .abstract-editor-input {
+  height: 2.75rem;
+  max-height: 2.75rem;
+}
+
+.abstract-editor-input::-webkit-scrollbar {
+  display: none;
+}
+
+.abstract-editor-field.is-expanded .abstract-editor-input {
+  min-height: 7rem;
+}
+
 .papergraph-graph-panel {
   background: var(--graph-panel-background);
 }

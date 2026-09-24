@@ -31,10 +31,11 @@ type EditorPaneProps = {
   }>;
   collaborationClientId?: string;
   collaborationUserName?: string;
-  onSaveArticle: (article: { source: string; tags: string[]; title: string }) => void;
+  onSaveArticle: (article: { abstract: string; source: string; tags: string[]; title: string }) => void;
   onSubmitArticle: (article: {
     articleId: string;
     source: string;
+    abstract: string;
     status: SubmittedArticleStatus;
     tags: string[];
     title: string;
@@ -267,6 +268,9 @@ export function EditorPane({
 }: EditorPaneProps) {
   const [title, setTitle] = useState(article.title);
   const [source, setSource] = useState(article.source);
+  const [abstract, setAbstract] = useState(article.abstract ?? "");
+  const [abstractExpanded, setAbstractExpanded] = useState(false);
+  const abstractCollapseTimeoutRef = useRef<number | null>(null);
   const [keywordInput, setKeywordInput] = useState(article.tags.join(", "));
   const [submissionStatus, setSubmissionStatus] = useState<SubmittedArticleStatus>(
     article.status === "Published" ? "Published" : "Review",
@@ -350,6 +354,20 @@ export function EditorPane({
     setCompileError(null);
   }, [article.id, onSubmissionIssueClear, restoredVersion]);
 
+  useEffect(() => () => {
+    if (abstractCollapseTimeoutRef.current !== null) window.clearTimeout(abstractCollapseTimeoutRef.current);
+  }, []);
+
+  function expandAbstract() {
+    if (abstractCollapseTimeoutRef.current !== null) window.clearTimeout(abstractCollapseTimeoutRef.current);
+    setAbstractExpanded(true);
+  }
+
+  function scheduleAbstractCollapse() {
+    if (abstractCollapseTimeoutRef.current !== null) window.clearTimeout(abstractCollapseTimeoutRef.current);
+    abstractCollapseTimeoutRef.current = window.setTimeout(() => setAbstractExpanded(false), 1600);
+  }
+
   useEffect(() => {
     if (!didMountRef.current) {
       didMountRef.current = true;
@@ -361,12 +379,12 @@ export function EditorPane({
     }
 
     const timeoutId = window.setTimeout(() => {
-      onSaveArticleRef.current({ source, tags: keywordTags, title });
+      onSaveArticleRef.current({ abstract, source, tags: keywordTags, title });
       setSaveState("saved");
     }, 700);
 
     return () => window.clearTimeout(timeoutId);
-  }, [hasPendingResubmission, isSubmittedArticle, keywordTags, source, title]);
+  }, [abstract, hasPendingResubmission, isSubmittedArticle, keywordTags, source, title]);
 
   useEffect(() => {
     if (!isSubmittedArticle || !hasPendingResubmission) {
@@ -374,9 +392,10 @@ export function EditorPane({
       return;
     }
 
-    onPendingResubmissionChange({ articleId: article.id, source, status: submissionStatus, tags: keywordTags, title });
+    onPendingResubmissionChange({ abstract, articleId: article.id, source, status: submissionStatus, tags: keywordTags, title });
   }, [
     article.id,
+    abstract,
     hasPendingResubmission,
     isSubmittedArticle,
     keywordTags,
@@ -721,7 +740,7 @@ export function EditorPane({
     setCompileState("rendering");
     setCompileError(null);
 
-    const result = await onSubmitArticle({ articleId: article.id, source, status: submissionStatus, tags: keywordTags, title });
+    const result = await onSubmitArticle({ abstract, articleId: article.id, source, status: submissionStatus, tags: keywordTags, title });
 
     if (result.submitted) {
       if (result.pdfBuffer) {
@@ -823,7 +842,7 @@ export function EditorPane({
         </div>
       ) : null}
 
-      <div className="grid min-h-0 flex-1 items-stretch gap-5 overflow-y-auto px-0 py-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] xl:gap-6 xl:overflow-hidden">
+      <div className="grid min-h-0 flex-1 items-stretch gap-5 overflow-y-auto px-0 pb-5 pt-3 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] xl:gap-6 xl:overflow-hidden">
         <div className="flex min-h-[24rem] flex-col gap-4 overflow-hidden xl:min-h-0 xl:border-r xl:border-[var(--border)] xl:pr-4">
           <label className="flex flex-col gap-2">
             <p className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
@@ -834,6 +853,25 @@ export function EditorPane({
               onChange={(event) => handleTitleChange(event.target.value)}
               className="w-full border-0 border-b border-[var(--border)] bg-transparent py-3 text-lg font-medium text-white outline-none placeholder:text-white/30 focus:border-[var(--accent)]"
               placeholder={isEnglish ? "Untitled article" : "Artigo sem título"}
+            />
+          </label>
+
+          <label className={`abstract-editor-field flex flex-col gap-2 ${abstractExpanded ? "is-expanded" : ""}`}>
+            <span className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
+              {isEnglish ? "Abstract" : "Resumo"}
+            </span>
+            <textarea
+              value={abstract}
+              onFocus={expandAbstract}
+              onChange={(event) => {
+                setAbstract(event.target.value);
+                expandAbstract();
+                scheduleAbstractCollapse();
+              }}
+              onBlur={scheduleAbstractCollapse}
+              className="abstract-editor-input w-full resize-none rounded-[18px] border border-[var(--border)] bg-black/20 px-4 py-3 text-sm leading-6 text-white outline-none transition-colors placeholder:text-white/35 focus:border-[var(--accent)]"
+              placeholder={isEnglish ? "Write a short abstract..." : "Escreve um resumo curto..."}
+              rows={3}
             />
           </label>
 

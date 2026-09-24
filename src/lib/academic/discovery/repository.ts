@@ -25,8 +25,13 @@ export async function scientificSeed(row: DiscoveryRow, signal?: AbortSignal): P
       if (found) return { ...found, abstract: found.abstract || pdf.abstract || row.abstract || "" };
     } catch (error) { signal?.throwIfAborted(); if (!row.openalex_title && !pdf.title) throw error; }
   }
-  const title = row.openalex_title || pdf.title;
+  const title = row.openalex_title || pdf.title || (row.abstract?.trim() ? row.title : "");
   if (!title) throw new DiscoveryError("insufficient-metadata");
+  if (!row.openalex_title && !pdf.title && !row.abstract?.trim()) throw new DiscoveryError("insufficient-metadata");
+  if (!row.openalex_title && !pdf.title) {
+    return { source: "openalex", externalId: "", title, abstract: row.abstract!.trim(), doi: identity.doi || null,
+      year: row.publication_year, authors: [], topics: [], references: [], venue: "", url: "", citationCount: 0, type: "" };
+  }
   const metadata = normalizeOpenAlexWork({ id: row.openalex_id || "W0", title, doi: identity.doi,
     publication_year: row.publication_year, authorships: Array.isArray(row.authors) ? row.authors.map((author: unknown) => ({ author })) : [],
     topics: row.topics, referenced_works: row.referenced_work_ids });
@@ -50,6 +55,7 @@ export function prepareRecommendedArticle(workspaceId: string, paper: Scientific
   const duplicate = existing.find((article) => samePaper(paper, articleIdentity(article)));
   if (duplicate) return { existingId: duplicate.id, article: null };
   const article: WorkspaceArticle = { id: stableRecommendationId(workspaceId, paper), title: paper.title,
+    abstract: paper.abstract,
     author: paper.authors.map((author) => author.name).slice(0, 3).join(", ") || "PaperGraph",
     status: "Published", updatedAt: "agora", tags: ["OpenAlex", ...(paper.doi ? [normalizeDoi(paper.doi)] : [])],
     source: recommendedArticleSource(paper) };

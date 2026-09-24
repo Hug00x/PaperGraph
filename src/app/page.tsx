@@ -69,6 +69,7 @@ type SettingsSection = (typeof settingsSections)[number];
 type EditableWorkspaceMemberRole = (typeof editableWorkspaceMemberRoles)[number];
 type SubmittedArticleStatus = Exclude<WorkspaceArticle["status"], "Draft">;
 type PendingEditorResubmission = {
+  abstract: string;
   articleId: string;
   source: string;
   status: SubmittedArticleStatus;
@@ -94,6 +95,7 @@ type AppDialogResult = {
   value?: string;
 };
 type ArticleSubmission = {
+  abstract: string;
   articleId?: string;
   source: string;
   status: SubmittedArticleStatus;
@@ -3466,6 +3468,7 @@ export default function Home() {
       id: createBrowserUuid(),
       title: nextArticleTitle,
       author: "PaperGraph",
+      abstract: "",
       status: "Draft",
       updatedAt: "agora",
       tags: [],
@@ -3505,7 +3508,7 @@ export default function Home() {
     void saveWorkspace(snapshot);
   }
 
-  function updateArticleDetails(nextArticle: { source: string; tags: string[]; title: string }) {
+  function updateArticleDetails(nextArticle: { abstract: string; source: string; tags: string[]; title: string }) {
     if (!selectedArticle) return;
 
     if (!canEditCurrentWorkspace) {
@@ -3515,6 +3518,7 @@ export default function Home() {
 
     const updatedArticle: WorkspaceArticle = {
       ...selectedArticle,
+      abstract: nextArticle.abstract,
       title: nextArticle.title,
       source: nextArticle.source,
       tags: nextArticle.tags,
@@ -3834,6 +3838,7 @@ export default function Home() {
 
     const submittedArticle: WorkspaceArticle = {
       ...articleToSubmit,
+      abstract: nextArticle.abstract,
       title: nextArticle.title,
       source: nextArticle.source,
       status: nextArticle.status,
