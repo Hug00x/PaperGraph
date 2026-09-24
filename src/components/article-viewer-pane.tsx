@@ -1,6 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { articleAbstract } from "@/lib/article-presentation";
+import { discoveredMetadata, safePublicationUrl } from "@/lib/academic/discovery/identity";
+import type { ScientificPaper } from "@/lib/academic/discovery/types";
 import { ArticleHistoryPanel } from "@/components/article-history-panel";
 import { PdfZoomControls } from "@/components/pdf-zoom-controls";
 import { getFriendlyErrorMessage, getFriendlyResponseError } from "@/lib/friendly-errors";
@@ -37,6 +40,7 @@ function getEditableArticleTags(article: WorkspaceArticle) {
 }
 
 type ArticleViewerPaneProps = {
+  workspaceId?: string;
   article: WorkspaceArticle;
   articleCollaborators?: Array<{
     mode: "editing" | "viewing" | "browsing" | "settings";
@@ -57,6 +61,7 @@ type ArticleViewerPaneProps = {
 };
 
 export function ArticleViewerPane({
+  workspaceId,
   article,
   articleCollaborators = [],
   authAccessToken,
@@ -66,6 +71,36 @@ export function ArticleViewerPane({
   language,
   onSaveArticleMetadata,
 }: ArticleViewerPaneProps) {
+  const discovered = useMemo(() => discoveredMetadata(article.source), [article.source]);
+  const [resolvedPublication, setResolvedPublication] = useState<{ source: string; attempt: number; paper: ScientificPaper | null; failed?: boolean } | null>(null);
+  const publication = resolvedPublication?.source === article.source ? resolvedPublication.paper ?? discovered : discovered;
+
+  const abstract = articleAbstract(article) || publication?.abstract || "";
+  const publicationPdfUrl = safePublicationUrl(publication?.pdfUrl) || safePublicationUrl(discovered?.pdfUrl);
+
+  const [publicationAttempt, setPublicationAttempt] = useState(0);
+  const publicationLoading = Boolean(discovered && workspaceId && authAccessToken && (resolvedPublication?.source !== article.source || resolvedPublication.attempt !== publicationAttempt));
+  const publicationFailed = !publicationLoading && resolvedPublication?.source === article.source && resolvedPublication.failed;
+  const keywords = [...new Set([...getEditableArticleTags(article).filter((tag) => !/^(openalex|importado|imported|pdf)$/i.test(tag) && !/^10\.\d{4,9}\//.test(tag)), ...(publication?.topics.map((topic) => topic.name) ?? [])])];
+  const publicationUrl = safePublicationUrl(publication?.url);
+
+  useEffect(() => {
+    if (!discovered || !workspaceId || !authAccessToken) return;
+    const controller = new AbortController();
+    void fetch("/api/recommendations", {
+      method: "POST", signal: controller.signal,
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${authAccessToken}` },
+      body: JSON.stringify({ action: "publication", workspaceId, articleId: article.id }),
+    }).then(async (response) => {
+      if (!response.ok) throw new Error("Publication lookup failed");
+      const payload = await response.json() as { paper?: ScientificPaper };
+      if (!controller.signal.aborted) setResolvedPublication({ source: article.source, attempt: publicationAttempt, paper: payload.paper ?? null });
+    }).catch(() => {
+      if (!controller.signal.aborted) setResolvedPublication({ source: article.source, attempt: publicationAttempt, paper: null, failed: true });
+    });
+    return () => controller.abort();
+  }, [article.id, article.source, authAccessToken, discovered, workspaceId, publicationAttempt]);
+
   const [metadataTitle, setMetadataTitle] = useState(article.title);
   const [metadataTagsInput, setMetadataTagsInput] = useState(getEditableArticleTags(article).join(", "));
   const [metadataStatus, setMetadataStatus] = useState<SubmittedArticleStatus>(
@@ -90,7 +125,7 @@ export function ArticleViewerPane({
   const collaboratorNames = articleCollaborators.map((collaborator) => collaborator.userName).join(", ");
 
   const compileDocument = useCallback(async () => {
-    if (!article.source.trim()) {
+    if (discovered || !article.source.trim()) {
       setPdfBuffer(null);
       setCompileError(null);
       setCompileState("idle");
@@ -135,7 +170,7 @@ export function ArticleViewerPane({
         }),
       );
     }
-  }, [article.id, article.source, article.title, authAccessToken, imageAssets, isEnglish, language]);
+  }, [article.id, article.source, article.title, authAccessToken, discovered, imageAssets, isEnglish, language]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -245,21 +280,19 @@ export function ArticleViewerPane({
   }
 
   return (
-    <section className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-transparent">
-      <div className="flex flex-col gap-4 border-b border-[var(--border)] px-0 py-4 sm:flex-row sm:items-center sm:justify-between">
+    <section className="grid h-full min-h-0 flex-1 gap-5 overflow-y-auto pb-5 pt-3 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] xl:gap-6 xl:overflow-hidden">
+      <aside className="min-w-0 xl:min-h-0 xl:overflow-y-auto xl:border-r xl:border-[var(--border)] xl:pr-5">
+      <div className="flex flex-col gap-4 border-b border-[var(--border)] px-0 py-4 ">
         <div className="min-w-0">
           <p className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
             {isEnglish ? "Article view" : "Visualização do artigo"}
           </p>
-          <h2 className="mt-1 truncate text-xl font-semibold text-white">{article.title}</h2>
-          <p className="mt-2 text-sm text-[var(--muted)]">
-            {isEnglish
-              ? "Read the rendered PDF without changing the article source."
-              : "Lê o PDF renderizado sem alterar o código do artigo."}
-          </p>
+          {canEditMetadata ? <input aria-label={isEnglish ? "Article title" : "T\u00edtulo do artigo"} value={metadataTitle} onChange={(event) => setMetadataTitle(event.target.value)} className="mt-2 w-full border-b border-[var(--border)] bg-transparent py-3 text-lg font-medium text-[var(--foreground)] outline-none focus:border-[var(--accent)]" /> : <h2 className="mt-2 break-words text-xl font-semibold leading-8 text-[var(--foreground)]">{article.title}</h2>}
+
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {!discovered ? <>
           <ArticleHistoryPanel
             articleTitle={article.title}
             language={language}
@@ -282,6 +315,7 @@ export function ArticleViewerPane({
                 ? "Refresh PDF"
                 : "Atualizar PDF"}
           </button>
+          </> : null}
         </div>
       </div>
 
@@ -309,20 +343,16 @@ export function ArticleViewerPane({
         </div>
       ) : null}
 
+      <details open className="mt-5 shrink-0 rounded-2xl border border-[var(--border)] bg-[var(--surface)] px-4 py-3">
+        <summary className="cursor-pointer text-sm font-semibold text-[var(--foreground)]">{isEnglish ? "Abstract" : "Resumo"}</summary>
+        <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-[var(--muted)]">
+          {abstract || (publicationLoading ? (isEnglish ? "Loading abstract..." : "A carregar resumo...") : publicationFailed ? (isEnglish ? "Could not retrieve the abstract." : "N\u00e3o foi poss\u00edvel obter o resumo.") : (isEnglish ? "No abstract available for this article." : "Não há resumo disponível para este artigo."))}
+        </p>
+      </details>
+
       {canEditMetadata ? (
         <section className="mt-4 rounded-[20px] border border-[var(--border)] bg-black/15 p-4">
-          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(12rem,0.55fr)_auto] lg:items-end">
-            <label className="min-w-0">
-              <span className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
-                {isEnglish ? "Title" : "Titulo"}
-              </span>
-              <input
-                value={metadataTitle}
-                onChange={(event) => setMetadataTitle(event.target.value)}
-                className="mt-2 w-full rounded-[18px] border border-[var(--border)] bg-black/20 px-4 py-3 text-sm text-white outline-none transition-colors placeholder:text-white/35 focus:border-[var(--accent)]"
-              />
-            </label>
-
+          <div className="grid gap-4">
             <fieldset>
               <legend className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
                 {isEnglish ? "State" : "Estado"}
@@ -374,8 +404,51 @@ export function ArticleViewerPane({
         </section>
       ) : null}
 
-      <div className="flex min-h-0 flex-1 justify-center overflow-hidden py-6 lg:py-8">
-        <div className="papergraph-pdf-preview-shell relative flex h-full min-h-[24rem] w-full max-w-[1120px] flex-col overflow-hidden rounded-[24px] border border-[var(--border)] shadow-[0_18px_40px_rgba(0,0,0,0.18)]">
+      {!canEditMetadata ? (
+        <section className="mt-5">
+          <h3 className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">{isEnglish ? "Keywords" : "Palavras-chave"}</h3>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {keywords.length ? keywords.map((keyword) => <span key={keyword} className="rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-xs text-[var(--foreground)]">{keyword}</span>) : <p className="text-sm text-[var(--muted)]">{isEnglish ? "No keywords available." : "Sem palavras-chave dispon\u00edveis."}</p>}
+          </div>
+        </section>
+      ) : null}
+      </aside>
+      <div className="flex min-h-[30rem] min-w-0 flex-col xl:min-h-0">
+      {discovered ? (
+        <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)]">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] p-4">
+            <h3 className="text-sm font-semibold text-[var(--foreground)]">{isEnglish ? "Full article" : "Artigo completo"}</h3>
+            <div className="flex flex-wrap items-center gap-4 text-sm text-[var(--accent)]">
+              {publicationFailed ? <button type="button" onClick={() => setPublicationAttempt((attempt) => attempt + 1)} className="hover:underline">{isEnglish ? "Try again" : "Tentar novamente"}</button> : null}
+              {publicationPdfUrl ? <a href={publicationPdfUrl} target="_blank" rel="noopener noreferrer" className="hover:underline">{isEnglish ? "Open original PDF" : "Abrir PDF original"}</a> : null}
+              {publicationPdfUrl && publicationUrl ? <a href={publicationUrl} target="_blank" rel="noopener noreferrer" className="hover:underline">{isEnglish ? "View publication" : "Ver publicação"}</a> : null}
+            </div>
+          </div>
+          {publicationPdfUrl ? (
+            <iframe src={publicationPdfUrl} title={article.title} referrerPolicy="no-referrer" className="min-h-0 w-full flex-1 border-0" />
+          ) : (
+            <div className="flex flex-1 flex-col items-center justify-center gap-5 p-8 text-center">
+              <p role="status" className="max-w-sm text-sm leading-6 text-[var(--muted)]">
+                {publicationLoading
+                  ? (isEnglish ? "Looking for the original PDF..." : "A procurar o PDF original...")
+                  : (isEnglish ? "This article could not be displayed inside the app. Open the publication to read it." : "N\u00e3o foi poss\u00edvel visualizar este artigo dentro da app. Abre a publica\u00e7\u00e3o para o consultar.")}
+              </p>
+              {!publicationLoading && publicationUrl ? (
+                <a href={publicationUrl} target="_blank" rel="noopener noreferrer"
+                  style={{ color: "#08212b" }}
+                  className="inline-flex items-center gap-2 rounded-xl bg-[var(--accent)] px-5 py-3 text-sm font-semibold transition-opacity hover:opacity-85 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[var(--accent)]">
+                  {isEnglish ? "View publication" : "Ver publica\u00e7\u00e3o"}
+                  <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M14 3h7v7m0-7L10 14" /><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5" />
+                  </svg>
+                </a>
+              ) : null}
+            </div>
+          )}
+        </section>
+      ) : (
+      <div className="flex min-h-0 flex-1 justify-center">
+        <div className="papergraph-pdf-preview-shell relative flex h-full min-h-0 w-full flex-col overflow-hidden rounded-[24px] border border-[var(--border)] shadow-[0_18px_40px_rgba(0,0,0,0.18)]">
           {pdfBuffer ? (
             <PdfZoomControls
               className="absolute left-4 top-4 z-10"
@@ -433,6 +506,8 @@ export function ArticleViewerPane({
             </div>
           ) : null}
         </div>
+      </div>
+      )}
       </div>
     </section>
   );

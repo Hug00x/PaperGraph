@@ -1,3 +1,4 @@
+import { isViewOnlyArticle, articleAbstract } from "../src/lib/article-presentation.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { normalizeDoi, samePaper, uniqueNewPapers, safePublicationUrl, recommendedArticleSource, discoveredMetadata, articleIdentity } from "../src/lib/academic/discovery/identity.ts";
@@ -9,6 +10,8 @@ import { prepareRecommendedArticle, scientificSeed } from "../src/lib/academic/d
 import { textHash, paperText, generateEmbeddings, generateEmbedding } from "../src/lib/academic/embedding.ts";
 import { OpenAlexClient, retryAfterMs } from "../src/lib/academic/openalex-client.ts";
 import { discoveryConfig } from "../src/lib/academic/discovery/config.ts";
+import { saveWorkspaceArticles } from "../src/lib/supabase-workspace.ts";
+import { rememberWorkspaceRevision } from "../src/lib/workspace-persistence.ts";
 
 const vector = (index = 0) => Array.from({ length: 1024 }, (_, i) => Number(i === index));
 const raw = (id, overrides = {}) => ({ id: `https://openalex.org/W${id}`, doi: `https://doi.org/10.1234/paper${id}`,
@@ -18,6 +21,36 @@ const raw = (id, overrides = {}) => ({ id: `https://openalex.org/W${id}`, doi: `
   primary_location: { source: { display_name: "Research Journal" }, landing_page_url: "https://example.org/paper" },
   relevance_score: 1.4, ...overrides });
 const paper = (id, overrides) => normalizeOpenAlexWork(raw(id, overrides));
+
+test("mixed PDF and recommendation saves preserve enriched metadata and never send missing columns as null", async () => {
+  const original = { id: "pdf", authors: [{ display_name: "Existing author" }], topics: [{ id: "T7" }],
+    referenced_work_ids: ["W9"], doi: "10.1234/existing", openalex_id: "W8", embedding: [1] };
+  const stored = new Map([[original.id, structuredClone(original)]]);
+  const batches = [];
+  const supabase = { rpc: async (name, args) => {
+    assert.equal(name, "save_workspace_snapshot");
+    assert.equal(args.p_articles_only, true);
+    const rows = args.p_snapshot.articles;
+    batches.push(rows);
+    for (const row of rows) {
+      stored.set(row.id, { ...stored.get(row.id), ...row });
+    }
+    return { error: null, data: "1" };
+  } };
+  rememberWorkspaceRevision(supabase, "workspace", "0");
+  const base = { title: "Existing PDF", source: "\\includepdf{existing.pdf}", author: "User", status: "Published", tags: [] };
+  await saveWorkspaceArticles(supabase, "workspace", [
+    { ...base, id: "pdf" }, { ...base, id: "recommended", source: recommendedArticleSource(paper(1)) },
+  ]);
+  assert.equal(batches.length, 1);
+  for (const key of ["authors", "topics", "referenced_work_ids", "doi", "openalex_id", "embedding"]) {
+    assert.deepEqual(stored.get("pdf")[key], original[key]);
+  }
+  assert.equal(stored.get("recommended").authors[0].display_name, "Research Author");
+  assert.deepEqual(stored.get("recommended").referenced_work_ids, []);
+  await saveWorkspaceArticles(supabase, "workspace", []);
+  assert.equal(batches.length, 1);
+});
 
 test("DOI normalization, DOI/OpenAlex aliases and fallback title/year identity", () => {
   assert.equal(normalizeDoi(" DOI: https://doi.org/10.1234/ABC "), "10.1234/abc");
@@ -107,7 +140,7 @@ test("add payload uses stable IDs and inert metadata; repeated add returns exist
   const duplicate = prepareRecommendedArticle("workspace-a", paper(2), [first.article]);
   assert.equal(duplicate.existingId, first.article.id); assert.equal(duplicate.article, null);
   assert.ok(samePaper(articleIdentity(first.article), paper(2)));
-  assert.ok(recommendedArticleSource({ ...paper(2), title: "Paper \\input{private}" }).includes("\\textbackslash{}input\\{private\\}"));
+  assert.equal(discoveredMetadata(recommendedArticleSource({ ...paper(2), title: "Paper with special characters % &" })).title, "Paper with special characters % &");
 });
 test("private node labels and notes never become external discovery queries", async (t) => {
   t.mock.method(globalThis, "fetch", () => { throw new Error("Must not send private data"); });
@@ -142,4 +175,29 @@ test("embedding batch uses the existing endpoint and is reusable on import", asy
   t.mock.method(globalThis, "fetch", async (url, options) => { calls++; assert.ok(url.endsWith("/api/embed")); assert.deepEqual(JSON.parse(options.body).input, ["Batch A", "Batch B"]); return Response.json({ embeddings: [vector(), vector(1)] }); });
   await generateEmbeddings(["Batch A", "Batch B"]);
   assert.deepEqual(await generateEmbedding("Batch A"), vector()); assert.equal(calls, 1);
+});
+
+test("recommended articles preserve original PDF URLs without generating a synthetic paper", () => {
+  const original = paper(9, { best_oa_location: { pdf_url: "https://example.org/full.pdf" } });
+  const source = recommendedArticleSource(original);
+  assert.equal(discoveredMetadata(source).pdfUrl, "https://example.org/full.pdf");
+  assert.equal(source.includes("\\documentclass"), false);
+  assert.equal(paper(9, { primary_location: { pdf_url: "javascript:alert(1)" } }).pdfUrl, "");
+});
+
+test("view-only policy and abstracts cover existing recommended and imported articles", () => {
+  const metadata = paper(8);
+  const legacy = { source: recommendedArticleSource(metadata) + "\n\\documentclass{article}\n\\begin{document}Old generated summary\\end{document}", tags: ["OpenAlex"] };
+  assert.equal(isViewOnlyArticle(legacy), true);
+  assert.equal(articleAbstract(legacy), metadata.abstract);
+  assert.equal(articleAbstract({ ...legacy, abstract: "Saved abstract" }), "Saved abstract");
+  assert.equal(isViewOnlyArticle({ source: "\\includepdf{paper.pdf}", tags: [] }), true);
+  assert.equal(isViewOnlyArticle({ source: "\\documentclass{article}", tags: [] }), false);
+  assert.equal(articleAbstract({ source: "", abstract: "" }), "");
+});
+
+test("PDF discovery also checks repository locations and rejects unsafe location links", () => {
+  const withRepository = paper(10, { locations: [{ pdf_url: "javascript:alert(1)" }, { pdf_url: "https://repository.example.org/paper.pdf" }] });
+  assert.equal(withRepository.pdfUrl, "https://repository.example.org/paper.pdf");
+  assert.equal(paper(10, { locations: [{ pdf_url: "file:///private.pdf" }] }).pdfUrl, "");
 });

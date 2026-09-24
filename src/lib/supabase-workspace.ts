@@ -5,9 +5,10 @@ import {
   type WorkspaceImageAsset,
   type WorkspaceRelation,
   type WorkspaceSnapshot,
-} from "@/lib/workspace-data";
+} from "./workspace-data.ts";
 import type { AppLanguage } from "@/lib/portuguese-labels";
-import { discoveredMetadata } from "./academic/discovery/identity";
+import { persistWorkspace, rememberWorkspaceRevision } from "./workspace-persistence.ts";
+import { discoveredMetadata } from "./academic/discovery/identity.ts";
 
 type ArticleStatus = "Draft" | "Review" | "Published";
 type RelationType = WorkspaceRelation["relationType"];
@@ -527,52 +528,15 @@ export async function loadWorkspaceSnapshotFromSupabase(
   supabase: SupabaseClient,
   workspaceId: string,
 ): Promise<WorkspaceSnapshot> {
-  const [
-    articlesResult,
-    articleVersionsResult,
-    relationsResult,
-    positionsResult,
-    assetsResult,
-    ignoredMentionsResult,
-  ] =
-    await Promise.all([
-      supabase
-        .from("articles")
-        .select("id,title,author,status,source,abstract,tags,updated_at")
-        .eq("workspace_id", workspaceId)
-        .order("created_at", { ascending: true }),
-      supabase
-        .from("article_versions")
-        .select("id,article_id,title,author,status,source,tags,created_at,submitted_by,submitted_by_name")
-        .eq("workspace_id", workspaceId)
-        .order("created_at", { ascending: false }),
-      supabase
-        .from("relations")
-        .select("id,from_article_id,to_article_id,relation_type,note,created_at")
-        .eq("workspace_id", workspaceId)
-        .order("created_at", { ascending: true }),
-      supabase
-        .from("article_positions")
-        .select("article_id,x,y")
-        .eq("workspace_id", workspaceId),
-      supabase
-        .from("assets")
-        .select("id,article_id,storage_path,original_name,mime_type,size_bytes,created_at")
-        .eq("workspace_id", workspaceId)
-        .order("created_at", { ascending: false }),
-      supabase
-        .from("ignored_unlinked_mentions")
-        .select("mention_key")
-        .eq("workspace_id", workspaceId),
-    ]);
-
-  assertSupabaseResult(articlesResult.error, "Could not load articles.");
-  assertSupabaseResult(articleVersionsResult.error, "Could not load article history.");
-  assertSupabaseResult(relationsResult.error, "Could not load relations.");
-  assertSupabaseResult(positionsResult.error, "Could not load graph positions.");
-  assertSupabaseResult(assetsResult.error, "Could not load assets.");
-  assertSupabaseResult(ignoredMentionsResult.error, "Could not load ignored mentions.");
-
+  const { data, error } = await supabase.rpc("load_workspace_snapshot", { p_workspace_id: workspaceId });
+  assertSupabaseResult(error, "Could not load workspace snapshot.");
+  if (!data || typeof data.revision !== "string") throw new Error("workspace-reload-required");
+  const articlesResult = { data: data.articles };
+  const articleVersionsResult = { data: data.article_versions };
+  const relationsResult = { data: data.relations };
+  const positionsResult = { data: data.article_positions };
+  const assetsResult = { data: data.assets };
+  const ignoredMentionsResult = { data: data.ignored_unlinked_mentions };
   const articles = ((articlesResult.data ?? []) as ArticleRow[]).map((article) => ({
     id: article.id,
     title: article.title,
@@ -636,8 +600,10 @@ export async function loadWorkspaceSnapshotFromSupabase(
   const ignoredUnlinkedMentionKeys = ((ignoredMentionsResult.data ?? []) as IgnoredMentionRow[]).map(
     (mention) => mention.mention_key,
   );
+  const persistenceSession = rememberWorkspaceRevision(supabase, workspaceId, data.revision);
   return {
     ...defaultSnapshot,
+    persistenceSession,
     selectedArticleId: "",
     articles,
     relations,
@@ -648,8 +614,8 @@ export async function loadWorkspaceSnapshotFromSupabase(
   };
 }
 
-export async function saveWorkspaceArticles(supabase: SupabaseClient, workspaceId: string, articles: WorkspaceSnapshot["articles"]) {
-  const articleRows = articles.map((article) => {
+function workspaceArticleRows(workspaceId: string, articles: WorkspaceSnapshot["articles"]) {
+  return articles.map((article) => {
     const discovered = discoveredMetadata(article.source);
     return ({
     id: article.id,
@@ -662,18 +628,20 @@ export async function saveWorkspaceArticles(supabase: SupabaseClient, workspaceI
     source: article.source,
     tags: article.tags,
     updated_at: new Date().toISOString(),
-    authors: discovered ? discovered.authors.map((a) => ({ id: a.id, display_name: a.name })) : [],
-    topics: discovered ? discovered.topics.map((t) => ({ id: t.id, display_name: t.name })) : [],
-    referenced_work_ids: discovered ? discovered.references : [],
-    ...(discovered ? { openalex_id: discovered.externalId, openalex_title: discovered.title,
+    ...(discovered ? {
+      authors: discovered.authors.map((a) => ({ id: a.id, display_name: a.name })),
+      topics: discovered.topics.map((t) => ({ id: t.id, display_name: t.name })),
+      referenced_work_ids: discovered.references,
+      openalex_id: discovered.externalId, openalex_title: discovered.title,
       abstract: article.abstract?.trim() || discovered.abstract || null, doi: discovered.doi || null,
       publication_year: discovered.year || null, cited_by_count: discovered.citationCount,
     } : {}),
   }); });
-  if (articleRows.length) {
-    const { error } = await supabase.from("articles").upsert(articleRows, { onConflict: "workspace_id,id" });
-    assertSupabaseResult(error, "Could not save articles.");
-  }
+}
+
+export async function saveWorkspaceArticles(supabase: SupabaseClient, workspaceId: string, articles: WorkspaceSnapshot["articles"], persistenceSession?: string | null) {
+  if (!articles.length) return;
+  await persistWorkspace(supabase, workspaceId, { articles: workspaceArticleRows(workspaceId, articles) }, true, persistenceSession);
 }
 
 export async function saveWorkspaceSnapshotToSupabase(
@@ -754,51 +722,13 @@ export async function saveWorkspaceSnapshotToSupabase(
     })
     .filter((row): row is NonNullable<typeof row> => Boolean(row));
 
-  const workspaceUpdate = await supabase
-    .from("workspaces")
-    .update({ language: workspace.language, updated_at: new Date().toISOString() })
-    .eq("id", workspace.id);
-
-  assertSupabaseResult(workspaceUpdate.error, "Could not update workspace.");
-
-  for (const table of ["ignored_unlinked_mentions", "relations", "article_positions", "assets", "article_versions"]) {
-    const result = await supabase.from(table).delete().eq("workspace_id", workspace.id);
-    assertSupabaseResult(result.error, `Could not clear ${table}.`);
-  }
-
-  // Keep metadata and embeddings on surviving articles. Delete only removed IDs.
-  const stored = await supabase.from("articles").select("id").eq("workspace_id", workspace.id);
-  assertSupabaseResult(stored.error, "Could not load stored article IDs.");
-  const removedIds = (stored.data ?? []).map((row) => row.id as string).filter((id) => !articleIds.has(id));
-  for (let offset = 0; offset < removedIds.length; offset += 100) {
-    const result = await supabase.from("articles").delete().eq("workspace_id", workspace.id)
-      .in("id", removedIds.slice(offset, offset + 100));
-    assertSupabaseResult(result.error, "Could not remove deleted articles.");
-  }
-  await saveWorkspaceArticles(supabase, workspace.id, snapshot.articles);
-
-  if (positionRows.length > 0) {
-    const result = await supabase.from("article_positions").insert(positionRows);
-    assertSupabaseResult(result.error, "Could not save graph positions.");
-  }
-
-  if (relationRows.length > 0) {
-    const result = await supabase.from("relations").insert(relationRows);
-    assertSupabaseResult(result.error, "Could not save relations.");
-  }
-
-  if (assetRows.length > 0) {
-    const result = await supabase.from("assets").insert(assetRows);
-    assertSupabaseResult(result.error, "Could not save assets.");
-  }
-
-  if (articleVersionRows.length > 0) {
-    const result = await supabase.from("article_versions").insert(articleVersionRows);
-    assertSupabaseResult(result.error, "Could not save article history.");
-  }
-
-  if (ignoredMentionRows.length > 0) {
-    const result = await supabase.from("ignored_unlinked_mentions").insert(ignoredMentionRows);
-    assertSupabaseResult(result.error, "Could not save ignored mentions.");
-  }
+  await persistWorkspace(supabase, workspace.id, {
+    language: workspace.language,
+    articles: workspaceArticleRows(workspace.id, snapshot.articles),
+    article_positions: positionRows,
+    relations: relationRows,
+    assets: assetRows,
+    article_versions: articleVersionRows,
+    ignored_unlinked_mentions: ignoredMentionRows,
+  }, false, snapshot.persistenceSession);
 }

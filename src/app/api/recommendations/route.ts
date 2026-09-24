@@ -1,7 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 import { DiscoveryError } from "@/lib/academic/openalex-client";
-import { articleIdentity } from "@/lib/academic/discovery/identity";
+import { articleIdentity, discoveredMetadata } from "@/lib/academic/discovery/identity";
 import { openAlexDiscovery } from "@/lib/academic/discovery/openalex-provider";
 import { recommendationService } from "@/lib/academic/discovery/service";
 import { prepareRecommendedArticle, scientificSeed, seedColumns, workspaceIdentities, type DiscoveryRow } from "@/lib/academic/discovery/repository";
@@ -24,6 +24,12 @@ export async function POST(request: Request) {
       .eq("workspace_id", body.workspaceId).eq("id", body.articleId).maybeSingle();
     if (seedError) throw new DiscoveryError("workspace-unavailable");
     if (!row) return NextResponse.json({ error: "not-found" }, { status: 404 });
+    if (body.action === "publication") {
+      const metadata = discoveredMetadata(row.source ?? "");
+      if (!metadata) return NextResponse.json({ error: "not-found" }, { status: 404 });
+      const paper = await openAlexDiscovery.lookup(metadata.externalId, request.signal);
+      return NextResponse.json({ paper: paper ?? metadata });
+    }
     if (body.action === "prepare-add") {
       const access = await supabase.rpc("can_edit_workspace", { workspace_uuid: body.workspaceId });
       if (access.error || !access.data) return NextResponse.json({ error: "read-only" }, { status: 403 });

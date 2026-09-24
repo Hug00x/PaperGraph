@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import { availablePort } from "../electron/ollama-manager.cjs";
 import { openAlexDiscovery } from "../src/lib/academic/discovery/openalex-provider.ts";
 import { prepareRecommendedArticle } from "../src/lib/academic/discovery/repository.ts";
+import { testPdfImport } from "./pdf-import-acceptance.mjs";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const profile = path.join(root, ".utmp/discovery-desktop-test");
 const execute = promisify(execFile);
@@ -39,27 +40,33 @@ try {
   if (workspace.error) throw new Error(`Create test workspace: ${workspace.error.message}`);
   workspaceId = workspace.data[0].workspace_id;
   const fixtures = [seed, other].map((paper) => ({ paper, article: prepareRecommendedArticle(workspaceId, paper, []).article }));
-  const inserted = await user.from("articles").insert(fixtures.map(({ paper, article }) => ({
+  const initial = await user.rpc("load_workspace_snapshot", { p_workspace_id: workspaceId });
+  if (initial.error) throw new Error(`Load test workspace: ${initial.error.message}`);
+  const inserted = await user.rpc("save_workspace_snapshot", { p_workspace_id: workspaceId,
+    p_expected_revision: initial.data.revision, p_articles_only: true,
+    p_snapshot: { articles: fixtures.map(({ paper, article }) => ({
     id: article.id, workspace_id: workspaceId, title: article.title, author: article.author, status: article.status,
-    source: article.source, source_type: "latex", tags: article.tags, abstract: paper.abstract, doi: paper.doi,
+    // Include an ordinary article without the discovery marker to exercise mixed saves.
+    source: paper === seed ? "\\documentclass{article}\\begin{document}Fixture\\end{document}" : article.source,
+    source_type: "latex", tags: article.tags, abstract: paper.abstract, doi: paper.doi,
     openalex_id: paper.externalId, openalex_title: paper.title,
     authors: paper.authors.map((a) => ({ id: a.id, display_name: a.name })), publication_year: paper.year,
     topics: paper.topics.map((t) => ({ id: t.id, display_name: t.name })), referenced_work_ids: paper.references,
-  })));
+  })) } });
   if (inserted.error) throw new Error(`Seed test workspace: ${inserted.error.message}`);
   const protocol = await execute("reg.exe", ["query", protocolKey, "/ve"], { windowsHide: true }).catch(() => null);
   previousProtocol = protocol?.stdout.match(/REG_SZ\s+([^\r\n]+)/)?.[1];
   const port = await availablePort(0);
   const env = { ...process.env, APPDATA: path.join(profile, "roaming"), LOCALAPPDATA: path.join(root, ".utmp/packaged-profile/local") };
   delete env.ELECTRON_RUN_AS_NODE;
-  child = spawn(path.join(root, "desktop-dist/win-unpacked/PaperGraph.exe"), [`--remote-debugging-port=${port}`, `--user-data-dir=${path.join(profile, "chromium")}`], { env, windowsHide: true, stdio: "ignore" });
+  child = spawn(path.resolve(process.argv[2] || path.join(root, "desktop-dist/win-unpacked/PaperGraph.exe")), [`--remote-debugging-port=${port}`, `--user-data-dir=${path.join(profile, "chromium")}`], { env, windowsHide: true, stdio: "ignore" });
   const target = await until(async () => {
     try { return (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find((t) => t.type === "page" && t.url.startsWith("http://127.0.0.1:")); } catch { return null; }
   }, "desktop window");
   socket = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = reject; });
   let nextId = 0; const pending = new Map();
-  socket.onmessage = ({ data }) => { const message = JSON.parse(data); const waiter = pending.get(message.id); if (waiter) { pending.delete(message.id); message.error ? waiter.reject(new Error(message.error.message)) : waiter.resolve(message.result); } };
+  socket.onmessage = ({ data }) => { const message = JSON.parse(data); const waiter = pending.get(message.id); if (waiter) { pending.delete(message.id); if (message.error) waiter.reject(new Error(message.error.message)); else waiter.resolve(message.result); } };
   const call = (method, params = {}) => new Promise((resolve, reject) => { const id = ++nextId; pending.set(id, { resolve, reject }); socket.send(JSON.stringify({ id, method, params })); });
   const evaluate = async (expression) => {
     const response = await call("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
@@ -73,6 +80,9 @@ try {
   await evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent.trim().startsWith('Mapa')).click()`);
   await until(async () => evaluate("document.querySelectorAll('[data-graph-node]').length === 2"), "seed nodes");
   await until(async () => evaluate("window.papergraphRuntime.getState().then(s=>s.phase==='ready')"), "local engine");
+  if (process.argv.includes("--pdf")) {
+    await testPdfImport({ evaluate, call, profile, user, workspaceId, until });
+  } else {
   const select = (title) => evaluate(`[...document.querySelectorAll('button')].find(b=>b.querySelector('p')?.textContent===${JSON.stringify(title)}).click()`);
   await select(seed.title);
   await evaluate("document.querySelector('.recommendations-panel button').click()");
@@ -85,10 +95,14 @@ try {
   assert.ok(title !== seed.title && title !== other.title);
   await evaluate("document.querySelector('.recommendation-item button').click()");
   await until(async () => evaluate("document.querySelectorAll('[data-graph-node]').length === 3"), "added recommendation node");
-  const stored = await user.from("articles").select("id,title,doi,openalex_id,abstract,embedding_model").eq("workspace_id", workspaceId);
+  const stored = await user.from("articles").select("id,title,doi,openalex_id,abstract,embedding_model,authors,topics,referenced_work_ids").eq("workspace_id", workspaceId);
   assert.equal(stored.error, null); assert.equal(stored.data.length, 3);
   const added = stored.data.find((a) => a.title === title);
   assert.ok(added?.openalex_id); assert.equal(added.embedding_model, "bge-m3");
+  const preserved = stored.data.find((a) => a.id === fixtures[0].article.id);
+  assert.equal(preserved.openalex_id, seed.externalId);
+  assert.ok(preserved.authors.length > 0, "Saving recommendations must preserve existing authors");
+  assert.deepEqual(preserved.referenced_work_ids, seed.references);
   const appUrl = await evaluate("location.origin");
   const repeat = await fetch(`${appUrl}/api/recommendations`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${login.data.session.access_token}` },
     body: JSON.stringify({ action: "prepare-add", workspaceId, articleId: fixtures[1].article.id, externalId: added.openalex_id }) });
@@ -103,11 +117,24 @@ try {
     duplicatePrevented: true, newArticleSelectable: true, embeddingStored: true, nodesAfterReload: 3 };
   await writeFile(path.join(profile, "result.json"), JSON.stringify(evidence, null, 2));
   console.log(JSON.stringify(evidence));
+  }
   void evaluate("window.close()").catch(() => {});
   await until(async () => child.exitCode !== null, "normal desktop shutdown", 20000);
 } finally {
   socket?.close(); if (child && child.exitCode === null) child.kill();
   if (previousProtocol) await execute("reg.exe", ["add", protocolKey, "/ve", "/t", "REG_SZ", "/d", previousProtocol, "/f"], { windowsHide: true });
+  if (workspaceId && process.argv.includes("--pdf")) {
+    const bucket = user.storage.from("papergraph-assets");
+    const folders = await bucket.list(workspaceId, { limit: 1000 });
+    if (folders.error) throw new Error(`Test asset cleanup: ${folders.error.message}`);
+    for (const folder of folders.data) {
+      const prefix = `${workspaceId}/${folder.name}`;
+      const files = await bucket.list(prefix, { limit: 1000 });
+      if (files.error) throw new Error(`Test asset cleanup: ${files.error.message}`);
+      const paths = files.data.map((file) => `${prefix}/${file.name}`);
+      if (paths.length) { const removed = await bucket.remove(paths); if (removed.error) throw new Error(`Test asset cleanup: ${removed.error.message}`); }
+    }
+  }
   if (workspaceId) { const cleaned = await user.rpc("delete_user_workspace", { target_workspace_id: workspaceId }); if (cleaned.error) console.error("Test workspace cleanup failed:", cleaned.error.message); }
   if (userId) { const cleaned = await admin.auth.admin.deleteUser(userId); if (cleaned.error) throw new Error(`Test account cleanup failed: ${cleaned.error.message}`); }
   console.log("Temporary test account/workspace cleanup complete");

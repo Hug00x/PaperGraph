@@ -60,6 +60,8 @@ export type WorkspaceImageAsset = {
 };
 
 export type WorkspaceSnapshot = {
+  // Local load identity; never sent as a database column or used as a server revision.
+  persistenceSession?: string | null;
   selectedArticleId: string;
   articles: WorkspaceArticle[];
   relations: WorkspaceRelation[];
@@ -74,6 +76,7 @@ export const articles: WorkspaceArticle[] = [];
 export const articlePositions: Record<string, ArticlePosition> = {};
 
 export const defaultSnapshot: WorkspaceSnapshot = {
+  persistenceSession: null,
   selectedArticleId: "",
   articles,
   relations: [],

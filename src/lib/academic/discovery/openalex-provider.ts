@@ -4,7 +4,7 @@ import { discoveryConfig as config } from "./config.ts";
 import { normalizeDoi, openAlexId, safePublicationUrl } from "./identity.ts";
 import type { PaperDiscoveryProvider, RecommendationQuery, ScientificPaper } from "./types.ts";
 
-const fields = "id,doi,title,abstract_inverted_index,publication_year,authorships,primary_location,cited_by_count,type,topics,referenced_works";
+const fields = "id,doi,title,abstract_inverted_index,publication_year,authorships,primary_location,best_oa_location,locations,cited_by_count,type,topics,referenced_works";
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const text = (value: unknown, length = 1000) => typeof value === "string" ? value.trim().slice(0, length) : "";
 const list = (value: unknown) => Array.isArray(value) ? value.slice(0, 1000) as unknown[] : [];
@@ -20,6 +20,7 @@ export function normalizeOpenAlexWork(raw: unknown): ScientificPaper | null {
     topics: list(work.topics).map(record).map((t) => ({ id: text(t.id), name: text(t.display_name, 200) })).filter((t) => /^https:\/\/openalex.org\/T\d+$/.test(t.id)),
     references: list(work.referenced_works).map((id) => openAlexId(text(id))).filter((id): id is string => Boolean(id)),
     venue: text(record(location.source).display_name, 400), url: safePublicationUrl(location.landing_page_url) || (doi ? `https://doi.org/${doi}` : externalId),
+    pdfUrl: safePublicationUrl(record(work.best_oa_location).pdf_url) || safePublicationUrl(location.pdf_url) || list(work.locations).map(record).map((item) => safePublicationUrl(item.pdf_url)).find(Boolean) || "",
     type: text(work.type, 100), citationCount: typeof work.cited_by_count === "number" ? Math.max(0, work.cited_by_count) : 0,
     providerScore: typeof work.relevance_score === "number" && Number.isFinite(work.relevance_score) ? work.relevance_score : undefined };
 }

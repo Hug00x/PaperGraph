@@ -3,7 +3,7 @@ const path = require("node:path");
 const assert = require("node:assert/strict");
 const { createHash } = require("node:crypto");
 const root = path.resolve(__dirname, "..");
-const resources = path.join(root, "desktop-dist/win-unpacked/resources");
+const resources = path.resolve(process.argv[2] || path.join(root, "desktop-dist/win-unpacked/resources"));
 const config = require("../electron/embedding-runtime-config.json");
 async function hash(file) {
   const value = createHash("sha256"); for await (const part of fs.createReadStream(file)) value.update(part);
@@ -17,7 +17,7 @@ async function main() {
   assert.ok(fs.existsSync(path.join(resources, "app.asar.unpacked/electron/ollama-guardian.ps1")));
   assert.ok(!fs.existsSync(path.join(resources, "server/.env.local")));
   assert.ok(!fs.existsSync(path.join(resources, "ollama/models")));
-  for (const file of ["OLLAMA-LICENSE.txt", "THIRD-PARTY-NOTICES.md", "CUDA-12.8-EULA.html", "CUDA-13.0-EULA.html", "MICROSOFT-VC-RUNTIME-TERMS.html"]) {
+  for (const file of ["OLLAMA-LICENSE.txt", "THIRD-PARTY-NOTICES.txt", "CUDA-12.8-EULA.html", "CUDA-13.0-EULA.html", "MICROSOFT-VC-RUNTIME-TERMS.html"]) {
     assert.ok(fs.statSync(path.join(resources, "ollama", file)).size > 100);
   }
   const envPath = path.join(root, ".env.local");

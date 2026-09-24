@@ -215,7 +215,7 @@ function rewriteMissingImageReferences(source: string, compileDirectory: string)
     (fullMatch, imagePath: string) => {
       const resolvedImagePath = resolveCompileImagePath(compileDirectory, imagePath.trim());
 
-      if (resolvedImagePath && existsSync(resolvedImagePath)) {
+      if (resolvedImagePath && existsSync(/*turbopackIgnore: true*/ resolvedImagePath)) {
         return fullMatch;
       }
 
@@ -230,7 +230,7 @@ function rewriteMissingPdfIncludes(source: string, compileDirectory: string) {
     (fullMatch, pdfPath: string) => {
       const resolvedPdfPath = resolveCompileImagePath(compileDirectory, pdfPath.trim());
 
-      if (resolvedPdfPath && existsSync(resolvedPdfPath)) {
+      if (resolvedPdfPath && existsSync(/*turbopackIgnore: true*/ resolvedPdfPath)) {
         return fullMatch;
       }
 
@@ -304,9 +304,9 @@ async function copyUploadedImagesToCompileDirectory(
         return;
       }
 
-      const uploadedImagePath = join(uploadedImagesDirectory, storedName);
+      const uploadedImagePath = join(/*turbopackIgnore: true*/ uploadedImagesDirectory, storedName);
 
-      if (!existsSync(uploadedImagePath)) {
+      if (!existsSync(/*turbopackIgnore: true*/ uploadedImagePath)) {
         const wasDownloaded = await downloadStorageAssetToLocalFile(imageAsset, uploadedImagePath, accessToken);
 
         if (!wasDownloaded) {
@@ -315,9 +315,10 @@ async function copyUploadedImagesToCompileDirectory(
       }
 
       await Promise.all([
-        cp(uploadedImagePath, join(compileImageDirectory, storedName), { force: true }),
-        cp(uploadedImagePath, join(compileDirectory, originalName), { force: true }),
-        cp(uploadedImagePath, join(compileImageDirectory, originalName), { force: true }),
+        // These are user assets in a temporary runtime directory, not build inputs.
+        cp(uploadedImagePath, join(/*turbopackIgnore: true*/ compileImageDirectory, storedName), { force: true }),
+        cp(uploadedImagePath, join(/*turbopackIgnore: true*/ compileDirectory, originalName), { force: true }),
+        cp(uploadedImagePath, join(/*turbopackIgnore: true*/ compileImageDirectory, originalName), { force: true }),
       ]);
     }),
   );

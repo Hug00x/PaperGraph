@@ -117,6 +117,22 @@ export function getFriendlyErrorMessage(
   const rawMessage = getErrorMessage(error);
   const normalizedMessage = normalizeMessage(rawMessage);
 
+  if (/pdf-import-invalid-type/.test(normalizedMessage)) return text(language, "Este ficheiro não é um PDF.", "This file is not a PDF.");
+  if (/pdf-import-empty/.test(normalizedMessage)) return text(language, "O ficheiro está vazio.", "The file is empty.");
+  if (/pdf-import-too-large/.test(normalizedMessage)) return text(language, "O PDF excede o limite de 50 MB.", "The PDF exceeds the 50 MB limit.");
+  if (/pdf-import-read-only/.test(normalizedMessage)) return text(language, "Não tens permissão para importar nesta workspace.", "You cannot import into this workspace.");
+
+  if (/workspace-save-conflict|workspace-reload-required/.test(normalizedMessage)) {
+    return text(language,
+      "A gravação foi interrompida para proteger alterações de outro dispositivo. A tua cópia local foi mantida. Guarda o texto que estás a editar e recarrega a workspace antes de voltar a guardar.",
+      "Saving stopped to protect changes from another device. Your local copy was kept. Copy any text you are editing and reload the workspace before saving again.");
+  }
+  if (/load_workspace_snapshot|save_workspace_snapshot/.test(normalizedMessage)) {
+    return text(language,
+      "É necessário aplicar a atualização de gravação segura no Supabase antes de abrir esta workspace.",
+      "Apply the safe workspace persistence migration in Supabase before opening this workspace.");
+  }
+
   if (/^HTTP \d+$/i.test(normalizedMessage)) {
     return fallback ?? text(language, "O servidor não conseguiu concluir o pedido.", "The server could not complete the request.");
   }

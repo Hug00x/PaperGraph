@@ -1,17 +1,17 @@
 "use client";
 
-import { type ChangeEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   getArticleStatusLabel,
   getArticleTagLabel,
   getRelationNoteLabel,
   type AppLanguage,
 } from "@/lib/portuguese-labels";
-import Image from "next/image";
-import darkFilterIcon from "@/imagens/dark_filter.png";
-import lightFilterIcon from "@/imagens/white_filter.png";
 import { getFriendlyErrorMessage } from "@/lib/friendly-errors";
 import type { ArticlePosition, UnlinkedMention, WorkspaceArticle, WorkspaceRelation } from "@/lib/workspace-data";
+import { isViewOnlyArticle } from "@/lib/article-presentation";
+import { PdfImportControl } from "@/components/pdf-import-control";
+import type { PdfImportResult } from "@/lib/pdf-import-queue";
 import { RecommendationsPanel } from "@/components/recommendations-panel";
 import type { RecommendedPaper } from "@/lib/academic/discovery/types";
 
@@ -49,9 +49,8 @@ type GraphPaneProps = {
   onEditArticle: (articleId: string) => void;
   onViewArticle: (articleId: string) => void;
   onExportArticlePdf: (articleId: string) => void | Promise<void>;
-  onImportPdfArticle: (file: File) => void | Promise<void>;
+  onImportPdfArticle: (file: File) => Promise<PdfImportResult>;
   onDeleteArticle: (articleId: string) => void | Promise<void>;
-  onRefreshAcademicRelations?: () => void | Promise<void>;
 };
 
 type ArticleRelationEntry = {
@@ -187,12 +186,10 @@ export function GraphPane({
   onExportArticlePdf,
   onImportPdfArticle,
   onDeleteArticle,
-  onRefreshAcademicRelations,
   workspaceId, accessToken, onAddRecommendation,
 }: GraphPaneProps) {
   const isEnglish = language === "en";
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const pdfImportInputRef = useRef<HTMLInputElement | null>(null);
   const [draftPositions, setDraftPositions] = useState<Record<string, ArticlePosition> | null>(null);
   const [draggingArticleId, setDraggingArticleId] = useState<string | null>(null);
   const [viewport, setViewport] = useState({ x: 0, y: 0, scale: 1 });
@@ -202,16 +199,37 @@ export function GraphPane({
   const [activeRelationFilters, setActiveRelationFilters] = useState<Set<GraphRelationFilterType>>(
     () => new Set(graphRelationFilterTypes),
   );
-  const [appTheme, setAppTheme] = useState<"dark" | "light">(() =>
-    typeof document !== "undefined" && document.documentElement.dataset.papergraphTheme === "light"
-      ? "light"
-      : "dark",
-  );
   const [manualConnectionSourceId, setManualConnectionSourceId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ articleId: string; x: number; y: number } | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement | null>(null);
+  const [showContextRelations, setShowContextRelations] = useState(false);
+
+  useLayoutEffect(() => {
+    const menu = contextMenuRef.current;
+    const container = containerRef.current;
+    if (!contextMenu || !menu || !container) return;
+
+    const positionMenu = () => {
+      const margin = 12;
+      menu.style.maxHeight = `${Math.max(0, container.clientHeight - margin * 2)}px`;
+      menu.style.maxWidth = `${Math.max(0, container.clientWidth - margin * 2)}px`;
+      const left = contextMenu.x + menu.offsetWidth > container.clientWidth - margin
+        ? contextMenu.x - menu.offsetWidth : contextMenu.x;
+      const top = contextMenu.y + menu.offsetHeight > container.clientHeight - margin
+        ? contextMenu.y - menu.offsetHeight : contextMenu.y;
+      menu.style.left = `${clamp(left, margin, Math.max(margin, container.clientWidth - menu.offsetWidth - margin))}px`;
+      menu.style.top = `${clamp(top, margin, Math.max(margin, container.clientHeight - menu.offsetHeight - margin))}px`;
+    };
+    positionMenu();
+    menu.scrollTop = 0;
+    menu.querySelector<HTMLButtonElement>("button")?.focus();
+    const observer = new ResizeObserver(positionMenu);
+    observer.observe(container);
+    observer.observe(menu);
+    return () => observer.disconnect();
+  }, [contextMenu, showContextRelations]);
+
   const [librarySearch, setLibrarySearch] = useState("");
-  const [isImportingPdf, setIsImportingPdf] = useState(false);
-  const [importPdfError, setImportPdfError] = useState<string | null>(null);
   const [deleteCandidateArticleId, setDeleteCandidateArticleId] = useState<string | null>(null);
   const [isDeletingArticle, setIsDeletingArticle] = useState(false);
   const [deleteArticleError, setDeleteArticleError] = useState<string | null>(null);
@@ -236,21 +254,6 @@ export function GraphPane({
   }, [onArticlePositionsChange]);
 
   const worldSize = 3000;
-
-  useEffect(() => {
-    if (typeof document === "undefined") return;
-
-    const el = document.documentElement;
-    const update = () => setAppTheme(el.dataset.papergraphTheme === "light" ? "light" : "dark");
-
-    // initial
-    update();
-
-    const obs = new MutationObserver(() => update());
-    obs.observe(el, { attributes: true, attributeFilter: ["data-papergraph-theme"] });
-
-    return () => obs.disconnect();
-  }, []);
 
   const stopViewportAnimation = useCallback(() => {
     if (viewportAnimationRef.current === null) {
@@ -555,8 +558,8 @@ export function GraphPane({
     );
   }, [activeArticle, canEdit, contextMenu, visibleRelations]);
   const contextMenuArticle = contextMenu ? articleById.get(contextMenu.articleId) ?? null : null;
-  const canEditContextMenuArticle = canEdit && contextMenuArticle ? !isImportedPdfArticle(contextMenuArticle) : false;
-  const canEditActiveArticle = canEdit && activeArticle ? !isImportedPdfArticle(activeArticle) : false;
+  const canEditContextMenuArticle = canEdit && contextMenuArticle ? !isViewOnlyArticle(contextMenuArticle) : false;
+  const canEditActiveArticle = canEdit && activeArticle ? !isViewOnlyArticle(activeArticle) : false;
   const deleteCandidateArticle = deleteCandidateArticleId
     ? articleById.get(deleteCandidateArticleId) ?? null
     : null;
@@ -634,6 +637,7 @@ export function GraphPane({
     }
 
     const handleWheel = (event: WheelEvent) => {
+      if (event.target instanceof Element && event.target.closest("[data-graph-control]")) return;
       event.preventDefault();
       stopViewportAnimation();
 
@@ -699,6 +703,7 @@ export function GraphPane({
             setManualConnectionSourceId(null);
           }
 
+          setFilterPanelOpen(false);
           onSelectArticle(nextArticleId);
         }
 
@@ -804,6 +809,7 @@ export function GraphPane({
                 <button
                   type="button"
                   onClick={() => {
+                    setFilterPanelOpen(false);
                     onSelectArticle(article.id);
                     centerViewportOnArticle(article.id);
                   }}
@@ -901,48 +907,6 @@ export function GraphPane({
       </section>
     );
   };
-
-  async function handlePdfImportChange(event: ChangeEvent<HTMLInputElement>) {
-    if (!canEdit) {
-      event.target.value = "";
-      setImportPdfError(
-        isEnglish
-          ? "This workspace is read-only for your account."
-          : "Esta workspace está em modo só leitura para a tua conta.",
-      );
-      return;
-    }
-
-    const pdfFile = event.target.files?.[0];
-
-    if (!pdfFile) {
-      return;
-    }
-
-    if (pdfFile.type !== "application/pdf" && !pdfFile.name.toLowerCase().endsWith(".pdf")) {
-      setImportPdfError(isEnglish ? "Choose a PDF file." : "Escolhe um ficheiro PDF.");
-      event.target.value = "";
-      return;
-    }
-
-    setIsImportingPdf(true);
-    setImportPdfError(null);
-
-    try {
-      await onImportPdfArticle(pdfFile);
-    } catch (error) {
-      setImportPdfError(
-        getFriendlyErrorMessage(error, language, {
-          context: "import",
-          fallback: isEnglish ? "Could not import the PDF." : "Não foi possível importar o PDF.",
-        }),
-      );
-    } finally {
-      setIsImportingPdf(false);
-      event.target.value = "";
-    }
-  }
-
   const graphVisualScale = clamp(viewport.scale, 0.52, 1.38);
   const relationStrokeScale = clamp(viewport.scale, 0.58, 1.28);
 
@@ -999,33 +963,7 @@ export function GraphPane({
           </p>
         ) : null}
 
-        <input
-          ref={pdfImportInputRef}
-          type="file"
-          accept="application/pdf,.pdf"
-          className="hidden"
-          onChange={handlePdfImportChange}
-        />
-        <button
-          type="button"
-          disabled={!canEdit || isImportingPdf}
-          onClick={() => pdfImportInputRef.current?.click()}
-          className="mt-2 rounded-full border border-[var(--border)] bg-white/5 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {isImportingPdf
-            ? isEnglish
-              ? "Importing PDF..."
-              : "A importar PDF..."
-            : isEnglish
-              ? "Import PDF"
-              : "Importar PDF"}
-        </button>
-
-        {importPdfError ? (
-          <p className="mt-2 rounded-[14px] border border-red-300/30 bg-red-500/10 px-3 py-2 text-xs leading-5 text-red-100">
-            {importPdfError}
-          </p>
-        ) : null}
+        <PdfImportControl canEdit={canEdit} language={language} onImport={onImportPdfArticle} />
 
         {manualConnectionSource ? (
           <p className="mt-3 text-xs uppercase tracking-[0.2em] text-[var(--muted)]">
@@ -1068,6 +1006,7 @@ export function GraphPane({
                     return;
                   }
 
+                  setFilterPanelOpen(false);
                   onSelectArticle(nextArticleId);
                   centerViewportOnArticle(nextArticleId);
                 }}
@@ -1107,6 +1046,12 @@ export function GraphPane({
         onPointerDown={(event) => {
           const target = event.target as HTMLElement | null;
 
+          if (target?.closest("[data-graph-control]")) return;
+
+          if (target?.closest("[data-graph-background]")) {
+            onSelectArticle(null);
+          }
+
           if (target?.closest("[data-graph-node]") || target?.closest("button")) {
             return;
           }
@@ -1134,7 +1079,7 @@ export function GraphPane({
           }
         }}
       >
-        <div className="papergraph-graph-backdrop absolute inset-0 z-0" />
+        <div data-graph-background className="papergraph-graph-backdrop absolute inset-0 z-0" />
 
         {isAcademicRelationsRunning ? (
           <div className="absolute left-1/2 top-4 z-30 -translate-x-1/2 rounded-full border border-[var(--accent)]/40 bg-black/35 px-4 py-2 text-xs font-semibold text-[var(--accent)] shadow-[0_14px_34px_rgba(0,0,0,0.22)] backdrop-blur-md">
@@ -1142,109 +1087,81 @@ export function GraphPane({
           </div>
         ) : null}
 
-        {/* Filter button (top-right) */}
-        <div className="absolute right-4 top-4 z-30">
+        <div data-graph-control className="absolute right-4 top-4 z-30">
           <button
             type="button"
-            onClick={() => setFilterPanelOpen((s) => !s)}
-            className="rounded-full border border-[var(--border)] bg-black/20 p-[5.333px] transition-transform hover:scale-105"
-            aria-label={isEnglish ? "Filters" : "Filtros"}
+            aria-expanded={filterPanelOpen}
+            aria-controls="graph-filters"
+            onClick={() => {
+              if (!filterPanelOpen) {
+                onSelectArticle(null);
+                setContextMenu(null);
+                setManualConnectionSourceId(null);
+              }
+              setFilterPanelOpen((open) => !open);
+            }}
+            className={`flex h-10 items-center gap-2 rounded-xl border px-3 text-sm font-medium shadow-sm backdrop-blur-xl transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] ${filterPanelOpen ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]" : "border-[var(--border)] bg-[var(--surface)] text-[var(--foreground)] hover:bg-[var(--surface-strong)]"}`}
           >
-            <Image
-              src={appTheme === "light" ? lightFilterIcon : darkFilterIcon}
-              alt={isEnglish ? "Filters" : "Filtros"}
-              width={70}
-              height={70}
-            />
+            <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 7h9m4 0h3M4 17h3m4 0h9" />
+              <circle cx="15" cy="7" r="2" /><circle cx="9" cy="17" r="2" />
+            </svg>
+            {isEnglish ? "Filters" : "Filtros"}
+            {activeRelationFilters.size < graphRelationFilterTypes.length ? (
+              <span className="flex h-5 min-w-5 items-center justify-center rounded-md bg-[var(--accent-soft)] px-1 text-xs text-[var(--accent)]">{activeRelationFilters.size}/{graphRelationFilterTypes.length}</span>
+            ) : null}
           </button>
         </div>
 
-        {filterPanelOpen ? (
-          <aside className="papergraph-file-panel absolute right-4 top-[4.75rem] z-40 flex w-[min(20rem,calc(100%_-_2rem))] max-h-[calc(100%_-_5.75rem)] flex-col overflow-hidden rounded-[14px] border border-[var(--border)] shadow-[0_18px_50px_rgba(0,0,0,0.28)]">
-            <div className="flex items-center justify-between gap-3 border-b border-[var(--file-panel-divider)] px-3 py-2">
-              <p className="text-xs uppercase tracking-[0.22em] text-[var(--muted)]">{isEnglish ? "Filters" : "Filtros"}</p>
-              <button
-                type="button"
-                onClick={() => setFilterPanelOpen(false)}
-                className="rounded-full border border-white/10 bg-black/20 px-2 py-0.5 text-[11px] text-[var(--muted)]"
-              >
-                ✕
+        {filterPanelOpen && !activeArticle ? (
+          <aside id="graph-filters" aria-label={isEnglish ? "Link filters" : "Filtros de liga??es"} data-graph-control
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                setFilterPanelOpen(false);
+                containerRef.current?.querySelector<HTMLButtonElement>('[aria-controls="graph-filters"]')?.focus();
+              }
+            }}
+            className="absolute right-4 top-[4.25rem] z-40 flex w-[min(20rem,calc(100%_-_2rem))] max-h-[calc(100%_-_5.25rem)] flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface-strong)] shadow-[0_16px_48px_rgba(0,0,0,0.2)]">
+            <div className="flex items-start justify-between gap-3 px-4 pb-3 pt-4">
+              <div>
+                <h2 className="text-sm font-semibold text-[var(--foreground)]">{isEnglish ? "Visible links" : "Liga??es vis?veis"}</h2>
+                <p className="mt-1 text-xs text-[var(--muted)]">{isEnglish ? "Choose which types appear on the map." : "Escolhe os tipos que aparecem no mapa."}</p>
+              </div>
+              <button type="button" aria-label={isEnglish ? "Close filters" : "Fechar filtros"} onClick={() => setFilterPanelOpen(false)}
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--muted)] transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--foreground)] focus-visible:outline-2 focus-visible:outline-[var(--accent)]">
+                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><path d="m6 6 12 12M18 6 6 18" /></svg>
               </button>
             </div>
-
-            <div className="scrollbar-hidden min-h-0 flex-1 overflow-y-auto overscroll-contain py-1">
+            <div className="scrollbar-hidden min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain px-2 pb-3">
               {graphRelationFilterTypes.map((relationType) => {
                 const relationCount = relations.filter((relation) => relation.relationType === relationType).length;
                 const isEnabled = activeRelationFilters.has(relationType);
-                const relationColor = relationType === "manual"
-                  ? "var(--graph-link-manual)"
-                  : relationType === "explicit"
-                    ? "var(--graph-link-explicit)"
-                    : relationType === "citation"
-                      ? "var(--graph-link-citation)"
-                      : "var(--graph-link-semantic)";
-
+                const relationColor = relationType === "manual" ? "var(--graph-link-manual)" : relationType === "explicit" ? "var(--graph-link-explicit)" : relationType === "citation" ? "var(--graph-link-citation)" : "var(--graph-link-semantic)";
                 return (
-                  <button
-                    key={relationType}
-                    type="button"
-                    onClick={() => {
-                      setActiveRelationFilters((currentFilters) => {
-                        const nextFilters = new Set(currentFilters);
-
-                        if (nextFilters.has(relationType)) {
-                          nextFilters.delete(relationType);
-                        } else {
-                          nextFilters.add(relationType);
-                        }
-
-                        return nextFilters;
-                      });
-                    }}
-                    className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition-colors hover:bg-[var(--file-panel-row-hover)]"
-                  >
-                    <span className="flex min-w-0 items-center gap-2">
-                      <span
-                        className={`h-2.5 w-2.5 rounded-full ${isEnabled ? "" : "opacity-35"}`}
-                        style={{ backgroundColor: relationColor }}
-                      />
-                      <span className="truncate text-sm font-semibold text-[var(--foreground)]">
-                        {getRelationTypeLabel(relationType, language)}
-                      </span>
-                    </span>
-                    <span className="rounded-full border border-[var(--border)] bg-black/20 px-2 py-0.5 text-[11px] text-[var(--muted)]">
-                      {relationCount}
+                  <button key={relationType} type="button" role="switch" aria-checked={isEnabled} aria-label={getRelationTypeLabel(relationType, language)}
+                    onClick={() => setActiveRelationFilters((currentFilters) => {
+                      const nextFilters = new Set(currentFilters);
+                      if (nextFilters.has(relationType)) nextFilters.delete(relationType);
+                      else nextFilters.add(relationType);
+                      return nextFilters;
+                    })}
+                    className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left transition-colors hover:bg-[var(--accent-soft)] focus-visible:outline-2 focus-visible:outline-[var(--accent)]">
+                    <span aria-hidden="true" className={`h-2.5 w-2.5 shrink-0 rounded-full ${isEnabled ? "" : "opacity-35"}`} style={{ backgroundColor: relationColor }} />
+                    <span className={`flex-1 text-sm font-medium ${isEnabled ? "text-[var(--foreground)]" : "text-[var(--muted)]"}`}>{getRelationTypeLabel(relationType, language)}</span>
+                    <span className="text-xs tabular-nums text-[var(--muted)]">{relationCount}</span>
+                    <span aria-hidden="true" className={`flex h-5 w-9 shrink-0 items-center rounded-full border p-0.5 transition-colors ${isEnabled ? "border-[var(--accent)] bg-[var(--accent)]" : "border-[var(--border)] bg-[var(--background)]"}`}>
+                      <span className={`h-3.5 w-3.5 rounded-full transition-transform ${isEnabled ? "translate-x-4 bg-[var(--background)]" : "translate-x-0 bg-[var(--muted)]"}`} />
                     </span>
                   </button>
                 );
               })}
             </div>
-
-            {onRefreshAcademicRelations ? (
-              <div className="border-t border-[var(--file-panel-divider)] p-3">
-                {academicRelationStatus ? (
-                  <p className="mb-3 rounded-[12px] border border-[var(--border)] bg-black/15 px-3 py-2 text-xs leading-5 text-[var(--muted)]">
-                    {academicRelationStatus}
-                  </p>
-                ) : null}
-                <button
-                  type="button"
-                  disabled={isAcademicRelationsRunning || articles.length < 2}
-                  onClick={() => {
-                    void onRefreshAcademicRelations();
-                  }}
-                  className="w-full rounded-full border border-[var(--accent)] bg-[var(--accent)] px-4 py-2 text-xs font-semibold text-[#041016] transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {isAcademicRelationsRunning
-                    ? isEnglish
-                      ? "Updating..."
-                      : "A atualizar..."
-                    : isEnglish
-                      ? "Refresh academic links"
-                      : "Recalcular ligações"}
-                </button>
-              </div>
-            ) : null}
+            <div className="flex items-center justify-between border-t border-[var(--border)] px-4 py-3">
+              <span className="text-xs text-[var(--muted)]">{isEnglish ? `${activeRelationFilters.size} of 4 types visible` : `${activeRelationFilters.size} de 4 tipos vis?veis`}</span>
+              <button type="button" disabled={activeRelationFilters.size === graphRelationFilterTypes.length} onClick={() => setActiveRelationFilters(new Set(graphRelationFilterTypes))}
+                className="rounded-md text-xs font-medium text-[var(--accent)] hover:underline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:text-[var(--muted)] disabled:opacity-50 disabled:no-underline">{isEnglish ? "Show all" : "Mostrar todos"}</button>
+            </div>
+            {academicRelationStatus ? <p role="status" className="border-t border-[var(--border)] px-4 py-3 text-xs leading-5 text-[var(--muted)]">{academicRelationStatus}</p> : null}
           </aside>
         ) : null}
 
@@ -1340,6 +1257,7 @@ export function GraphPane({
                   if (!canEdit) {
                     const nextArticleId = activeArticle?.id === article.id ? null : article.id;
 
+                    setFilterPanelOpen(false);
                     onSelectArticle(nextArticleId);
 
                     if (nextArticleId) {
@@ -1369,10 +1287,12 @@ export function GraphPane({
                 }}
                 onContextMenu={(event) => {
                   event.preventDefault();
+                  const bounds = containerRef.current?.getBoundingClientRect();
+                  setShowContextRelations(false);
                   setContextMenu({
                     articleId: article.id,
-                    x: clamp(position.x + 128, 12, Math.max(containerSize.width - 180, 12)),
-                    y: clamp(position.y - 32, 12, Math.max(containerSize.height - 88, 12)),
+                    x: event.clientX - (bounds?.left ?? 0),
+                    y: event.clientY - (bounds?.top ?? 0),
                   });
                 }}
                 className={`group absolute z-40 flex w-[9rem] flex-col items-center gap-2 text-center transition-transform ${
@@ -1431,9 +1351,24 @@ export function GraphPane({
 
         {contextMenu ? (
           <div
-            className="papergraph-graph-menu absolute z-50 w-[11.5rem] rounded-[18px] border border-[var(--border)] p-2 shadow-[0_16px_40px_rgba(0,0,0,0.24)] backdrop-blur-xl"
+            ref={contextMenuRef}
+            data-graph-control
+            role="dialog"
+            aria-label={isEnglish ? "Article actions" : "A\u00e7\u00f5es do artigo"}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.stopPropagation();
+                if (showContextRelations) setShowContextRelations(false);
+                else {
+                  containerRef.current?.querySelector<HTMLButtonElement>(`[data-article-id="${contextMenu.articleId}"]`)?.focus();
+                  setContextMenu(null);
+                }
+              }
+            }}
+            className="papergraph-graph-menu absolute z-50 w-64 overflow-y-auto overscroll-contain rounded-[18px] border border-[var(--border)] p-2 shadow-[0_16px_40px_rgba(0,0,0,0.24)] backdrop-blur-xl"
             style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }}
           >
+            {!showContextRelations ? <>
             {canEditContextMenuArticle ? (
               <button
                 type="button"
@@ -1455,7 +1390,9 @@ export function GraphPane({
               }}
               className={`${canEditContextMenuArticle ? "mt-2 " : ""}w-full rounded-[14px] border border-[var(--border)] bg-white/5 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-white/10`}
             >
-              {isEnglish ? "Export PDF" : "Exportar PDF"}
+              {contextMenuArticle && isViewOnlyArticle(contextMenuArticle) && !isImportedPdfArticle(contextMenuArticle)
+                ? (isEnglish ? "View article" : "Visualizar artigo")
+                : (isEnglish ? "Export PDF" : "Exportar PDF")}
             </button>
 
             {canEdit ? (
@@ -1472,41 +1409,37 @@ export function GraphPane({
               </button>
             ) : null}
 
-            {contextMenuRemovableRelations.map((relation) => {
-              const otherArticleId =
-                relation.fromArticleId === contextMenu.articleId
-                  ? relation.toArticleId
-                  : relation.fromArticleId;
-              const otherArticle = articleById.get(otherArticleId);
-              const removeLabel =
-                contextMenuRemovableRelations.length === 1
-                  ? relation.relationType === "explicit"
-                    ? isEnglish
-                      ? "Remove wikilink"
-                      : "Remover wikilink"
-                    : isEnglish
-                      ? "Remove connection"
-                      : "Remover conexão"
-                  : `${isEnglish ? "Remove" : "Remover"} ${
-                      getRelationTypeLabel(relation.relationType, language).toLowerCase()
-                    } ${isEnglish ? "with" : "com"} ${
-                      otherArticle?.title ?? (isEnglish ? "article" : "artigo")
-                    }`;
-
-              return (
-                <button
-                  key={relation.id}
-                  type="button"
-                  onClick={() => {
-                    onRemoveRelation(relation.fromArticleId, relation.toArticleId, relation.relationType);
-                    setContextMenu(null);
-                  }}
-                  className="mt-2 w-full rounded-[14px] border border-red-300/30 bg-red-500/15 px-3 py-2 text-sm font-semibold text-red-100 transition-colors hover:bg-red-500/25"
-                >
-                  {removeLabel}
-                </button>
-              );
-            })}
+            {contextMenuRemovableRelations.length > 0 ? (
+              <button type="button" onClick={() => setShowContextRelations(true)}
+                className="mt-2 flex w-full items-center justify-between gap-3 rounded-[14px] border border-[var(--border)] px-3 py-2 text-sm font-semibold text-[var(--foreground)] hover:bg-white/10">
+                <span>{isEnglish ? "Remove link..." : "Remover liga\u00e7\u00e3o..."}</span>
+                <span className="text-xs text-[var(--muted)]">{contextMenuRemovableRelations.length} &rsaquo;</span>
+              </button>
+            ) : null}
+            </> : <>
+              <button type="button" onClick={() => setShowContextRelations(false)}
+                className="mb-2 w-full rounded-lg px-3 py-2 text-left text-sm text-[var(--muted)] hover:bg-white/10">
+                &lsaquo; {isEnglish ? "Back" : "Voltar"}
+              </button>
+              <p className="px-3 pb-2 text-xs font-semibold text-[var(--foreground)]">{isEnglish ? "Choose a link to remove" : "Escolhe a liga\u00e7\u00e3o a remover"}</p>
+              {contextMenuRemovableRelations.map((relation) => {
+                const otherArticleId = relation.fromArticleId === contextMenu.articleId ? relation.toArticleId : relation.fromArticleId;
+                const title = articleById.get(otherArticleId)?.title ?? (isEnglish ? "Article" : "Artigo");
+                const typeLabel = getRelationTypeLabel(relation.relationType, language);
+                return (
+                  <button key={relation.id} type="button" title={`${typeLabel}: ${title}`}
+                    aria-label={`${isEnglish ? "Remove" : "Remover"} ${typeLabel}: ${title}`}
+                    onClick={() => {
+                      onRemoveRelation(relation.fromArticleId, relation.toArticleId, relation.relationType);
+                      setContextMenu(null);
+                    }}
+                    className="mt-1 w-full rounded-xl border border-[var(--border)] px-3 py-2 text-left transition-colors hover:border-red-300/30 hover:bg-red-500/15">
+                    <span className="mb-1 block text-[11px] text-[var(--muted)]">{typeLabel}</span>
+                    <span className="line-clamp-2 break-words text-sm font-medium text-[var(--foreground)]">{title}</span>
+                  </button>
+                );
+              })}
+            </>}
           </div>
         ) : null}
 

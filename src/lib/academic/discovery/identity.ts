@@ -43,7 +43,7 @@ export function discoveredMetadata(source: string): ScientificPaper | null {
         !value.topics.every((t) => t && typeof t.id === "string" && typeof t.name === "string") ||
         !value.references.every((r) => typeof r === "string")) return null;
     return { ...value, doi: value.doi ? normalizeDoi(value.doi) : null,
-      url: safePublicationUrl(value.url) } as ScientificPaper;
+      pdfUrl: safePublicationUrl(value.pdfUrl), url: safePublicationUrl(value.url) } as ScientificPaper;
   } catch { return null; }
 }
 export function articleIdentity(article: { title: string; source?: string | null; tags?: string[]; doi?: string | null; openalex_id?: string | null; publication_year?: number | null }): ScientificIdentity {
@@ -54,15 +54,10 @@ export function articleIdentity(article: { title: string; source?: string | null
     externalId: article.openalex_id || imported?.externalId, year: article.publication_year || imported?.year };
 }
 export function recommendedArticleSource(paper: ScientificPaper) {
-  const escape = (text: string) => text.replace(/[\\{}%$&#_^~]/g, (c) => ({ "\\": "\\textbackslash{}", "~": "\\textasciitilde{}", "^": "\\textasciicircum{}" }[c] ?? `\\${c}`));
-  // Metadata lives in an inert comment, following the existing PDF import convention.
+  // Store bibliographic metadata without manufacturing an article body.
   const metadata: ScientificPaper = { source: "openalex", externalId: paper.externalId, doi: paper.doi,
     title: paper.title, abstract: paper.abstract, authors: paper.authors, year: paper.year,
-    venue: paper.venue, url: paper.url, topics: paper.topics, references: paper.references,
-    citationCount: paper.citationCount, type: paper.type };
-  return [`% papergraph-discovery:${encodeURIComponent(JSON.stringify(metadata))}`, "\\documentclass{article}",
-    "\\usepackage[utf8]{inputenc}", "\\begin{document}", `\\section*{${escape(paper.title)}}`,
-    escape(paper.authors.map((a) => a.name).join(", ")), "", escape([paper.venue, paper.year].filter(Boolean).join(" · ")),
-    "", paper.doi ? `DOI: ${escape(paper.doi)}` : "", "\\begin{abstract}", escape(paper.abstract), "\\end{abstract}",
-    "\\end{document}"].join("\n");
+    venue: paper.venue, url: safePublicationUrl(paper.url), pdfUrl: safePublicationUrl(paper.pdfUrl),
+    topics: paper.topics, references: paper.references, citationCount: paper.citationCount, type: paper.type };
+  return `% papergraph-discovery:${encodeURIComponent(JSON.stringify(metadata))}`;
 }

@@ -1,6 +1,9 @@
 "use client";
 
+import { isViewOnlyArticle } from "@/lib/article-presentation";
+
 import { extractPdfMetadata, titleFromPdfItems, type PdfMetadata, type PdfTextItem } from "@/lib/academic/pdf-metadata";
+import type { PdfImportResult } from "@/lib/pdf-import-queue";
 import { ArticleLibrary } from "@/components/article-library";
 import { ArticleViewerPane } from "@/components/article-viewer-pane";
 import { AuthLanding } from "@/components/auth-landing";
@@ -1256,8 +1259,8 @@ async function extractPdfTextForAcademicRelations(pdfFile: File) {
   ).toString();
 
   const loadingTask = pdfjs.getDocument({ data: new Uint8Array(await pdfFile.arrayBuffer()) });
-  const pdfDocument = await loadingTask.promise;
   try {
+    const pdfDocument = await loadingTask.promise;
     const pageTexts: string[] = [];
     let title: string | null = null;
     for (let pageNumber = 1; pageNumber <= Math.min(pdfDocument.numPages, 3); pageNumber++) {
@@ -1507,7 +1510,13 @@ function mergeArticlePositions(
 }
 
 export default function Home() {
-  const [workspace, setWorkspace] = useState<WorkspaceSnapshot>(defaultSnapshot);
+  const [workspace, setWorkspaceState] = useState<WorkspaceSnapshot>(defaultSnapshot);
+  const setWorkspace = useCallback((snapshot: WorkspaceSnapshot) => {
+    setWorkspaceState((previous) => ({ ...snapshot,
+      persistenceSession: snapshot.persistenceSession === undefined ? previous.persistenceSession : snapshot.persistenceSession,
+    }));
+  }, []);
+  const [workspaceRecovery, setWorkspaceRecovery] = useState<{ workspaceId: string; snapshot: WorkspaceSnapshot } | null>(null);
   const [selectedArticleId, setSelectedArticleId] = useState(defaultSnapshot.selectedArticleId);
   const [graphSelectedArticleId, setGraphSelectedArticleId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -1674,16 +1683,17 @@ export default function Home() {
     if (restoreUiState && storedUiState.activeTab) {
       setActiveTab(storedUiState.activeTab);
     }
-  }, []);
+  }, [setWorkspace]);
 
   const mirrorWorkspaceLocally = useCallback(async (snapshot: WorkspaceSnapshot) => {
-    await fetch(apiPath, {
+    const response = await fetch(apiPath, {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify(snapshot),
     });
+    if (!response.ok) throw new Error("Could not preserve local workspace copy.");
   }, []);
 
   const loadCloudWorkspace = useCallback(
@@ -2343,8 +2353,8 @@ export default function Home() {
     activeTab === "editor" && pendingEditorResubmission?.articleId === selectedArticleId;
   const selectedArticleIsImportedPdf = selectedArticle ? isImportedPdfArticle(selectedArticle) : false;
   const selectedArticleCanBeEdited =
-    canEditCurrentWorkspace && selectedArticle ? !selectedArticleIsImportedPdf : false;
-  const shouldUseArticleViewer = !canEditCurrentWorkspace || selectedArticleIsImportedPdf;
+    canEditCurrentWorkspace && selectedArticle ? !isViewOnlyArticle(selectedArticle) : false;
+  const shouldUseArticleViewer = !canEditCurrentWorkspace || Boolean(selectedArticle && isViewOnlyArticle(selectedArticle));
   const canOpenArticleWorkArea = Boolean(selectedArticle) && (shouldUseArticleViewer || selectedArticleCanBeEdited);
   const visibleAccountName = authDisplayName ?? getAuthUserFallbackDisplayName(authUser);
   const authUserId = authUser?.id ?? null;
@@ -2677,6 +2687,9 @@ export default function Home() {
   }
 
   function saveWorkspace(snapshot: WorkspaceSnapshot, throwOnError = false) {
+    // Bind asynchronous operations and queued saves to the workspace load that
+    // produced them, so a reload cannot authorize an older snapshot.
+    snapshot = { ...snapshot, persistenceSession: workspace.persistenceSession };
     if (!canEditCurrentWorkspace) {
       setWorkspace(snapshot);
       setLoadError(null);
@@ -2704,8 +2717,12 @@ export default function Home() {
         if (saveRequestId === saveRequestIdRef.current && displayedWorkspaceIdRef.current === accountWorkspace?.id) {
           setWorkspace(snapshot);
           setLoadError(null);
+          setWorkspaceRecovery(null);
         }
       } catch (error) {
+        if (accountWorkspace && displayedWorkspaceIdRef.current === accountWorkspace.id) {
+          setWorkspaceRecovery({ workspaceId: accountWorkspace.id, snapshot });
+        }
         if (saveRequestId === saveRequestIdRef.current) {
           setLoadError(
             getFriendlyErrorMessage(error, appLanguage, {
@@ -3615,7 +3632,7 @@ export default function Home() {
 
     const articleToRestore = currentArticles.find((article) => article.id === versionToRestore.articleId);
 
-    if (!articleToRestore || isImportedPdfArticle(articleToRestore)) {
+    if (!articleToRestore || isViewOnlyArticle(articleToRestore)) {
       setConnectionValidationError(
         isEnglish
           ? "This article cannot be restored in the editor."
@@ -3698,7 +3715,7 @@ export default function Home() {
 
     try {
       await saveQueueRef.current;
-      await saveWorkspaceArticles(supabase, accountWorkspaceId, nextSubmittedArticles);
+      await saveWorkspaceArticles(supabase, accountWorkspaceId, nextSubmittedArticles, workspace.persistenceSession);
       const response = await fetch("/api/academic-relations", {
         method: "POST",
         headers: {
@@ -3754,29 +3771,6 @@ export default function Home() {
     } finally {
       setIsAcademicRelationsRunning(false);
     }
-  }
-
-  async function refreshCurrentWorkspaceAcademicRelations() {
-    if (!canEditCurrentWorkspace) {
-      showReadOnlyWorkspaceError();
-      return;
-    }
-
-    const academicRefresh = await refreshAcademicRelations(submittedArticles, currentRelations);
-    const snapshot: WorkspaceSnapshot = {
-      selectedArticleId,
-      articles: currentArticles,
-      relations: academicRefresh.relations,
-      articlePositions: currentArticlePositions,
-      ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
-      imageAssets: currentImageAssets,
-      articleVersions: currentArticleVersions,
-    };
-
-    setWorkspace(snapshot);
-    setAcademicRelationStatus(academicRefresh.status ?? null);
-    setConnectionValidationError(academicRefresh.issue ?? null);
-    void saveWorkspace(snapshot);
   }
 
   async function submitArticle(
@@ -4187,7 +4181,7 @@ export default function Home() {
 
     const articleToEdit = currentArticles.find((article) => article.id === articleId);
 
-    if (!articleToEdit || isImportedPdfArticle(articleToEdit)) {
+    if (!articleToEdit || isViewOnlyArticle(articleToEdit)) {
       return;
     }
 
@@ -4221,6 +4215,11 @@ export default function Home() {
         title: isEnglish ? "PDF export failed" : "A exportação falhou",
         tone: "danger",
       });
+      return;
+    }
+
+    if (isViewOnlyArticle(articleToExport) && !isImportedPdfArticle(articleToExport)) {
+      openArticleViewer(articleId);
       return;
     }
 
@@ -4277,21 +4276,25 @@ export default function Home() {
     }
   }
 
-  async function importPdfArticle(pdfFile: File) {
+  async function importPdfArticle(pdfFile: File): Promise<PdfImportResult> {
     if (!canEditCurrentWorkspace) {
-      throw new Error(getReadOnlyWorkspaceMessage());
+      throw new Error("pdf-import-read-only");
     }
 
+    const digest = await crypto.subtle.digest("SHA-256", await pdfFile.arrayBuffer());
+    const fingerprint = `% papergraph-pdf-sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+    if (currentArticles.some((article) => article.source.includes(fingerprint))) return { status: "skipped" };
     const importedArticleId = createBrowserUuid();
-    const extractedPdf = await extractPdfTextForAcademicRelations(pdfFile).catch(() => ({
-      text: "", metadata: { title: null, doi: null, abstract: null } as PdfMetadata,
-    }));
+    const extractedPdf = await extractPdfTextForAcademicRelations(pdfFile);
     const importedArticleTitle = extractedPdf.metadata.title ?? getTitleFromPdfFileName(pdfFile.name, appLanguage);
     const importedAcademicText = extractedPdf.text;
     const importedPdfDois = extractedPdf.metadata.doi ? [extractedPdf.metadata.doi] : [];
     const importedArxivDois = extractArxivIdsFromText(`${pdfFile.name}\n${importedArticleTitle}\n${importedAcademicText.split("\f")[0]}`).map(
       (arxivId) => `10.48550/arXiv.${arxivId}`,
     );
+    const identity = { title: extractedPdf.metadata.title ?? "", doi: importedPdfDois[0] ?? importedArxivDois[0] };
+    if (currentArticles.some((article) => samePaper(identity, articleIdentity(article)))) return { status: "skipped" };
+    if (displayedWorkspaceIdRef.current !== accountWorkspaceId) throw new Error("Workspace changed");
     const formData = new FormData();
 
     formData.append("asset", pdfFile);
@@ -4323,13 +4326,15 @@ export default function Home() {
     const importedArticle: WorkspaceArticle = {
       id: importedArticleId,
       title: importedArticleTitle,
+      abstract: extractedPdf.metadata.abstract ?? "",
       author: "PaperGraph",
       status: "Published",
       updatedAt: "agora",
       tags: Array.from(new Set([isEnglish ? "imported" : "importado", ...importedPdfDois, ...importedArxivDois])),
-      source: createImportedPdfSource(uploadedPdfAsset, importedAcademicText, extractedPdf.metadata),
+      source: `${fingerprint}\n${createImportedPdfSource(uploadedPdfAsset, importedAcademicText, extractedPdf.metadata)}`,
     };
-    await commitImportedArticle(importedArticle, uploadedPdfAsset);
+    const warning = await commitImportedArticle(importedArticle, uploadedPdfAsset);
+    return { status: "imported", warning };
   }
 
   async function addRecommendedArticle(paper: RecommendedPaper, signal: AbortSignal) {
@@ -4384,6 +4389,7 @@ export default function Home() {
       selectGraphArticle(importedArticle.id);
     }
     if (!keepSelection) activateTab("graph");
+    return academicRefresh.issue;
   }
 
   function addImageAsset(imageAsset: WorkspaceImageAsset) {
@@ -4711,6 +4717,18 @@ export default function Home() {
         {loadError ? (
           <div className="border-b border-[var(--border)] bg-red-500/10 px-6 py-3 text-sm text-red-200 lg:px-8">
             {loadError}
+            {workspaceRecovery?.workspaceId === accountWorkspaceId && workspaceRecovery ? (
+              <button type="button" className="ml-3 underline" onClick={() => {
+                const recovery = workspaceRecovery;
+                const url = URL.createObjectURL(new Blob([JSON.stringify(recovery.snapshot, null, 2)], { type: "application/json" }));
+                const link = document.createElement("a");
+                link.href = url; link.download = `papergraph-recovery-${recovery.workspaceId}-${Date.now()}.json`;
+                link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+                void loadCloudWorkspace(recovery.workspaceId);
+              }}>
+                {isEnglish ? "Download local copy and reload" : "Descarregar cópia local e recarregar"}
+              </button>
+            ) : null}
           </div>
         ) : null}
 
@@ -4775,6 +4793,7 @@ export default function Home() {
             <div className="flex min-h-0 flex-1 overflow-hidden">
               {selectedArticle && shouldUseArticleViewer ? (
                 <ArticleViewerPane
+                  workspaceId={accountWorkspaceId ?? undefined}
                   key={`viewer-${selectedArticle.id}-${selectedArticle.status}-${selectedArticle.title}-${selectedArticle.tags.join("|")}`}
                   article={selectedArticle}
                   articleCollaborators={articlePresence}
@@ -4871,7 +4890,6 @@ export default function Home() {
                 onExportArticlePdf={exportArticlePdf}
                 onImportPdfArticle={importPdfArticle}
                 onDeleteArticle={deleteArticle}
-                onRefreshAcademicRelations={refreshCurrentWorkspaceAcademicRelations}
               />
             </div>
           ) : null}

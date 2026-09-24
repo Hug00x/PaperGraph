@@ -114,7 +114,7 @@ export async function GET(request: Request, { params }: ImageRouteParams) {
   }
 }
 
-export async function DELETE(request: Request, { params }: ImageRouteParams) {
+export async function DELETE(_request: Request, { params }: ImageRouteParams) {
   const { filename } = await params;
 
   if (!/^[a-z0-9._-]+$/i.test(filename)) {

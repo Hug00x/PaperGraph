@@ -277,7 +277,7 @@ function setupAutoUpdates() {
       })
       .then(({ response }) => {
         if (response === 0) {
-          void autoUpdater.downloadUpdate();
+          void autoUpdater.downloadUpdate().catch(() => {});
         }
       });
   });
@@ -305,7 +305,7 @@ function setupAutoUpdates() {
   });
 
   setTimeout(() => {
-    void autoUpdater.checkForUpdates();
+    void autoUpdater.checkForUpdates().catch(() => {});
   }, 4500);
 }
 

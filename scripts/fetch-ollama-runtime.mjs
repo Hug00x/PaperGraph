@@ -14,13 +14,20 @@ const destination = path.join(buildRoot, "ollama");
 const cache = path.join(buildRoot, "runtime-downloads");
 const archive = path.join(cache, `${config.version}-${config.archive}`);
 const manifest = path.join(destination, "papergraph-runtime.json");
+const runtimeNotices = `PaperGraph bundles Ollama 0.34.3 from the official Windows x64 archive.
+Ollama is licensed under MIT; its full license is preserved as OLLAMA-LICENSE.txt.
+The upstream archive and dependency notices remain beside the runtime files.
+NVIDIA CUDA and Microsoft Visual C++ runtime components retain their upstream terms.
+The BGE-M3 model is downloaded separately on first use and is not included in the installer.
+See the upstream Ollama, CUDA, Microsoft, and BGE-M3 distributions for their applicable terms.
+`;
 async function digest(file) {
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(file)) hash.update(chunk);
   return hash.digest("hex");
 }
 async function preserveNotices() {
-  await writeFile(path.join(destination, "THIRD-PARTY-NOTICES.md"), await readFile(path.join(root, "docs/runtime-notices.md")));
+  await writeFile(path.join(destination, "THIRD-PARTY-NOTICES.txt"), runtimeNotices);
   const documents = {
     "CUDA-12.8-EULA.html": "https://docs.nvidia.com/cuda/archive/12.8.1/eula/index.html",
     "CUDA-13.0-EULA.html": "https://docs.nvidia.com/cuda/archive/13.0.0/eula/index.html",

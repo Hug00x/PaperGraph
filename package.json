@@ -19,6 +19,8 @@
     "embeddings:backfill": "node --experimental-strip-types --env-file=.env.local scripts/backfill-embeddings.mjs",
     "test:semantic": "node --experimental-strip-types --test tests/semantic.test.mjs",
     "test:recommendations": "node --experimental-strip-types --test tests/recommendations.test.mjs",
+    "test:persistence": "node --experimental-strip-types --test tests/workspace-persistence.test.mjs",
+    "test:pdf-import": "node --experimental-strip-types --test tests/pdf-import.test.mjs",
     "runtime:prepare": "node scripts/fetch-ollama-runtime.mjs",
     "test:runtime": "node --test tests/ollama-runtime.test.cjs"
   },
@@ -101,7 +103,7 @@
     "@supabase/supabase-js": "^2.111.0",
     "codemirror": "^6.0.2",
     "electron-updater": "^6.8.9",
-    "next": "16.2.12",
+    "next": "^16.3.6",
     "node-latex-compiler": "^1.0.5",
     "pdfjs-dist": "^6.2.108",
     "react": "19.2.4",
@@ -109,6 +111,7 @@
     "yjs": "^13.6.31"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
@@ -116,7 +119,7 @@
     "electron": "^43.2.0",
     "electron-builder": "^26.15.3",
     "eslint": "^9",
-    "eslint-config-next": "16.2.12",
+    "eslint-config-next": "^16.3.6",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

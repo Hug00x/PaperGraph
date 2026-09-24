@@ -51,6 +51,7 @@ type EditorPaneProps = {
   onSubmissionIssueClear: () => void;
   onPendingResubmissionChange: (article: {
     articleId: string;
+    abstract: string;
     source: string;
     status: SubmittedArticleStatus;
     tags: string[];
