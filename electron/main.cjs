@@ -280,10 +280,10 @@ function setupAutoUpdates() {
     void dialog
       .showMessageBox(mainWindow, {
         type: "info",
-        title: "Atualizacao disponivel",
-        message: `PaperGraph ${info.version} esta disponivel.`,
-        detail: "Queres transferir esta versao agora? A atualizacao so existe quando uma nova versao e publicada.",
-        buttons: ["Transferir", "Agora nao"],
+        title: "Atualização disponível",
+        message: `PaperGraph ${info.version} está disponível.`,
+        detail: "Queres transferir esta versão agora? A atualização só existe quando uma nova versão é publicada.",
+        buttons: ["Transferir", "Agora não"],
         defaultId: 0,
         cancelId: 1,
       })
@@ -293,8 +293,8 @@ function setupAutoUpdates() {
             if (mainWindow && !mainWindow.isDestroyed()) {
               mainWindow.setProgressBar(-1);
               dialog.showErrorBox(
-                "Atualizacao",
-                `Nao foi possivel transferir a atualizacao. ${error instanceof Error ? error.message : "Tenta novamente mais tarde."}`,
+                "Atualização",
+                `Não foi possível transferir a atualização. ${error instanceof Error ? error.message : "Tenta novamente mais tarde."}`,
               );
             }
           });
@@ -316,9 +316,9 @@ function setupAutoUpdates() {
     void dialog
       .showMessageBox(mainWindow, {
         type: "info",
-        title: "Atualizacao pronta",
-        message: `PaperGraph ${info.version} foi transferido.`,
-        detail: "A app pode reiniciar agora para instalar a atualizacao.",
+        title: "Atualização pronta",
+        message: `PaperGraph ${info.version} foi transferida.`,
+        detail: "A aplicação pode reiniciar agora para instalar a atualização.",
         buttons: ["Reiniciar e instalar", "Mais tarde"],
         defaultId: 0,
         cancelId: 1,
@@ -334,8 +334,8 @@ function setupAutoUpdates() {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.setProgressBar(-1);
       dialog.showErrorBox(
-        "Atualizacao",
-        `A verificacao ou transferencia da atualizacao falhou. ${error instanceof Error ? error.message : "Tenta novamente mais tarde."}`,
+        "Atualização",
+        `A verificação ou transferência da atualização falhou. ${error instanceof Error ? error.message : "Tenta novamente mais tarde."}`,
       );
     }
   });
