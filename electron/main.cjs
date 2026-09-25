@@ -289,12 +289,30 @@ function setupAutoUpdates() {
       })
       .then(({ response }) => {
         if (response === 0) {
-          void autoUpdater.downloadUpdate().catch(() => {});
+          void autoUpdater.downloadUpdate().catch((error) => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.setProgressBar(-1);
+              dialog.showErrorBox(
+                "Atualizacao",
+                `Nao foi possivel transferir a atualizacao. ${error instanceof Error ? error.message : "Tenta novamente mais tarde."}`,
+              );
+            }
+          });
         }
       });
   });
 
+  autoUpdater.on("download-progress", (progress) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.setProgressBar(Math.max(0, Math.min(1, progress.percent / 100)));
+    }
+  });
+
   autoUpdater.on("update-downloaded", (info) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.setProgressBar(-1);
+    }
+
     void dialog
       .showMessageBox(mainWindow, {
         type: "info",
@@ -312,8 +330,14 @@ function setupAutoUpdates() {
       });
   });
 
-  autoUpdater.on("error", () => {
-    // Update failures should not block the app. They are common in dev or without a published release.
+  autoUpdater.on("error", (error) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.setProgressBar(-1);
+      dialog.showErrorBox(
+        "Atualizacao",
+        `A verificacao ou transferencia da atualizacao falhou. ${error instanceof Error ? error.message : "Tenta novamente mais tarde."}`,
+      );
+    }
   });
 
   setTimeout(() => {
