@@ -600,6 +600,75 @@ function HelpSection({ language }: { language: AppLanguage }) {
           ],
         },
         {
+          eyebrow: "Discovery",
+          title: "Imported papers and recommendations",
+          description: "External papers are useful map context, but they are not editable LaTeX projects.",
+          cards: [
+            {
+              title: "Import a PDF",
+              body: "From the map, choose Import PDFs. Files are processed one at a time, and each result shows whether it was imported, skipped as a duplicate or failed.",
+            },
+            {
+              title: "PDF viewer mode",
+              body: "Imported PDFs open in the article viewer. They can be read, linked, exported and annotated with metadata, but they do not show LaTeX history or PDF compilation controls.",
+            },
+            {
+              title: "Related articles",
+              body: "Recommendations come from OpenAlex and are ranked locally with semantic similarity when the local embedding runtime is ready.",
+            },
+            {
+              title: "Add to map",
+              body: "Adding a recommendation stores its bibliographic metadata as a published, view-only article. It is not converted into an editable LaTeX draft.",
+            },
+          ],
+        },
+        {
+          eyebrow: "Semantic search",
+          title: "Local embeddings and academic links",
+          description: "Semantic features use the managed local runtime to compare article titles and abstracts.",
+          cards: [
+            {
+              title: "First use",
+              body: "The Windows app starts its isolated Ollama runtime and downloads the BGE-M3 model the first time semantic processing is needed. You can continue writing while it prepares.",
+            },
+            {
+              title: "What is embedded",
+              body: "PaperGraph embeds the article title and abstract, not the full PDF or LaTeX source. The resulting vector is stored with the article in the connected workspace.",
+            },
+            {
+              title: "Academic scan",
+              body: "After submission, PaperGraph can enrich metadata through OpenAlex and recalculate citation and semantic links. Missing metadata or an unavailable runtime produces a warning instead of deleting the article.",
+            },
+            {
+              title: "When it is unavailable",
+              body: "If the local runtime or network is unavailable, citation links and the rest of the workspace remain usable. Retry the semantic preparation or run the academic scan again later.",
+            },
+          ],
+        },
+        {
+          eyebrow: "Recovery",
+          title: "Imports, saves and conflicts",
+          description: "PaperGraph keeps partial failures visible and protects shared workspaces from stale saves.",
+          cards: [
+            {
+              title: "PDF import failures",
+              body: "Invalid, empty or oversized files are rejected individually. Retryable failures can be retried without repeating successful imports; a workspace conflict stops the remaining queue.",
+            },
+            {
+              title: "Shared workspace conflict",
+              body: "If another device saves first, PaperGraph blocks the stale save instead of overwriting newer work. Reload the workspace before continuing.",
+            },
+            {
+              title: "Model download problems",
+              body: "Check the internet connection and use Try again in the semantic status panel. The model is kept locally after a successful download and is not downloaded on every launch.",
+            },
+            {
+              title: "LaTeX errors",
+              body: "Compilation errors show the source line and a contextual hint when possible. Check missing files, package names and LaTeX syntax, then compile again.",
+            },
+          ],
+        },
+        {
           eyebrow: "Collaboration",
           title: "Working with other people",
           description: "Collaboration is workspace-based, so members share the same map and articles.",
@@ -740,6 +809,75 @@ function HelpSection({ language }: { language: AppLanguage }) {
             {
               title: "Validação",
               body: "Ao submeter ou resubmeter, o PaperGraph verifica se os wikilinks apontam para artigos submetidos existentes.",
+            },
+          ],
+        },
+        {
+          eyebrow: "Descoberta",
+          title: "Artigos importados e recomendações",
+          description: "Artigos externos são contexto útil para o mapa, mas não são projetos LaTeX editáveis.",
+          cards: [
+            {
+              title: "Importar um PDF",
+              body: "No mapa, escolhe Importar PDFs. Os ficheiros são processados um de cada vez e cada resultado indica se foi importado, ignorado por duplicado ou se falhou.",
+            },
+            {
+              title: "Modo de visualização",
+              body: "PDFs importados abrem no visualizador do artigo. Podem ser lidos, ligados, exportados e ter metadata editada, mas não mostram histórico LaTeX nem controlos de compilação PDF.",
+            },
+            {
+              title: "Artigos relacionados",
+              body: "As recomendações vêm do OpenAlex e são ordenadas localmente por similaridade semântica quando o motor local de embeddings está pronto.",
+            },
+            {
+              title: "Adicionar ao mapa",
+              body: "Adicionar uma recomendação guarda a metadata bibliográfica como um artigo publicado e apenas para visualização. Não é convertido num rascunho LaTeX editável.",
+            },
+          ],
+        },
+        {
+          eyebrow: "Pesquisa semântica",
+          title: "Embeddings locais e ligações académicas",
+          description: "As funcionalidades semânticas usam o motor local gerido para comparar títulos e abstracts.",
+          cards: [
+            {
+              title: "Primeira utilização",
+              body: "A aplicação Windows inicia o runtime Ollama isolado e descarrega o modelo BGE-M3 quando o processamento semântico é necessário pela primeira vez. Podes continuar a escrever enquanto prepara.",
+            },
+            {
+              title: "O que é processado",
+              body: "O PaperGraph cria embeddings do título e do abstract, não do PDF ou do código LaTeX completo. O vetor fica guardado com o artigo na workspace ligada.",
+            },
+            {
+              title: "Análise académica",
+              body: "Depois da submissão, o PaperGraph pode completar a metadata através do OpenAlex e recalcular ligações por citação e semântica. Metadata em falta ou um runtime indisponível gera um aviso sem eliminar o artigo.",
+            },
+            {
+              title: "Quando fica indisponível",
+              body: "Se o runtime local ou a rede estiverem indisponíveis, as ligações por citação e o resto da workspace continuam utilizáveis. Tenta novamente a preparação semântica ou a análise académica mais tarde.",
+            },
+          ],
+        },
+        {
+          eyebrow: "Recuperação",
+          title: "Importações, gravações e conflitos",
+          description: "O PaperGraph mantém as falhas parciais visíveis e protege workspaces partilhadas contra gravações desatualizadas.",
+          cards: [
+            {
+              title: "Falhas na importação",
+              body: "Ficheiros inválidos, vazios ou demasiado grandes são rejeitados individualmente. Falhas recuperáveis podem ser repetidas sem repetir importações bem-sucedidas; um conflito interrompe a fila restante.",
+            },
+            {
+              title: "Conflito numa workspace",
+              body: "Se outro dispositivo guardar primeiro, o PaperGraph bloqueia a gravação desatualizada em vez de apagar trabalho mais recente. Recarrega a workspace antes de continuar.",
+            },
+            {
+              title: "Problemas no download do modelo",
+              body: "Confirma a ligação à Internet e usa Tentar novamente no painel de estado semântico. Depois de descarregado, o modelo fica guardado localmente e não é transferido em cada arranque.",
+            },
+            {
+              title: "Erros LaTeX",
+              body: "Os erros de compilação mostram a linha do código e uma sugestão contextual quando possível. Confirma ficheiros em falta, nomes de pacotes e sintaxe LaTeX, e compila novamente.",
             },
           ],
         },
@@ -1213,6 +1351,7 @@ function isImportedPdfArticle(article: { source?: string; tags: string[] }) {
   const normalizedTags = article.tags.map((tag) => tag.toLowerCase());
 
   return (
+    article.source?.includes("papergraph-import-text:") === true ||
     article.source?.includes("\\includepdf") === true ||
     (normalizedTags.includes("pdf") && (normalizedTags.includes("importado") || normalizedTags.includes("imported")))
   );

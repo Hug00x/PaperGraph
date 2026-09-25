@@ -79,6 +79,15 @@ function getIconPath() {
     : path.join(process.resourcesPath, "server", "public", "papergraph-icon.png");
 }
 
+function isAllowedExternalUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
 function createWindow(appUrl) {
   trustedAppOrigin = new URL(appUrl).origin;
   mainWindow = new BrowserWindow({
@@ -104,7 +113,10 @@ function createWindow(appUrl) {
   });
 
   mainWindow.webContents.on("will-navigate", (event, url) => {
-    if (new URL(url).origin !== trustedAppOrigin) { event.preventDefault(); void shell.openExternal(url); }
+    if (new URL(url).origin !== trustedAppOrigin) {
+      event.preventDefault();
+      if (isAllowedExternalUrl(url)) void shell.openExternal(url);
+    }
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -112,7 +124,7 @@ function createWindow(appUrl) {
       return { action: "deny" };
     }
 
-    void shell.openExternal(url);
+    if (isAllowedExternalUrl(url)) void shell.openExternal(url);
     return { action: "deny" };
   });
 

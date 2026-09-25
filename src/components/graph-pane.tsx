@@ -1114,7 +1114,7 @@ export function GraphPane({
         </div>
 
         {filterPanelOpen && !activeArticle ? (
-          <aside id="graph-filters" aria-label={isEnglish ? "Link filters" : "Filtros de liga??es"} data-graph-control
+          <aside id="graph-filters" aria-label={isEnglish ? "Link filters" : "Filtros de ligações"} data-graph-control
             onKeyDown={(event) => {
               if (event.key === "Escape") {
                 setFilterPanelOpen(false);
@@ -1124,7 +1124,7 @@ export function GraphPane({
             className="absolute right-4 top-[4.25rem] z-40 flex w-[min(20rem,calc(100%_-_2rem))] max-h-[calc(100%_-_5.25rem)] flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface-strong)] shadow-[0_16px_48px_rgba(0,0,0,0.2)]">
             <div className="flex items-start justify-between gap-3 px-4 pb-3 pt-4">
               <div>
-                <h2 className="text-sm font-semibold text-[var(--foreground)]">{isEnglish ? "Visible links" : "Liga??es vis?veis"}</h2>
+                <h2 className="text-sm font-semibold text-[var(--foreground)]">{isEnglish ? "Visible links" : "Ligações visíveis"}</h2>
                 <p className="mt-1 text-xs text-[var(--muted)]">{isEnglish ? "Choose which types appear on the map." : "Escolhe os tipos que aparecem no mapa."}</p>
               </div>
               <button type="button" aria-label={isEnglish ? "Close filters" : "Fechar filtros"} onClick={() => setFilterPanelOpen(false)}
@@ -1157,7 +1157,7 @@ export function GraphPane({
               })}
             </div>
             <div className="flex items-center justify-between border-t border-[var(--border)] px-4 py-3">
-              <span className="text-xs text-[var(--muted)]">{isEnglish ? `${activeRelationFilters.size} of 4 types visible` : `${activeRelationFilters.size} de 4 tipos vis?veis`}</span>
+              <span className="text-xs text-[var(--muted)]">{isEnglish ? `${activeRelationFilters.size} of 4 types visible` : `${activeRelationFilters.size} de 4 tipos visíveis`}</span>
               <button type="button" disabled={activeRelationFilters.size === graphRelationFilterTypes.length} onClick={() => setActiveRelationFilters(new Set(graphRelationFilterTypes))}
                 className="rounded-md text-xs font-medium text-[var(--accent)] hover:underline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:text-[var(--muted)] disabled:opacity-50 disabled:no-underline">{isEnglish ? "Show all" : "Mostrar todos"}</button>
             </div>

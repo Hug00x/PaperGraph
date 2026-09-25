@@ -23,6 +23,22 @@ const acceptedAssetExtensions = new Map([
   [".pdf", "application/pdf"],
 ]);
 
+function hasExpectedFileSignature(buffer: Buffer, mimeType: string) {
+  if (mimeType === "image/png") {
+    return buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  }
+
+  if (mimeType === "image/jpeg") {
+    return buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+  }
+
+  if (mimeType === "image/webp") {
+    return buffer.length >= 12 && buffer.toString("ascii", 0, 4) === "RIFF" && buffer.toString("ascii", 8, 12) === "WEBP";
+  }
+
+  return mimeType === "application/pdf" && buffer.subarray(0, 5).toString("ascii") === "%PDF-";
+}
+
 function createSafeAssetName(originalName: string, mimeType: string) {
   const extension = acceptedAssetTypes.get(mimeType) ?? extname(originalName).toLowerCase();
   const baseName =
@@ -70,6 +86,10 @@ export async function POST(request: Request) {
 
     const storedName = createSafeAssetName(uploadedFile.name, uploadedFileType);
     const assetBuffer = Buffer.from(await uploadedFile.arrayBuffer());
+
+    if (!hasExpectedFileSignature(assetBuffer, uploadedFileType)) {
+      return NextResponse.json({ error: "O conteúdo do ficheiro não corresponde ao formato indicado." }, { status: 400 });
+    }
 
     await mkdir(assetDirectory, { recursive: true });
     await writeFile(join(assetDirectory, storedName), assetBuffer);

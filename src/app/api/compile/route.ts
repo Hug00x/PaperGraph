@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { NextResponse } from "next/server";
 import { getPaperGraphAssetDirectory } from "@/lib/server-paths";
@@ -15,6 +15,8 @@ const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
 const imageDirectoryName = "papergraph-images";
 const storageBucket = "papergraph-assets";
+const maxLatexSourceSize = 2 * 1024 * 1024;
+const maxImageAssets = 200;
 
 function getProjectPath(...segments: string[]) {
   return join(/*turbopackIgnore: true*/ process.cwd(), ...segments);
@@ -105,11 +107,16 @@ function getBearerToken(request: Request) {
 function resolveCompileImagePath(compileDirectory: string, imagePath: string) {
   const normalizedPath = imagePath.replace(/\\/g, "/").replace(/^\.?\//, "");
 
-  if (!normalizedPath || normalizedPath.split("/").includes("..")) {
+  if (!normalizedPath || normalizedPath.split("/").includes("..") || isAbsolute(normalizedPath)) {
     return null;
   }
 
-  return join(compileDirectory, ...normalizedPath.split("/"));
+  const resolvedPath = resolve(compileDirectory, ...normalizedPath.split("/"));
+  const relativePath = relative(resolve(compileDirectory), resolvedPath);
+
+  return relativePath && !relativePath.startsWith("..") && !isAbsolute(relativePath)
+    ? resolvedPath
+    : null;
 }
 
 function escapeLatexText(value: string) {
@@ -246,13 +253,17 @@ function rewriteMissingPdfIncludes(source: string, compileDirectory: string) {
 }
 
 async function readWorkspaceImageAssets(requestImageAssets?: WorkspaceImageAsset[]) {
-  return requestImageAssets ?? [];
+  return Array.isArray(requestImageAssets) ? requestImageAssets.slice(0, maxImageAssets) : [];
 }
 
 async function downloadStorageAssetToLocalFile(imageAsset: WorkspaceImageAsset, localFilePath: string, accessToken?: string) {
   const storagePath = imageAsset.storagePath;
 
   if (!storagePath) {
+    return false;
+  }
+
+  if (!accessToken) {
     return false;
   }
 
@@ -371,6 +382,10 @@ export async function POST(request: Request) {
 
     if (!source) {
       return NextResponse.json({ error: "Falta o código LaTeX." }, { status: 400 });
+    }
+
+    if (Buffer.byteLength(source, "utf8") > maxLatexSourceSize) {
+      return NextResponse.json({ error: "O código LaTeX excede o limite de 2 MB." }, { status: 413 });
     }
 
     const tectonicPath = resolveTectonicPath();

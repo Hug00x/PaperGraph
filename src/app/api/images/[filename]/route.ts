@@ -49,6 +49,10 @@ function getBearerToken(request: Request) {
 }
 
 async function downloadAssetFromStorage(storagePath: string, filename: string, accessToken?: string) {
+  if (!accessToken) {
+    return null;
+  }
+
   const supabase = getSupabaseServerStorageClient(accessToken);
 
   if (!supabase) {
