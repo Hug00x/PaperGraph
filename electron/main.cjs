@@ -129,6 +129,14 @@ function createWindow(appUrl) {
     return { action: "deny" };
   });
 
+  mainWindow.webContents.session.on("will-download", (event, downloadItem) => {
+    const downloadUrl = downloadItem.getURL();
+
+    if (isAllowedExternalUrl(downloadUrl)) {
+      event.preventDefault();
+    }
+  });
+
   void mainWindow.loadURL(appUrl);
 }
 

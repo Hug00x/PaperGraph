@@ -79,10 +79,40 @@ export function ArticleViewerPane({
   const publicationPdfUrl = safePublicationUrl(publication?.pdfUrl) || safePublicationUrl(discovered?.pdfUrl);
 
   const [publicationAttempt, setPublicationAttempt] = useState(0);
+  const [embeddedPdfFailureUrl, setEmbeddedPdfFailureUrl] = useState<string | null>(null);
+  const [embeddedPdf, setEmbeddedPdf] = useState<{ key: string; url: string } | null>(null);
   const publicationLoading = Boolean(discovered && workspaceId && authAccessToken && (resolvedPublication?.source !== article.source || resolvedPublication.attempt !== publicationAttempt));
   const publicationFailed = !publicationLoading && resolvedPublication?.source === article.source && resolvedPublication.failed;
   const keywords = [...new Set([...getEditableArticleTags(article).filter((tag) => !/^(openalex|importado|imported|pdf)$/i.test(tag) && !/^10\.\d{4,9}\//.test(tag)), ...(publication?.topics.map((topic) => topic.name) ?? [])])];
   const publicationUrl = safePublicationUrl(publication?.url);
+  const embeddedPdfKey = publicationPdfUrl ? `${article.id}:${publicationAttempt}:${publicationPdfUrl}` : null;
+  const embeddedPdfUrl = embeddedPdf?.key === embeddedPdfKey ? embeddedPdf.url : null;
+
+  useEffect(() => {
+    if (!embeddedPdfKey || !workspaceId || !authAccessToken) {
+      return;
+    }
+
+    const controller = new AbortController();
+    let objectUrl: string | null = null;
+    void fetch("/api/recommendations", {
+      method: "POST",
+      signal: controller.signal,
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${authAccessToken}` },
+      body: JSON.stringify({ action: "publication-pdf", workspaceId, articleId: article.id }),
+    }).then(async (response) => {
+      if (!response.ok) throw new Error("PDF unavailable");
+      objectUrl = URL.createObjectURL(await response.blob());
+      if (!controller.signal.aborted) setEmbeddedPdf({ key: embeddedPdfKey, url: objectUrl });
+    }).catch(() => {
+      if (!controller.signal.aborted) setEmbeddedPdfFailureUrl(embeddedPdfKey);
+    });
+
+    return () => {
+      controller.abort();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [article.id, authAccessToken, embeddedPdfKey, workspaceId]);
 
   useEffect(() => {
     if (!discovered || !workspaceId || !authAccessToken) return;
@@ -424,8 +454,15 @@ export function ArticleViewerPane({
               {publicationPdfUrl && publicationUrl ? <a href={publicationUrl} target="_blank" rel="noopener noreferrer" className="hover:underline">{isEnglish ? "View publication" : "Ver publicação"}</a> : null}
             </div>
           </div>
-          {publicationPdfUrl ? (
-            <iframe src={publicationPdfUrl} title={article.title} referrerPolicy="no-referrer" className="min-h-0 w-full flex-1 border-0" />
+          {embeddedPdfUrl && embeddedPdfFailureUrl !== embeddedPdfKey ? (
+            <iframe
+              src={embeddedPdfUrl}
+              title={article.title}
+              referrerPolicy="no-referrer"
+              onLoad={() => setEmbeddedPdfFailureUrl(null)}
+              onError={() => setEmbeddedPdfFailureUrl(embeddedPdfKey)}
+              className="min-h-0 w-full flex-1 border-0"
+            />
           ) : (
             <div className="flex flex-1 flex-col items-center justify-center gap-5 p-8 text-center">
               <p role="status" className="max-w-sm text-sm leading-6 text-[var(--muted)]">

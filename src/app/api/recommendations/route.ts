@@ -30,6 +30,35 @@ export async function POST(request: Request) {
       const paper = await openAlexDiscovery.lookup(metadata.externalId, request.signal);
       return NextResponse.json({ paper: paper ?? metadata });
     }
+    if (body.action === "publication-pdf") {
+      const metadata = discoveredMetadata(row.source ?? "");
+      if (!metadata) return NextResponse.json({ error: "not-found" }, { status: 404 });
+      const paper = await openAlexDiscovery.lookup(metadata.externalId, request.signal);
+      const pdfUrl = paper?.pdfUrl ?? metadata.pdfUrl;
+      if (!pdfUrl || !/^https?:\/\//i.test(pdfUrl)) return NextResponse.json({ error: "pdf-not-found" }, { status: 404 });
+
+      const pdfResponse = await fetch(pdfUrl, {
+        signal: AbortSignal.any([request.signal, AbortSignal.timeout(15000)]),
+        headers: { Accept: "application/pdf" },
+        redirect: "follow",
+      });
+      if (!pdfResponse.ok) return NextResponse.json({ error: "pdf-unavailable" }, { status: 502 });
+      const pdf = await pdfResponse.arrayBuffer();
+      const bytes = new Uint8Array(pdf.slice(0, 4));
+      if (bytes.length < 4 || String.fromCharCode(...bytes) !== "%PDF") {
+        return NextResponse.json({ error: "pdf-unavailable" }, { status: 502 });
+      }
+
+      return new Response(pdf, {
+        headers: {
+          "Cache-Control": "private, max-age=300",
+          "Content-Disposition": "inline; filename=papergraph-article.pdf",
+          "Content-Length": String(pdf.byteLength),
+          "Content-Type": "application/pdf",
+          "X-Content-Type-Options": "nosniff",
+        },
+      });
+    }
     if (body.action === "prepare-add") {
       const access = await supabase.rpc("can_edit_workspace", { workspace_uuid: body.workspaceId });
       if (access.error || !access.data) return NextResponse.json({ error: "read-only" }, { status: 403 });
