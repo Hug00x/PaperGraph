@@ -98,6 +98,7 @@ function createWindow(appUrl) {
     title: "PaperGraph",
     icon: getIconPath(),
     backgroundColor: "#071018",
+    autoHideMenuBar: true,
     show: false,
     webPreferences: {
       contextIsolation: true,

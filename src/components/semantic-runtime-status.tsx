@@ -19,6 +19,7 @@ declare global {
   }
 }
 const bytes = (value: number) => `${(value / 1024 / 1024).toFixed(1)} MB`;
+const semanticRuntimePreparedKey = "papergraph-semantic-runtime-prepared";
 
 export function SemanticRuntimeStatus() {
   const [state, setState] = useState<RuntimeState | null>(null);
@@ -32,7 +33,11 @@ export function SemanticRuntimeStatus() {
     const receive = (value: RuntimeState) => {
       if (active) {
         syncLanguage();
-        setState(value); setDismissed(false);
+        const alreadyPrepared = window.localStorage.getItem(semanticRuntimePreparedKey) === "true";
+        const failure = value.phase === "error" || value.phase === "offline";
+        if (value.phase === "ready") window.localStorage.setItem(semanticRuntimePreparedKey, "true");
+        setState(value);
+        setDismissed(alreadyPrepared && !failure);
       }
     };
     const unsubscribe = bridge.subscribe(receive);
