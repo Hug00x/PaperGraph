@@ -34,7 +34,6 @@ type GraphPaneProps = {
     }>
   >;
   canEdit: boolean;
-  academicRelationStatus?: string | null;
   isAcademicRelationsRunning?: boolean;
   onSelectArticle: (articleId: string | null) => void;
   onArticlePositionsChange: (positions: Record<string, ArticlePosition>) => void;
@@ -173,7 +172,6 @@ export function GraphPane({
   articlePositions,
   articlePresenceByArticleId = {},
   canEdit,
-  academicRelationStatus = null,
   isAcademicRelationsRunning = false,
   onSelectArticle,
   onArticlePositionsChange,
@@ -1161,7 +1159,6 @@ export function GraphPane({
               <button type="button" disabled={activeRelationFilters.size === graphRelationFilterTypes.length} onClick={() => setActiveRelationFilters(new Set(graphRelationFilterTypes))}
                 className="rounded-md text-xs font-medium text-[var(--accent)] hover:underline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:text-[var(--muted)] disabled:opacity-50 disabled:no-underline">{isEnglish ? "Show all" : "Mostrar todos"}</button>
             </div>
-            {academicRelationStatus ? <p role="status" className="border-t border-[var(--border)] px-4 py-3 text-xs leading-5 text-[var(--muted)]">{academicRelationStatus}</p> : null}
           </aside>
         ) : null}
 

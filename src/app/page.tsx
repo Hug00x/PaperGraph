@@ -192,42 +192,6 @@ function isAcademicRelationDiagnostics(value: unknown): value is AcademicRelatio
   return Boolean(value) && typeof value === "object";
 }
 
-function formatAcademicRelationStatus(
-  relations: WorkspaceRelation[],
-  diagnostics: AcademicRelationDiagnostics | null,
-  language: AppLanguage,
-) {
-  const isEnglish = language === "en";
-  const citationCount = relations.filter((relation) => relation.relationType === "citation").length;
-  const semanticCount = relations.filter((relation) => relation.relationType === "semantic").length;
-
-  if (!diagnostics) {
-    return isEnglish
-      ? `Academic scan finished: ${citationCount} citations, ${semanticCount} semantic links.`
-      : `Análise académica concluída: ${citationCount} citações, ${semanticCount} ligações semânticas.`;
-  }
-
-  const articleCount = diagnostics.articleCount ?? 0;
-  const doiArticleCount = diagnostics.doiArticleCount ?? 0;
-  const openAlexArticleCount = diagnostics.openAlexArticleCount ?? 0;
-  const topScore =
-    typeof diagnostics.semanticTopScore === "number"
-      ? `${Math.round(diagnostics.semanticTopScore * 100)}%`
-      : isEnglish
-        ? "none"
-        : "nenhum";
-
-  const minimum = typeof diagnostics.semanticThreshold === "number"
-    ? `${Number((diagnostics.semanticThreshold * 100).toFixed(2))}%`
-    : null;
-  const thresholdNote = minimum === null ? "" : isEnglish
-    ? ` Minimum for semantic links: ${minimum}.`
-    : ` Mínimo para ligações semânticas: ${minimum}.`;
-  return (isEnglish
-    ? `Academic scan: ${articleCount} articles, ${doiArticleCount} DOI, ${openAlexArticleCount} OpenAlex, ${citationCount} citations, ${semanticCount} semantic links. Top score: ${topScore}.`
-    : `Análise académica: ${articleCount} artigos, ${doiArticleCount} DOI, ${openAlexArticleCount} OpenAlex, ${citationCount} citações, ${semanticCount} ligações semânticas. Maior score: ${topScore}.`) + thresholdNote;
-}
-
 function NotificationBadge({ className = "", count }: { className?: string; count: number }) {
   if (count <= 0) {
     return null;
@@ -1686,7 +1650,6 @@ export default function Home() {
   const [appDialogValue, setAppDialogValue] = useState("");
   const [isArticleSubmissionRunning, setIsArticleSubmissionRunning] = useState(false);
   const [isAcademicRelationsRunning, setIsAcademicRelationsRunning] = useState(false);
-  const [academicRelationStatus, setAcademicRelationStatus] = useState<string | null>(null);
   const [connectionValidationError, setConnectionValidationError] = useState<string | null>(null);
   const [dismissedUnlinkedToastKey, setDismissedUnlinkedToastKey] = useState<string | null>(null);
   const [authMode, setAuthMode] = useState<AuthMode>("sign-in");
@@ -3744,7 +3707,6 @@ export default function Home() {
     };
 
     setWorkspace(snapshot);
-    setAcademicRelationStatus(academicRefresh.status ?? null);
     setConnectionValidationError(academicRefresh.issue ?? null);
     setSelectedArticleId(updatedArticle.id);
     rememberSelectedArticle(updatedArticle.id);
@@ -3892,7 +3854,6 @@ export default function Home() {
         diagnostics,
         relations: nextRelations,
         issue: payload.warnings?.length ? payload.warnings.map((warning) => getFriendlyErrorMessage(warning, appLanguage)).join(" ") : undefined,
-        status: formatAcademicRelationStatus(academicRelations, diagnostics, appLanguage),
       };
     } catch (error) {
       const issue = getFriendlyErrorMessage(error, appLanguage, {
@@ -4052,7 +4013,6 @@ export default function Home() {
     };
 
     setWorkspace(snapshot);
-    setAcademicRelationStatus(academicRefresh.status ?? null);
     setConnectionValidationError(academicRefresh.issue ?? null);
     setPendingEditorResubmission(null);
     setRestoredEditorVersion(null);
@@ -4519,7 +4479,6 @@ export default function Home() {
     await saveWorkspace(snapshot, true);
     if (displayedWorkspaceIdRef.current !== accountWorkspaceId) return;
     setWorkspace(snapshot);
-    setAcademicRelationStatus(academicRefresh.status ?? null);
     setConnectionValidationError(academicRefresh.issue ?? null);
     setPendingEditorNavigation(null);
     if (!keepSelection) {
@@ -5014,7 +4973,6 @@ export default function Home() {
                 articlePositions={currentArticlePositions}
                 articlePresenceByArticleId={workspacePresenceByArticleId}
                 canEdit={canEditCurrentWorkspace}
-                academicRelationStatus={academicRelationStatus}
                 isAcademicRelationsRunning={isAcademicRelationsRunning}
                 onSelectArticle={updateGraphSelectedArticle}
                 onArticlePositionsChange={updateArticlePositions}
