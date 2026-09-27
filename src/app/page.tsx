@@ -1,5 +1,7 @@
 "use client";
 
+import type { GraphZone } from "@/lib/graph-zones";
+
 import { isViewOnlyArticle } from "@/lib/article-presentation";
 
 import { extractPdfMetadata, titleFromPdfItems, type PdfMetadata, type PdfTextItem } from "@/lib/academic/pdf-metadata";
@@ -1466,8 +1468,8 @@ function calculateNextArticlePosition(workspaceArticles: WorkspaceArticle[]) {
   };
 }
 
-function roundPositionValue(value: number) {
-  return Math.round(clamp(value, 2, 98) * 10) / 10;
+function clampArticlePosition(value: number) {
+  return clamp(value, 2, 98);
 }
 
 function normalizeArticlePositionsForArticles(
@@ -1487,8 +1489,8 @@ function normalizeArticlePositionsForArticles(
     }
 
     nextPositions[articleId] = {
-      x: roundPositionValue(position.x),
-      y: roundPositionValue(position.y),
+      x: clampArticlePosition(position.x),
+      y: clampArticlePosition(position.y),
     };
   });
 
@@ -1606,13 +1608,29 @@ function mergeArticlePositions(
     mergedPositions[nextArticleId] = calculateNextArticlePosition(workspaceArticles);
   }
 
+  // Layout only missing positions. Saved positions define spatial Zone membership.
+  const generated = workspaceArticles.some((article) => !basePositions[article.id])
+    ? spreadOverlappingPositions(workspaceArticles, mergedPositions)
+    : mergedPositions;
   return normalizeArticlePositionsForArticles(
     workspaceArticles,
-    spreadOverlappingPositions(workspaceArticles, mergedPositions),
+    Object.fromEntries(Object.entries(generated).map(([id, point]) => [id, basePositions[id] ?? point])),
   );
 }
 
 export default function Home() {
+  useEffect(() => {
+    const preventBrowserContextMenu = (event: MouseEvent) => {
+      event.preventDefault();
+    };
+
+    document.addEventListener("contextmenu", preventBrowserContextMenu);
+
+    return () => {
+      document.removeEventListener("contextmenu", preventBrowserContextMenu);
+    };
+  }, []);
+
   const [workspace, setWorkspaceState] = useState<WorkspaceSnapshot>(defaultSnapshot);
   const setWorkspace = useCallback((snapshot: WorkspaceSnapshot) => {
     setWorkspaceState((previous) => ({ ...snapshot,
@@ -3556,6 +3574,7 @@ export default function Home() {
       articles: currentArticles,
       relations: currentRelations,
       articlePositions: currentArticlePositions,
+      zones: workspace.zones,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: currentImageAssets,
       articleVersions: currentArticleVersions,
@@ -3612,6 +3631,7 @@ export default function Home() {
       articles: nextArticles,
       relations: currentRelations,
       articlePositions: nextArticlePositions,
+      zones: workspace.zones,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: currentImageAssets,
       articleVersions: currentArticleVersions,
@@ -3655,6 +3675,7 @@ export default function Home() {
       articles: nextArticles,
       relations: nextRelations,
       articlePositions: nextArticlePositions,
+      zones: workspace.zones,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: currentImageAssets,
       articleVersions: currentArticleVersions,
@@ -3701,6 +3722,7 @@ export default function Home() {
       articles: nextArticles,
       relations: nextRelations,
       articlePositions: currentArticlePositions,
+      zones: workspace.zones,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: currentImageAssets,
       articleVersions: nextArticleVersions,
@@ -4007,6 +4029,7 @@ export default function Home() {
       articles: nextArticles,
       relations: nextRelations,
       articlePositions: nextArticlePositions,
+      zones: workspace.zones,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: currentImageAssets,
       articleVersions: nextArticleVersions,
@@ -4072,6 +4095,7 @@ export default function Home() {
       articles: nextArticles,
       relations: [relation, ...nextRelations],
       articlePositions: nextArticlePositions,
+      zones: workspace.zones,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: currentImageAssets,
       articleVersions: currentArticleVersions,
@@ -4135,6 +4159,7 @@ export default function Home() {
       articles: nextArticles,
       relations: nextRelations,
       articlePositions: currentArticlePositions,
+      zones: workspace.zones,
       ignoredUnlinkedMentionKeys: nextIgnoredUnlinkedMentionKeys,
       imageAssets: currentImageAssets,
       articleVersions: currentArticleVersions,
@@ -4165,6 +4190,7 @@ export default function Home() {
       articles: currentArticles,
       relations: currentRelations,
       articlePositions: currentArticlePositions,
+      zones: workspace.zones,
       ignoredUnlinkedMentionKeys: nextIgnoredUnlinkedMentionKeys,
       imageAssets: currentImageAssets,
       articleVersions: currentArticleVersions,
@@ -4221,6 +4247,7 @@ export default function Home() {
         articles: nextArticles,
         relations: nextRelations,
         articlePositions: currentArticlePositions,
+        zones: workspace.zones,
         ignoredUnlinkedMentionKeys: nextIgnoredUnlinkedMentionKeys,
         imageAssets: currentImageAssets,
         articleVersions: currentArticleVersions,
@@ -4263,6 +4290,7 @@ export default function Home() {
       articles: currentArticles,
       relations: nextRelations,
       articlePositions: currentArticlePositions,
+      zones: workspace.zones,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: currentImageAssets,
       articleVersions: currentArticleVersions,
@@ -4471,6 +4499,7 @@ export default function Home() {
       articles: nextArticles,
       relations: academicRefresh.relations,
       articlePositions: nextArticlePositions,
+      zones: workspace.zones,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: nextImageAssets,
       articleVersions: nextArticleVersions,
@@ -4509,6 +4538,7 @@ export default function Home() {
       articles: currentArticles,
       relations: currentRelations,
       articlePositions: currentArticlePositions,
+      zones: workspace.zones,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: nextImageAssets,
       articleVersions: currentArticleVersions,
@@ -4600,6 +4630,7 @@ export default function Home() {
       articles: currentArticles,
       relations: currentRelations,
       articlePositions: currentArticlePositions,
+      zones: workspace.zones,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: nextImageAssets,
       articleVersions: currentArticleVersions,
@@ -4663,6 +4694,7 @@ export default function Home() {
       articles: nextArticles,
       relations: nextRelations,
       articlePositions: nextArticlePositions,
+      zones: workspace.zones,
       ignoredUnlinkedMentionKeys: nextIgnoredUnlinkedMentionKeys,
       imageAssets: nextImageAssets,
       articleVersions: nextArticleVersions,
@@ -4687,7 +4719,7 @@ export default function Home() {
     void saveWorkspace(snapshot);
   }
 
-  function updateArticlePositions(nextPositions: Record<string, ArticlePosition>) {
+  function updateArticlePositions(nextPositions: Record<string, ArticlePosition>, nextZones = workspace.zones) {
     if (!canEditCurrentWorkspace) {
       return;
     }
@@ -4698,6 +4730,7 @@ export default function Home() {
       articles: currentArticles,
       relations: currentRelations,
       articlePositions: normalizedPositions,
+      zones: nextZones,
       ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
       imageAssets: currentImageAssets,
       articleVersions: currentArticleVersions,
@@ -4971,6 +5004,8 @@ export default function Home() {
                 relations={currentRelations}
                 unlinkedMentions={activeArticleUnlinkedMentions}
                 articlePositions={currentArticlePositions}
+                zones={workspace.zones}
+                onZonesChange={(zones: GraphZone[], positions: Record<string, ArticlePosition>) => updateArticlePositions(positions, zones)}
                 articlePresenceByArticleId={workspacePresenceByArticleId}
                 canEdit={canEditCurrentWorkspace}
                 isAcademicRelationsRunning={isAcademicRelationsRunning}

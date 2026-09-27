@@ -212,7 +212,8 @@ html[data-papergraph-theme="light"] .papergraph-app .backdrop-blur-xl {
   background: var(--graph-shell-background);
 }
 
-html[data-papergraph-theme="light"] .papergraph-app .papergraph-graph-pane {
+html[data-papergraph-theme="light"] .papergraph-app .papergraph-graph-pane,
+html[data-papergraph-theme="light"] .papergraph-graph-pane.papergraph-app {
   --graph-shell-background: linear-gradient(180deg, #eaf4fb 0%, #f8fcff 52%, #e5f0f8 100%);
   --graph-canvas-background:
     radial-gradient(circle at center, rgba(14, 165, 233, 0.18), transparent 34%),
@@ -291,6 +292,44 @@ html[data-papergraph-theme="light"] .papergraph-app .papergraph-graph-pane {
 
 .papergraph-graph-node-core.is-active {
   background: var(--graph-node-active-background);
+}
+
+[data-zone-color="red"] { --zone-color: #f87171; }
+[data-zone-color="orange"] { --zone-color: #fb923c; }
+[data-zone-color="amber"] { --zone-color: #fbbf24; }
+[data-zone-color="green"] { --zone-color: #4ade80; }
+[data-zone-color="teal"] { --zone-color: #2dd4bf; }
+[data-zone-color="blue"] { --zone-color: #60a5fa; }
+[data-zone-color="violet"] { --zone-color: #c4b5fd; }
+[data-zone-color="pink"] { --zone-color: #f472b6; }
+html[data-papergraph-theme="light"] [data-zone-color="red"] { --zone-color: #dc2626; }
+html[data-papergraph-theme="light"] [data-zone-color="orange"] { --zone-color: #c2410c; }
+html[data-papergraph-theme="light"] [data-zone-color="amber"] { --zone-color: #a16207; }
+html[data-papergraph-theme="light"] [data-zone-color="green"] { --zone-color: #16a34a; }
+html[data-papergraph-theme="light"] [data-zone-color="teal"] { --zone-color: #0f766e; }
+html[data-papergraph-theme="light"] [data-zone-color="blue"] { --zone-color: #2563eb; }
+html[data-papergraph-theme="light"] [data-zone-color="violet"] { --zone-color: #7c3aed; }
+html[data-papergraph-theme="light"] [data-zone-color="pink"] { --zone-color: #be185d; }
+.papergraph-zone {
+  border-color: color-mix(in srgb, var(--zone-color) 45%, transparent);
+  background: color-mix(in srgb, var(--zone-color) 7%, transparent);
+  transition: background-color 180ms ease, border-color 180ms ease;
+}
+.papergraph-zone.is-selected { border-style: dashed; border-color: var(--zone-color); }
+.papergraph-zone.is-candidate { background: color-mix(in srgb, var(--zone-color) 14%, transparent); border-color: var(--zone-color); }
+.papergraph-zone.is-invalid { border-color: #ef4444; border-style: dashed; }
+.papergraph-zone-handle { background: var(--graph-node-background); border-color: var(--zone-color); }
+.papergraph-zone-swatch { background: var(--zone-color); border-color: var(--zone-color); }
+.papergraph-graph-node-core.has-zone {
+  border-color: var(--zone-color);
+  background: color-mix(in srgb, var(--zone-color) 15%, var(--graph-node-background));
+}
+.papergraph-graph-node-core.has-zone.is-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--zone-color) 22%, var(--graph-node-background));
+}
+@media (prefers-reduced-motion: reduce) {
+  .papergraph-zone { transition: none; }
 }
 
 .papergraph-graph-node-label {

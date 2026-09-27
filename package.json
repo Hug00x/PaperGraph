@@ -20,6 +20,8 @@
     "test:semantic": "node --experimental-strip-types --test tests/semantic.test.mjs",
     "test:recommendations": "node --experimental-strip-types --test tests/recommendations.test.mjs",
     "test:persistence": "node --experimental-strip-types --test tests/workspace-persistence.test.mjs",
+    "test:zones": "node --experimental-strip-types --test tests/graph-zones.test.mjs",
+    "test:zones:browser": "node scripts/test-zones-browser.mjs",
     "test:pdf-import": "node --experimental-strip-types --test tests/pdf-import.test.mjs",
     "runtime:prepare": "node scripts/fetch-ollama-runtime.mjs",
     "test:runtime": "node --test tests/ollama-runtime.test.cjs"

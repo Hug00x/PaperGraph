@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { NextResponse } from "next/server";
+import { normalizeZones } from "@/lib/graph-zones";
 import { getPaperGraphDataDirectory } from "@/lib/server-paths";
 import {
   defaultSnapshot,
@@ -31,7 +32,7 @@ function normalizeRelationType(value: unknown): WorkspaceRelation["relationType"
 }
 
 function clampPositionValue(value: number) {
-  return Math.min(98, Math.max(2, Math.round(value * 10) / 10));
+  return Math.min(98, Math.max(2, value));
 }
 
 function normalizeArticlePositions(
@@ -63,6 +64,7 @@ function normalizeArticlePositions(
 function normalizeSnapshotForStorage(snapshot: WorkspaceSnapshot): WorkspaceSnapshot {
   return {
     ...snapshot,
+    zones: normalizeZones(snapshot.zones),
     articlePositions: normalizeArticlePositions(snapshot.articles, snapshot.articlePositions),
   };
 }
@@ -75,6 +77,7 @@ async function readSnapshot(): Promise<WorkspaceSnapshot> {
     const workspaceSnapshot = {
       ...defaultSnapshot,
       ...parsed,
+      zones: normalizeZones(parsed.zones),
       articles: parsed.articles ?? defaultSnapshot.articles,
       relations: (parsed.relations ?? []).map((relation) => ({
         ...relation,

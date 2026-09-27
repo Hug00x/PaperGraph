@@ -53,12 +53,40 @@ async function database(uuidIds = false) {
   const semantic = await readFile(new URL("../supabase/migrations/202609230001_semantic_search.sql", import.meta.url), "utf8");
   await db.exec(semantic.slice(semantic.indexOf("create or replace function public.invalidate_article_embedding"), semantic.indexOf("-- Security invoker")));
   await db.exec(await readFile(new URL("../supabase/migrations/202609240001_atomic_workspace.sql", import.meta.url), "utf8"));
+  await db.exec(await readFile(new URL("../supabase/migrations/202609270001_graph_zones.sql", import.meta.url), "utf8"));
+  await db.exec(await readFile(new URL("../supabase/migrations/202609270002_zone_notes.sql", import.meta.url), "utf8"));
   await db.exec(`set role authenticated; set test.user_id='${owner}';`);
   return db;
 }
 const save = async (db, revision, snapshot = payload(), partial = false, id = workspace) =>
   (await db.query("select public.save_workspace_snapshot($1,$2,$3,$4) as revision", [id, revision, snapshot, partial])).rows[0].revision;
 const load = async (db, id = workspace) => (await db.query("select public.load_workspace_snapshot($1) as snapshot", [id])).rows[0].snapshot;
+
+test("Zones and member positions save atomically, survive old clients, validate geometry and respect permissions", async () => {
+  const db = await database();
+  const zone = { id: "zone-1", name: "Method 1", color: "green", x: 20, y: 30, width: 20, height: 20 };
+  try {
+    assert.deepEqual((await load(db)).zones, []);
+    await save(db, "0", payload({ zones: [zone] }));
+    assert.deepEqual((await load(db)).zones, [zone]);
+    await save(db, "1", payload()); // An older writer omits Zones; it must preserve them.
+    assert.deepEqual((await load(db)).zones, [zone]);
+    const before = await load(db);
+    await assert.rejects(save(db, "2", payload({ zones: [{ ...zone, width: -1 }], article_positions: [{ article_id: articleId, x: 99, y: 99 }] })), /valid_workspace_zones/);
+    assert.deepEqual(await load(db), before);
+    await assert.rejects(save(db, "2", payload({ zones: [zone, { ...zone, id: "overlap" }] })), /valid_workspace_zones/);
+    await assert.rejects(save(db, "2", payload({ zones: [{ ...zone, color: "url(evil)" }] })), /valid_workspace_zones/);
+    await assert.rejects(save(db, "2", payload({ zones: [{ ...zone, notes: "x".repeat(20001) }] })), /valid_workspace_zones/);
+    await assert.rejects(db.query("update public.workspaces set zones='[]' where id=$1", [workspace]), /permission denied/);
+    await db.exec(`set test.user_id='${viewer}';`);
+    assert.deepEqual((await load(db)).zones, [zone]);
+    await assert.rejects(save(db, "2", payload({ zones: [] })), /workspace-write-forbidden/);
+    await db.exec(`set test.user_id='${owner}';`);
+    await save(db, "2", payload({ zones: [] }));
+    assert.deepEqual((await load(db)).zones, []);
+    assert.equal((await load(db)).articles.length, 1);
+  } finally { await db.close(); }
+});
 
 test("SQL transaction saves all tables and fully rolls back a late failure", async () => {
   const db = await database();
@@ -189,9 +217,12 @@ test("client integration loads one consistent snapshot and saves through the RPC
   try {
     const loaded = await loadWorkspaceSnapshotFromSupabase(client, workspace);
     await saveWorkspaceArticles(client, workspace, [{ ...article, updatedAt: "now" }]);
-    await saveWorkspaceSnapshotToSupabase(client, { id: workspace, language: "en" }, { ...defaultSnapshot, persistenceSession: loaded.persistenceSession, articles: [{ ...article, updatedAt: "now" }] });
+    const zones = [{ id: "zone-adapter", name: "Restored zone", color: "teal", notes: "Method notes\nNext steps", x: 20, y: 30, width: 20, height: 20 }];
+    await saveWorkspaceSnapshotToSupabase(client, { id: workspace, language: "en" }, { ...defaultSnapshot, zones, articlePositions: { [articleId]: { x: 30.123456, y: 40 } }, persistenceSession: loaded.persistenceSession, articles: [{ ...article, updatedAt: "now" }] });
     const snapshot = await loadWorkspaceSnapshotFromSupabase(client, workspace);
     assert.equal(snapshot.articles[0].abstract, "Abstract");
+    assert.deepEqual(snapshot.zones, zones);
+    assert.equal(snapshot.articlePositions[articleId].x, 30.123456);
     assert.equal((await load(db)).revision, "2");
   } finally { await db.close(); }
 });

@@ -1,3 +1,5 @@
+import type { GraphZone } from "./graph-zones.ts";
+
 export type Article = {
   id: string;
   title: string;
@@ -66,6 +68,7 @@ export type WorkspaceSnapshot = {
   articles: WorkspaceArticle[];
   relations: WorkspaceRelation[];
   articlePositions: Record<string, ArticlePosition>;
+  zones: GraphZone[];
   ignoredUnlinkedMentionKeys: string[];
   imageAssets: WorkspaceImageAsset[];
   articleVersions: WorkspaceArticleVersion[];
@@ -81,6 +84,7 @@ export const defaultSnapshot: WorkspaceSnapshot = {
   articles,
   relations: [],
   articlePositions,
+  zones: [],
   ignoredUnlinkedMentionKeys: [],
   imageAssets: [],
   articleVersions: [],

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { normalizeZones } from "./graph-zones.ts";
 import {
   defaultSnapshot,
   type WorkspaceArticleVersion,
@@ -608,6 +609,7 @@ export async function loadWorkspaceSnapshotFromSupabase(
     articles,
     relations,
     articlePositions,
+    zones: normalizeZones(data.zones),
     ignoredUnlinkedMentionKeys,
     imageAssets,
     articleVersions,
@@ -726,6 +728,7 @@ export async function saveWorkspaceSnapshotToSupabase(
     language: workspace.language,
     articles: workspaceArticleRows(workspace.id, snapshot.articles),
     article_positions: positionRows,
+    zones: normalizeZones(snapshot.zones),
     relations: relationRows,
     assets: assetRows,
     article_versions: articleVersionRows,

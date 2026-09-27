@@ -15,6 +15,10 @@ import type { PdfImportResult } from "@/lib/pdf-import-queue";
 import { RecommendationsPanel } from "@/components/recommendations-panel";
 import type { RecommendedPaper } from "@/lib/academic/discovery/types";
 
+import { GraphZoneNotes } from "@/components/graph-zone-notes";
+import { GraphZoneLayer } from "@/components/graph-zone-layer";
+import { getZoneForNodePosition, type GraphZone } from "@/lib/graph-zones";
+
 type GraphPaneProps = {
   workspaceId: string;
   accessToken: string;
@@ -25,6 +29,8 @@ type GraphPaneProps = {
   relations: WorkspaceRelation[];
   unlinkedMentions: UnlinkedMention[];
   articlePositions: Record<string, ArticlePosition>;
+  zones: GraphZone[];
+  onZonesChange: (zones: GraphZone[], positions: Record<string, ArticlePosition>) => void;
   articlePresenceByArticleId?: Record<
     string,
     Array<{
@@ -170,6 +176,8 @@ export function GraphPane({
   relations,
   unlinkedMentions,
   articlePositions,
+  zones,
+  onZonesChange,
   articlePresenceByArticleId = {},
   canEdit,
   isAcademicRelationsRunning = false,
@@ -187,6 +195,13 @@ export function GraphPane({
   workspaceId, accessToken, onAddRecommendation,
 }: GraphPaneProps) {
   const isEnglish = language === "en";
+  const [draftZones, setDraftZones] = useState<GraphZone[] | null>(null);
+  const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null);
+  const [creatingZone, setCreatingZone] = useState(false);
+  const [notesZoneId, setNotesZoneId] = useState<string | null>(null);
+  const notesZone = zones.find((zone) => zone.id === notesZoneId);
+  const displayedZones = draftZones ?? zones;
+
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [draftPositions, setDraftPositions] = useState<Record<string, ArticlePosition> | null>(null);
   const [draggingArticleId, setDraggingArticleId] = useState<string | null>(null);
@@ -668,6 +683,8 @@ export function GraphPane({
       return undefined;
     }
 
+    let dragFrame: number | null = null;
+    let dragPoint = { x: 0, y: 0 };
     const handlePointerMove = (event: PointerEvent) => {
       const dragStart = dragStartRef.current;
 
@@ -682,10 +699,16 @@ export function GraphPane({
         stopViewportAnimation();
       }
 
-      updatePositionFromClientPoint(event.clientX, event.clientY, draggingArticleId);
+      dragPoint = { x: event.clientX, y: event.clientY };
+      if (dragFrame === null) dragFrame = requestAnimationFrame(() => {
+        dragFrame = null;
+        updatePositionFromClientPoint(dragPoint.x, dragPoint.y, draggingArticleId);
+      });
     };
 
     const handlePointerUp = (event: PointerEvent) => {
+      if (dragFrame !== null) cancelAnimationFrame(dragFrame);
+      dragFrame = null;
       const dragStart = dragStartRef.current;
       const clickedArticleId = draggingArticleId;
 
@@ -715,14 +738,23 @@ export function GraphPane({
       dragStartRef.current = null;
     };
 
+    const handlePointerCancel = () => {
+      if (dragFrame !== null) cancelAnimationFrame(dragFrame);
+      dragFrame = null;
+      positionsRef.current = articlePositions;
+      setDraftPositions(null); setDraggingArticleId(null); dragStartRef.current = null;
+    };
+    window.addEventListener("pointercancel", handlePointerCancel);
     window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerup", handlePointerUp);
 
     return () => {
+      if (dragFrame !== null) cancelAnimationFrame(dragFrame);
+      window.removeEventListener("pointercancel", handlePointerCancel);
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
     };
-  }, [activeArticle?.id, draggingArticleId, onSelectArticle, stopViewportAnimation]);
+  }, [activeArticle?.id, articlePositions, draggingArticleId, onSelectArticle, stopViewportAnimation]);
 
   useEffect(() => {
     if (!isPanning) {
@@ -910,6 +942,12 @@ export function GraphPane({
 
   return (
     <section className="papergraph-graph-pane relative isolate min-h-0 w-full flex-1 overflow-hidden">
+      {notesZone && <GraphZoneNotes key={notesZone.id} zone={notesZone} canEdit={canEdit} isEnglish={isEnglish}
+        onClose={() => setNotesZoneId(null)} onSave={(notes) => {
+          if (canEdit) onZonesChange(zones.map((zone) => zone.id === notesZone.id ? { ...zone, notes } : zone), articlePositions);
+          setNotesZoneId(null);
+        }} />}
+
       <aside className="papergraph-graph-panel absolute bottom-5 left-5 top-5 z-50 flex max-h-[calc(100%_-_2.5rem)] w-[20rem] flex-col overflow-hidden rounded-[24px] border border-[var(--border)] p-4 shadow-[0_18px_50px_rgba(0,0,0,0.18)] backdrop-blur-xl">
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -1048,6 +1086,7 @@ export function GraphPane({
 
           if (target?.closest("[data-graph-background]")) {
             onSelectArticle(null);
+            setSelectedZoneId(null);
           }
 
           if (target?.closest("[data-graph-node]") || target?.closest("button")) {
@@ -1067,6 +1106,16 @@ export function GraphPane({
         }}
         onPointerUp={(event) => {
           if (isPanning) {
+            const start = panStartRef.current;
+            if (start && Math.hypot(event.clientX - start.clientX, event.clientY - start.clientY) < 4) {
+              const bounds = containerRef.current?.getBoundingClientRect();
+              if (bounds) {
+                const point = { x: ((event.clientX - bounds.left - containerSize.width / 2 - viewport.x) / viewport.scale + 1500) / 30,
+                  y: ((event.clientY - bounds.top - containerSize.height / 2 - viewport.y) / viewport.scale + 1500) / 30 };
+                const zone = getZoneForNodePosition(point, zones);
+                if (zone) { setSelectedZoneId(zone.id); setNotesZoneId(zone.id); }
+              }
+            }
             setIsPanning(false);
           }
 
@@ -1078,6 +1127,16 @@ export function GraphPane({
         }}
       >
         <div data-graph-background className="papergraph-graph-backdrop absolute inset-0 z-0" />
+        <GraphZoneLayer zones={displayedZones} positions={displayedPositions}
+          selectedId={selectedZoneId} onSelect={setSelectedZoneId} viewport={viewport} size={containerSize}
+          canEdit={canEdit} isEnglish={isEnglish} creating={creatingZone}
+          onFinishDrawing={() => setCreatingZone(false)} onOpenNotes={setNotesZoneId}
+          candidateId={draggingArticleId ? getZoneForNodePosition(displayedPositions[draggingArticleId], displayedZones)?.id ?? null : null}
+          onPreview={(nextZones, nextPositions) => { setDraftZones(nextZones); setDraftPositions(nextPositions); }}
+          onCommit={(nextZones, nextPositions) => {
+            setDraftZones(null); setDraftPositions(null); onZonesChange(nextZones, nextPositions);
+          }} />
+
 
         {isAcademicRelationsRunning ? (
           <div className="absolute left-1/2 top-4 z-30 -translate-x-1/2 rounded-full border border-[var(--accent)]/40 bg-black/35 px-4 py-2 text-xs font-semibold text-[var(--accent)] shadow-[0_14px_34px_rgba(0,0,0,0.22)] backdrop-blur-md">
@@ -1085,12 +1144,18 @@ export function GraphPane({
           </div>
         ) : null}
 
-        <div data-graph-control className="absolute right-4 top-4 z-30">
+        <div data-graph-control className="absolute right-4 top-4 z-[70] flex items-center gap-2">
+          {canEdit && <button type="button" aria-pressed={creatingZone}
+            onClick={() => { stopViewportAnimation(); setCreatingZone((value) => !value); setFilterPanelOpen(false); setContextMenu(null); setManualConnectionSourceId(null); }}
+            className={`flex h-10 items-center gap-2 rounded-xl border px-3 text-sm font-medium shadow-sm backdrop-blur-xl focus-visible:outline-2 focus-visible:outline-[var(--accent)] ${creatingZone ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]" : "border-[var(--border)] bg-[var(--surface)] text-[var(--foreground)]"}`}>
+            <span aria-hidden="true">?</span>{isEnglish ? "Create zone" : "Criar zona"}
+          </button>}
           <button
             type="button"
             aria-expanded={filterPanelOpen}
             aria-controls="graph-filters"
             onClick={() => {
+              setCreatingZone(false);
               if (!filterPanelOpen) {
                 onSelectArticle(null);
                 setContextMenu(null);
@@ -1225,6 +1290,7 @@ export function GraphPane({
               y: containerSize.height / 2 + viewport.y + ((fallbackPosition.y / 100) * worldSize - worldSize / 2) * viewport.scale,
             };
             const isActive = article.id === activeArticle?.id;
+            const articleZone = getZoneForNodePosition(displayedPositions[article.id], displayedZones);
             const isDragging = draggingArticleId === article.id;
             const nodeVisualScale = graphVisualScale * (isActive ? 1.1 : 1);
             const nodePresence = articlePresenceByArticleId[article.id] ?? [];
@@ -1234,6 +1300,7 @@ export function GraphPane({
                 key={article.id}
                 data-graph-node
                 data-article-id={article.id}
+                data-zone-color={articleZone?.color}
                 type="button"
                 title={
                   nodePresence.length > 0
@@ -1250,6 +1317,8 @@ export function GraphPane({
                   event.preventDefault();
                   stopViewportAnimation();
                   setContextMenu(null);
+                  setSelectedZoneId(null);
+
 
                   if (!canEdit) {
                     const nextArticleId = activeArticle?.id === article.id ? null : article.id;
@@ -1310,7 +1379,7 @@ export function GraphPane({
                 }}
               >
                 <span
-                  className={`papergraph-graph-node-core relative flex h-16 w-16 items-center justify-center rounded-full border text-lg font-semibold shadow-[0_18px_38px_rgba(0,0,0,0.24)] transition-colors ${
+                  className={`papergraph-graph-node-core ${articleZone ? "has-zone" : ""} relative flex h-16 w-16 items-center justify-center rounded-full border text-lg font-semibold shadow-[0_18px_38px_rgba(0,0,0,0.24)] transition-colors ${
                     isActive
                       ? "is-active border-[var(--accent)] text-white shadow-[0_0_32px_rgba(142,231,255,0.2)]"
                       : "border-[var(--border)] text-white/90 group-hover:border-[var(--accent)]"
