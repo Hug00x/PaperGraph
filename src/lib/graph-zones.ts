@@ -7,16 +7,30 @@ export type ZoneColor = (typeof ZONE_COLORS)[number];
 export type GraphZone = { id: string; name: string; color: ZoneColor; notes?: string; x: number; y: number; width: number; height: number };
 export type ZoneBounds = Pick<GraphZone, "x" | "y" | "width" | "height">;
 export type Positions = Record<string, ArticlePosition>;
+const zoneColorValues: Record<ZoneColor, [number, number, number]> = {
+  red: [248, 113, 113], orange: [251, 146, 60], amber: [251, 191, 36], green: [74, 222, 128],
+  teal: [45, 212, 191], blue: [96, 165, 250], violet: [196, 181, 253], pink: [244, 114, 182],
+};
 
 export function isPointInsideZone(point: ArticlePosition, zone: ZoneBounds) {
   // Half-open bounds remove ambiguity where two zones share an edge.
   return point.x >= zone.x && point.x < zone.x + zone.width && point.y >= zone.y && point.y < zone.y + zone.height;
 }
 export function getZoneForNodePosition(point: ArticlePosition | undefined, zones: readonly GraphZone[]) {
-  if (!point) return null;
-  let result: GraphZone | null = null;
-  for (const zone of zones) if (isPointInsideZone(point, zone) && (!result || zone.id < result.id)) result = zone;
-  return result;
+  return getZonesForNodePosition(point, zones)[0] ?? null;
+}
+export function getZonesForNodePosition(point: ArticlePosition | undefined, zones: readonly GraphZone[]) {
+  if (!point) return [];
+  return zones.filter((zone) => isPointInsideZone(point, zone)).sort((a, b) => a.id.localeCompare(b.id));
+}
+export function getBlendedZoneColor(zones: readonly GraphZone[]) {
+  if (!zones.length) return undefined;
+  const channels = zones.reduce((sum, zone) => {
+    const color = zoneColorValues[zone.color];
+    return [sum[0] + color[0], sum[1] + color[1], sum[2] + color[2]];
+  }, [0, 0, 0]);
+  const count = zones.length;
+  return `rgb(${Math.round(channels[0] / count)} ${Math.round(channels[1] / count)} ${Math.round(channels[2] / count)})`;
 }
 export function zonesOverlap(a: ZoneBounds, b: ZoneBounds) {
   return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
@@ -58,7 +72,8 @@ export function findFreeZoneBounds(bounds: ZoneBounds, zones: readonly GraphZone
 }
 export function moveZoneMembers(zone: GraphZone, zones: readonly GraphZone[], positions: Positions, dx: number, dy: number): Positions {
   return Object.fromEntries(Object.entries(positions).map(([id, point]) => [id,
-    getZoneForNodePosition(point, zones)?.id === zone.id ? { x: point.x + dx, y: point.y + dy } : point]));
+    zones.some((candidate) => candidate.id === zone.id && isPointInsideZone(point, candidate))
+      ? { x: point.x + dx, y: point.y + dy } : point]));
 }
 export function resizeZone(zone: ZoneBounds, corner: string, dx: number, dy: number): ZoneBounds {
   const left = corner.includes("w") ? Math.max(0, Math.min(zone.x + zone.width - ZONE_CONFIG.minWidth, zone.x + dx)) : zone.x;

@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState, type PointerEvent } from "react";
-import { getDrawnZoneBounds, isValidZoneBounds, zonesOverlap, type GraphZone, type ZoneBounds } from "@/lib/graph-zones";
+import { getDrawnZoneBounds, isValidZoneBounds, type ZoneBounds } from "@/lib/graph-zones";
 
-export function GraphZoneDrawing({ viewport, size, zones, isEnglish, onComplete, onCancel }: {
-  viewport: { x: number; y: number; scale: number }; size: { width: number; height: number }; zones: GraphZone[];
+export function GraphZoneDrawing({ viewport, size, isEnglish, onComplete, onCancel }: {
+  viewport: { x: number; y: number; scale: number }; size: { width: number; height: number };
   isEnglish: boolean; onComplete: (bounds: ZoneBounds) => void; onCancel: () => void;
 }) {
   const start = useRef<{ x: number; y: number } | null>(null);
@@ -19,7 +19,7 @@ export function GraphZoneDrawing({ viewport, size, zones, isEnglish, onComplete,
     return { x: ((event.clientX - rect.left - size.width / 2 - viewport.x) / viewport.scale + 1500) / 30,
       y: ((event.clientY - rect.top - size.height / 2 - viewport.y) / viewport.scale + 1500) / 30 };
   }
-  const invalid = bounds && (!isValidZoneBounds(bounds) || zones.some((z) => zonesOverlap(z, bounds)));
+  const invalid = bounds && !isValidZoneBounds(bounds);
   return <div ref={surface} data-graph-control data-zone-drawing tabIndex={-1}
     className="absolute inset-0 z-[60] cursor-crosshair outline-none" style={{ touchAction: "none" }}
     onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); onCancel(); } }}
@@ -37,12 +37,11 @@ export function GraphZoneDrawing({ viewport, size, zones, isEnglish, onComplete,
       e.currentTarget.releasePointerCapture(e.pointerId);
       setBounds(null);
       if (!isValidZoneBounds(result)) { setError(isEnglish ? "Draw a larger area." : "Desenha uma área maior."); return; }
-      if (zones.some((z) => zonesOverlap(z, result))) { setError(isEnglish ? "Zones cannot overlap. Draw in a free area." : "As zonas não podem sobrepor-se. Desenha numa área livre."); return; }
       onComplete(result);
     }}
     onPointerCancel={() => { start.current = null; onCancel(); }}>
     <div className="pointer-events-auto absolute left-1/2 top-5 flex -translate-x-1/2 items-center gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface-strong)] px-4 py-2 text-xs text-[var(--foreground)]" onPointerDown={(e) => e.stopPropagation()}>
-      <span role="status">{error || (isEnglish ? "Drag to draw a zone, then release." : "Arrasta para desenhar uma zona e larga o rato.")}</span>
+      <span role="status">{error || (isEnglish ? "Drag to draw a group, then release." : "Arrasta para desenhar um grupo e larga o rato.")}</span>
       <button type="button" onClick={onCancel} className="rounded px-2 py-1 text-[var(--accent)] focus-visible:outline-2">{isEnglish ? "Cancel" : "Cancelar"}</button>
     </div>
     {bounds && <div className="pointer-events-none absolute rounded-2xl border-2 border-dashed" style={{

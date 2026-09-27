@@ -3,7 +3,7 @@
 begin;
 create or replace function public.valid_graph_zones(value jsonb)
 returns boolean language plpgsql immutable set search_path = public as $$
-declare z jsonb; other jsonb; seen text[] := '{}';
+declare z jsonb; seen text[] := '{}';
 begin
   if jsonb_typeof(value) is distinct from 'array' then return false; end if;
   for z in select * from jsonb_array_elements(value) loop
@@ -19,12 +19,6 @@ begin
       or (z->>'width')::numeric < 8 or (z->>'height')::numeric < 6
       or (z->>'x')::numeric + (z->>'width')::numeric > 100
       or (z->>'y')::numeric + (z->>'height')::numeric > 100 then return false; end if;
-    for other in select entry from jsonb_array_elements(value) as entries(entry) where (entry->>'id') = any(seen) loop
-      if (z->>'x')::numeric < (other->>'x')::numeric + (other->>'width')::numeric
-        and (z->>'x')::numeric + (z->>'width')::numeric > (other->>'x')::numeric
-        and (z->>'y')::numeric < (other->>'y')::numeric + (other->>'height')::numeric
-        and (z->>'y')::numeric + (z->>'height')::numeric > (other->>'y')::numeric then return false; end if;
-    end loop;
     seen := array_append(seen, z->>'id');
   end loop;
   return true;

@@ -1,4 +1,4 @@
--- Apply after 202609270001_graph_zones.sql. Existing zones may omit notes.
+-- Zones may overlap; article membership and blended colors are derived client-side.
 begin;
 create or replace function public.valid_graph_zones(value jsonb)
 returns boolean language plpgsql immutable set search_path = public as $$
@@ -13,8 +13,7 @@ begin
       or (z ? 'notes' and (jsonb_typeof(z->'notes') is distinct from 'string' or length(z->>'notes') > 20000))
       or coalesce(z->>'color','') not in ('red','orange','amber','green','teal','blue','violet','pink')
       or jsonb_typeof(z->'x') is distinct from 'number' or jsonb_typeof(z->'y') is distinct from 'number'
-      or jsonb_typeof(z->'width') is distinct from 'number' or jsonb_typeof(z->'height') is distinct from 'number'
-    then return false; end if;
+      or jsonb_typeof(z->'width') is distinct from 'number' or jsonb_typeof(z->'height') is distinct from 'number' then return false; end if;
     if (z->>'x')::numeric < 0 or (z->>'y')::numeric < 0
       or (z->>'width')::numeric < 8 or (z->>'height')::numeric < 6
       or (z->>'x')::numeric + (z->>'width')::numeric > 100

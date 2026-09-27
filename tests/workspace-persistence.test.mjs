@@ -74,15 +74,15 @@ test("Zones and member positions save atomically, survive old clients, validate 
     const before = await load(db);
     await assert.rejects(save(db, "2", payload({ zones: [{ ...zone, width: -1 }], article_positions: [{ article_id: articleId, x: 99, y: 99 }] })), /valid_workspace_zones/);
     assert.deepEqual(await load(db), before);
-    await assert.rejects(save(db, "2", payload({ zones: [zone, { ...zone, id: "overlap" }] })), /valid_workspace_zones/);
-    await assert.rejects(save(db, "2", payload({ zones: [{ ...zone, color: "url(evil)" }] })), /valid_workspace_zones/);
-    await assert.rejects(save(db, "2", payload({ zones: [{ ...zone, notes: "x".repeat(20001) }] })), /valid_workspace_zones/);
+    await save(db, "2", payload({ zones: [zone, { ...zone, id: "overlap", color: "violet" }] }));
+    await assert.rejects(save(db, "3", payload({ zones: [{ ...zone, color: "url(evil)" }] })), /valid_workspace_zones/);
+    await assert.rejects(save(db, "3", payload({ zones: [{ ...zone, notes: "x".repeat(20001) }] })), /valid_workspace_zones/);
     await assert.rejects(db.query("update public.workspaces set zones='[]' where id=$1", [workspace]), /permission denied/);
     await db.exec(`set test.user_id='${viewer}';`);
-    assert.deepEqual((await load(db)).zones, [zone]);
+    assert.deepEqual((await load(db)).zones, [zone, { ...zone, id: "overlap", color: "violet" }]);
     await assert.rejects(save(db, "2", payload({ zones: [] })), /workspace-write-forbidden/);
     await db.exec(`set test.user_id='${owner}';`);
-    await save(db, "2", payload({ zones: [] }));
+    await save(db, "3", payload({ zones: [] }));
     assert.deepEqual((await load(db)).zones, []);
     assert.equal((await load(db)).articles.length, 1);
   } finally { await db.close(); }

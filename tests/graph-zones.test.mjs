@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getDrawnZoneBounds, isValidZoneBounds, getZoneForNodePosition, isPointInsideZone, normalizeZones, getSelectionBounds, findFreeZoneBounds, moveZoneMembers, resizeZone, zonesOverlap } from '../src/lib/graph-zones.ts';
+import { getDrawnZoneBounds, isValidZoneBounds, getZoneForNodePosition, getZonesForNodePosition, getBlendedZoneColor, isPointInsideZone, normalizeZones, getSelectionBounds, findFreeZoneBounds, moveZoneMembers, resizeZone, zonesOverlap } from '../src/lib/graph-zones.ts';
 const a = { id: 'a', name: 'Method 1', color: 'green', x: 10, y: 10, width: 20, height: 15 };
 const b = { ...a, id: 'b', name: 'Method 2', color: 'violet', x: 40 };
 test('center containment, half-open boundaries and a deterministic overlap fallback', () => {
@@ -16,6 +16,11 @@ test('enter, transfer and leave follow position only; zoom and pan are not input
   assert.equal(getZoneForNodePosition({ x: 15, y: 15 }, zones)?.color, 'green');
   assert.equal(getZoneForNodePosition({ x: 45, y: 15 }, zones)?.color, 'violet');
   assert.equal(getZoneForNodePosition({ x: 35, y: 15 }, zones), null);
+});
+test('overlapping zones share article membership and blend their colors', () => {
+  const overlap = { ...b, x: 20, y: 15, width: 20, height: 15 };
+  assert.deepEqual(getZonesForNodePosition({ x: 22, y: 16 }, [overlap, a]).map((zone) => zone.id), ['a', 'b']);
+  assert.equal(getBlendedZoneColor([a, overlap]), 'rgb(135 202 191)');
 });
 test('creation bounds enclose selected centers with padding, including world edges', () => {
   const positions = { one: { x: 2, y: 2 }, two: { x: 98, y: 98 } };

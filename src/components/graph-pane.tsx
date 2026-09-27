@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   getArticleStatusLabel,
   getArticleTagLabel,
@@ -17,7 +17,7 @@ import type { RecommendedPaper } from "@/lib/academic/discovery/types";
 
 import { GraphZoneNotes } from "@/components/graph-zone-notes";
 import { GraphZoneLayer } from "@/components/graph-zone-layer";
-import { getZoneForNodePosition, type GraphZone } from "@/lib/graph-zones";
+import { getBlendedZoneColor, getZoneForNodePosition, getZonesForNodePosition, type GraphZone } from "@/lib/graph-zones";
 import { computeMultiEdgeLayout } from "@/lib/multi-relation-layout";
 
 type GraphPaneProps = {
@@ -200,6 +200,7 @@ export function GraphPane({
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null);
   const [creatingZone, setCreatingZone] = useState(false);
   const [notesZoneId, setNotesZoneId] = useState<string | null>(null);
+  const notesDirtyRef = useRef(false);
   const notesZone = zones.find((zone) => zone.id === notesZoneId);
   const displayedZones = draftZones ?? zones;
 
@@ -220,6 +221,36 @@ export function GraphPane({
   const [contextMenu, setContextMenu] = useState<{ articleId: string; x: number; y: number } | null>(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const [showContextRelations, setShowContextRelations] = useState(false);
+  const [pendingNotesAction, setPendingNotesAction] = useState<(() => void) | null>(null);
+  const requestNotesAction = useCallback((action: () => void) => {
+    if (notesDirtyRef.current) {
+      setPendingNotesAction(() => action);
+      return;
+    }
+    action();
+  }, []);
+  const openZoneNotes = useCallback((zoneId: string) => {
+    requestNotesAction(() => {
+      if (notesZoneId === zoneId) {
+        notesDirtyRef.current = false;
+        setNotesZoneId(null);
+        return;
+      }
+      notesDirtyRef.current = false;
+      setNotesZoneId(zoneId);
+      setFilterPanelOpen(false);
+      setContextMenu(null);
+      setManualConnectionSourceId(null);
+      onSelectArticle(null);
+    });
+  }, [notesZoneId, onSelectArticle, requestNotesAction]);
+  const selectArticle = useCallback((articleId: string | null) => {
+    requestNotesAction(() => {
+      notesDirtyRef.current = false;
+      setNotesZoneId(null);
+      onSelectArticle(articleId);
+    });
+  }, [onSelectArticle, requestNotesAction]);
 
   useLayoutEffect(() => {
     const menu = contextMenuRef.current;
@@ -756,7 +787,7 @@ export function GraphPane({
           }
 
           setFilterPanelOpen(false);
-          onSelectArticle(nextArticleId);
+          selectArticle(nextArticleId);
         }
 
         return;
@@ -785,7 +816,7 @@ export function GraphPane({
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
     };
-  }, [activeArticle?.id, articlePositions, draggingArticleId, onSelectArticle, stopViewportAnimation]);
+  }, [activeArticle?.id, articlePositions, draggingArticleId, selectArticle, stopViewportAnimation]);
 
   useEffect(() => {
     if (!isPanning) {
@@ -871,7 +902,7 @@ export function GraphPane({
                   type="button"
                   onClick={() => {
                     setFilterPanelOpen(false);
-                    onSelectArticle(article.id);
+                    selectArticle(article.id);
                     centerViewportOnArticle(article.id);
                   }}
                   className="flex-1 rounded-full border border-[var(--border)] bg-white/5 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-white/10"
@@ -978,10 +1009,23 @@ export function GraphPane({
   return (
     <section className="papergraph-graph-pane relative isolate min-h-0 w-full flex-1 overflow-hidden">
       {notesZone && <GraphZoneNotes key={notesZone.id} zone={notesZone} canEdit={canEdit} isEnglish={isEnglish}
-        onClose={() => setNotesZoneId(null)} onSave={(notes) => {
+        onDirtyChange={(dirty) => { notesDirtyRef.current = dirty; }}
+        onRequestClose={() => requestNotesAction(() => { notesDirtyRef.current = false; setNotesZoneId(null); })} onSave={(notes) => {
           if (canEdit) onZonesChange(zones.map((zone) => zone.id === notesZone.id ? { ...zone, notes } : zone), articlePositions);
+          notesDirtyRef.current = false;
           setNotesZoneId(null);
         }} />}
+      {pendingNotesAction && <div data-graph-control className="absolute inset-0 z-[120] flex items-center justify-center bg-black/45 p-4 backdrop-blur-sm">
+        <div role="alertdialog" aria-modal="true" aria-labelledby="unsaved-notes-title" className="papergraph-graph-dialog w-full max-w-md rounded-3xl border border-[var(--border)] p-6 shadow-2xl">
+          <p className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">{isEnglish ? "Unsaved changes" : "Alterações pendentes"}</p>
+          <h2 id="unsaved-notes-title" className="mt-2 text-xl font-semibold text-[var(--foreground)]">{isEnglish ? "Discard group notes?" : "Descartar notas do grupo?"}</h2>
+          <p className="mt-3 text-sm leading-6 text-[var(--muted)]">{isEnglish ? "The changes made to these notes have not been saved." : "As alterações feitas a estas notas ainda não foram guardadas."}</p>
+          <div className="mt-6 flex justify-end gap-2">
+            <button type="button" className="rounded-xl border border-[var(--border)] px-4 py-2 text-sm text-[var(--foreground)]" onClick={() => setPendingNotesAction(null)}>{isEnglish ? "Keep editing" : "Continuar a editar"}</button>
+            <button type="button" className="rounded-xl bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-[#041016]" onClick={() => { const action = pendingNotesAction; setPendingNotesAction(null); action(); }}>{isEnglish ? "Discard changes" : "Descartar alterações"}</button>
+          </div>
+        </div>
+      </div>}
 
       <aside className="papergraph-graph-panel absolute bottom-5 left-5 top-5 z-50 flex max-h-[calc(100%_-_2.5rem)] w-[20rem] flex-col overflow-hidden rounded-[24px] border border-[var(--border)] p-4 shadow-[0_18px_50px_rgba(0,0,0,0.18)] backdrop-blur-xl">
         <div className="flex items-start justify-between gap-3">
@@ -1073,12 +1117,12 @@ export function GraphPane({
 
                   if (nextArticleId === null) {
                     setManualConnectionSourceId(null);
-                    onSelectArticle(null);
+                    selectArticle(null);
                     return;
                   }
 
                   setFilterPanelOpen(false);
-                  onSelectArticle(nextArticleId);
+                  selectArticle(nextArticleId);
                   centerViewportOnArticle(nextArticleId);
                 }}
                 className={`w-full rounded-[18px] border p-3 text-left transition-colors ${
@@ -1120,7 +1164,7 @@ export function GraphPane({
           if (target?.closest("[data-graph-control]")) return;
 
           if (target?.closest("[data-graph-background]")) {
-            onSelectArticle(null);
+            selectArticle(null);
             setSelectedZoneId(null);
           }
 
@@ -1148,7 +1192,7 @@ export function GraphPane({
                 const point = { x: ((event.clientX - bounds.left - containerSize.width / 2 - viewport.x) / viewport.scale + 1500) / 30,
                   y: ((event.clientY - bounds.top - containerSize.height / 2 - viewport.y) / viewport.scale + 1500) / 30 };
                 const zone = getZoneForNodePosition(point, zones);
-                if (zone) { setSelectedZoneId(zone.id); setNotesZoneId(zone.id); }
+                if (zone) setSelectedZoneId(zone.id);
               }
             }
             setIsPanning(false);
@@ -1165,7 +1209,7 @@ export function GraphPane({
         <GraphZoneLayer zones={displayedZones} positions={displayedPositions}
           selectedId={selectedZoneId} onSelect={setSelectedZoneId} viewport={viewport} size={containerSize}
           canEdit={canEdit} isEnglish={isEnglish} creating={creatingZone}
-          onFinishDrawing={() => setCreatingZone(false)} onOpenNotes={setNotesZoneId}
+          onFinishDrawing={() => setCreatingZone(false)} onOpenNotes={openZoneNotes}
           candidateId={draggingArticleId ? getZoneForNodePosition(displayedPositions[draggingArticleId], displayedZones)?.id ?? null : null}
           onPreview={(nextZones, nextPositions) => { setDraftZones(nextZones); setDraftPositions(nextPositions); }}
           onCommit={(nextZones, nextPositions) => {
@@ -1187,7 +1231,7 @@ export function GraphPane({
               <rect x="4" y="5" width="16" height="14" rx="2" strokeDasharray="3 2" />
               <path d="M12 9v6M9 12h6" />
             </svg>
-            {isEnglish ? "Create zone" : "Criar zona"}
+            {isEnglish ? "Create group" : "Criar grupo"}
           </button>}
           <button
             type="button"
@@ -1196,7 +1240,7 @@ export function GraphPane({
             onClick={() => {
               setCreatingZone(false);
               if (!filterPanelOpen) {
-                onSelectArticle(null);
+                selectArticle(null);
                 setContextMenu(null);
                 setManualConnectionSourceId(null);
               }
@@ -1332,7 +1376,9 @@ export function GraphPane({
               y: containerSize.height / 2 + viewport.y + ((fallbackPosition.y / 100) * worldSize - worldSize / 2) * viewport.scale,
             };
             const isActive = article.id === activeArticle?.id;
-            const articleZone = getZoneForNodePosition(displayedPositions[article.id], displayedZones);
+            const articleZones = getZonesForNodePosition(displayedPositions[article.id], displayedZones);
+            const articleZone = articleZones[0] ?? null;
+            const blendedZoneColor = getBlendedZoneColor(articleZones);
             const isDragging = draggingArticleId === article.id;
             const nodeVisualScale = graphVisualScale * (isActive ? 1.1 : 1);
             const nodePresence = articlePresenceByArticleId[article.id] ?? [];
@@ -1343,6 +1389,14 @@ export function GraphPane({
                 data-graph-node
                 data-article-id={article.id}
                 data-zone-color={articleZone?.color}
+                style={{
+                  left: `${position.x}px`,
+                  top: `${position.y}px`,
+                  touchAction: "none",
+                  transform: `translate(-50%, -50%) scale(${nodeVisualScale})`,
+                  transformOrigin: "center",
+                  ...(blendedZoneColor ? { "--zone-color": blendedZoneColor } : {}),
+                } as CSSProperties}
                 type="button"
                 title={
                   nodePresence.length > 0
@@ -1366,7 +1420,7 @@ export function GraphPane({
                     const nextArticleId = activeArticle?.id === article.id ? null : article.id;
 
                     setFilterPanelOpen(false);
-                    onSelectArticle(nextArticleId);
+                    selectArticle(nextArticleId);
 
                     if (nextArticleId) {
                       centerViewportOnArticle(nextArticleId);
@@ -1412,13 +1466,6 @@ export function GraphPane({
                         ? "cursor-grabbing"
                         : "cursor-grab"
                 }`}
-                style={{
-                  left: `${position.x}px`,
-                  top: `${position.y}px`,
-                  touchAction: "none",
-                  transform: `translate(-50%, -50%) scale(${nodeVisualScale})`,
-                  transformOrigin: "center",
-                }}
               >
                 <span
                   className={`papergraph-graph-node-core ${articleZone ? "has-zone" : ""} relative flex h-16 w-16 items-center justify-center rounded-full border text-lg font-semibold shadow-[0_18px_38px_rgba(0,0,0,0.24)] transition-colors ${

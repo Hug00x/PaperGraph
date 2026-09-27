@@ -310,6 +310,13 @@ html[data-papergraph-theme="light"] .papergraph-graph-pane.papergraph-app {
   background: var(--graph-dialog-background);
 }
 
+.papergraph-zone-notes-drawer {
+  background: var(--graph-dialog-background);
+  contain: layout paint;
+  isolation: isolate;
+  will-change: transform;
+}
+
 .papergraph-graph-node-core {
   background: var(--graph-node-background);
 }
@@ -353,7 +360,7 @@ html[data-papergraph-theme="light"] [data-zone-color="pink"] { --zone-color: #be
   background: color-mix(in srgb, var(--zone-color) 22%, var(--graph-node-background));
 }
 @media (prefers-reduced-motion: reduce) {
-  .papergraph-zone { transition: none; }
+  .papergraph-zone, .papergraph-zone-notes-drawer { transition: none; animation: none; }
 }
 
 .papergraph-graph-node-label {

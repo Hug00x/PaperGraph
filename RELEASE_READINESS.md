@@ -2,8 +2,8 @@
 
 ## Release Candidate
 
-- **Version:** 0.1.2
-- **Date:** 2026-09-25
+- **Version:** 0.1.6
+- **Date:** 2026-09-27
 - **Platform:** Windows x64
 - **Source of truth:** `package.json`, `package-lock.json`, and generated installer metadata
 
@@ -210,7 +210,28 @@ The candidate still fails the public-release bar because release trust and upgra
 6. Full packaged UI testing of authentication, workspace/paper CRUD, LaTeX/PDF interaction, graph manipulation and collaboration remains outstanding.
 7. No GitHub Actions workflow was found, so CI/release permissions, artifact publication and update metadata generation are manual/unverified.
 
-## Release Notes Draft
+## Release Notes Draft: 0.1.6
+
+### Added
+
+- Draggable research groups for organizing articles spatially on the graph.
+- Group notes panel with in-app unsaved-changes confirmation.
+- Group overlap support with blended colors for articles in shared areas.
+
+### Changed
+
+- Replaced zone terminology in the interface with groups.
+- Added pencil control for opening group notes and right-click editing for group settings.
+- Group notes remain inside the map and do not block the map toolbar.
+
+### Verification Status
+
+- `npm run lint`: PASS.
+- `npm run build`: PASS.
+- Zone regression tests: PASS.
+- Desktop installer signing, real upgrade testing, and empty-profile model download remain release blockers documented below.
+
+## Previous Release Notes Draft
 
 ### Added
 

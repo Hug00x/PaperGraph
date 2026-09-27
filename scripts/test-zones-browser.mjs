@@ -39,6 +39,7 @@ try {
  const rect=expr=>ev(`(()=>{const e=${expr};if(!e)throw Error('missing element');const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2,left:r.x,top:r.y,width:r.width,height:r.height};})()`);
  const mouse=(type,x,y,extra={})=>cdp('Input.dispatchMouseEvent',{type,x,y,...extra});
  const click=async(expr,modifiers=0)=>{const r=await rect(expr);await mouse('mousePressed',r.x,r.y,{button:'left',clickCount:1,modifiers});await mouse('mouseReleased',r.x,r.y,{button:'left',clickCount:1,modifiers});await pause(150);};
+ const rightClick=async(expr)=>{const r=await rect(expr);await mouse('mousePressed',r.x,r.y,{button:'right',clickCount:1});await mouse('mouseReleased',r.x,r.y,{button:'right',clickCount:1});await pause(150);};
  const button=text=>`[...document.querySelectorAll('button')].find(e=>e.textContent.trim()===${JSON.stringify(text)})`;
  const drag=async(expr,dx,dy,anchorX)=>{const r=await rect(expr);if(anchorX!==undefined)r.x=r.left+anchorX;const beforeWrites=(await state()).writes;await mouse('mousePressed',r.x,r.y,{button:'left',clickCount:1});for(let i=1;i<=8;i++){await mouse('mouseMoved',r.x+dx*i/8,r.y+dy*i/8,{button:'left',buttons:1});await pause(20);}assert.equal((await state()).writes,beforeWrites,'no writes during preview');await mouse('mouseReleased',r.x+dx,r.y+dy,{button:'left',clickCount:1});await pause(200);};
  const state=()=>ev(`JSON.parse(document.querySelector('#fixture-state').textContent)`);
@@ -47,7 +48,7 @@ try {
  await cdp('Page.navigate',{url:`${process.env.GRAPH_TEST_URL ?? 'http://localhost:3000'}/zones-check`});
  await wait(`!!document.querySelector('[data-article-id="A"]')`);await pause(600);
  assert.equal(await ev(`[...document.querySelectorAll('button')].some(e=>e.textContent.includes('Select papers'))`),false);
- const create=()=>`[...document.querySelectorAll('button')].find(e=>e.textContent.includes('Create zone'))`;
+ const create=()=>`[...document.querySelectorAll('button')].find(e=>e.textContent.includes('Create group'))`;
  const createRect=await rect(create()), filterRect=await rect(button('Filters'));
  assert.ok(createRect.x<filterRect.x && Math.abs(createRect.y-filterRect.y)<2);
  const draw=async(x1,y1,x2,y2)=>{
@@ -64,16 +65,15 @@ try {
  assert.equal(await ev(`document.querySelector('[data-article-id="A"]').dataset.zoneColor`),'green');
  console.log('PASS drawing creates zone without selection or moving articles; toolbar next to filters');
  const zone=s.zones[0],zoneExpr=`document.querySelector('[data-zone-id="${zone.id}"]')`;
- // Click header to open dedicated notes, then save multiline text.
- const header=await rect(`${zoneExpr}.querySelector('button')`);
- await mouse('mousePressed',header.left+12,header.y,{button:'left',clickCount:1});await mouse('mouseReleased',header.left+12,header.y,{button:'left',clickCount:1});await pause(150);
+ // Use the pencil to open dedicated notes, then save multiline text.
+ await click(`${zoneExpr}.querySelector('[aria-label="Open group notes"]')`);
  await wait(`!!document.querySelector('[aria-label="Zone notes"]')`);
- await ev(`(()=>{const e=document.querySelector('textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(e,'Research notes\\nNext steps');e.dispatchEvent(new Event('input',{bubbles:true}));})()`);await pause(100);
+ await ev(`(()=>{const e=document.querySelector('textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(e,'Research notes\\nNext steps');e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));})()`);await pause(100);
  await click(button('Save notes'));assert.equal((await state()).zones[0].notes,'Research notes\nNext steps');
  // Empty Zone background also opens notes. Closing without saving leaves persisted notes intact.
  const zr=await rect(zoneExpr);await mouse('mousePressed',zr.left+20,zr.top+zr.height-20,{button:'left',clickCount:1});await mouse('mouseReleased',zr.left+20,zr.top+zr.height-20,{button:'left',clickCount:1});await pause(150);
  assert.equal(await ev(`document.querySelector('textarea')?.value`),'Research notes\nNext steps');await click(button('Close'));
- console.log('PASS zone header/background open dedicated notes; notes persist');
+ console.log('PASS pencil opens dedicated notes; notes persist');
  await drag(`${zoneExpr}.querySelector('button')`,50,60,12);
  assert.equal(await ev(`document.querySelector('[aria-label="Zone notes"]')!==null`),false);
  s=await state();const dx=s.zones[0].x-zone.x;
@@ -82,12 +82,12 @@ try {
  await drag(`document.querySelector('[data-article-id="C"]')`,zrect.x-c.x,zrect.y+20-c.y);
  assert.equal(await ev(`document.querySelector('[data-article-id="C"]').dataset.zoneColor`),'green');
  console.log('PASS zone drag moves members without opening notes; article drop membership');
- // Cancel a small drawing and reject overlaps without persisting.
+ // Cancel a small drawing and cancel an overlapping zone without persisting.
  const beforeInvalid=await state();await draw(1150,600,1152,602);assert.ok(await ev(`document.querySelector('[data-zone-drawing]')!==null`));
  await cdp('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape'});await cdp('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape'});await pause(100);
  assert.deepEqual(await state(),beforeInvalid);
  const currentRect=await rect(zoneExpr);await draw(currentRect.left-10,currentRect.top-10,currentRect.left+currentRect.width+10,currentRect.top+currentRect.height+10);
- assert.ok(await ev(`document.querySelector('[data-zone-drawing]')!==null`));await click(button('Cancel'));assert.deepEqual(await state(),beforeInvalid);
+ assert.ok(await ev(`document.querySelector('[role="dialog"] input')!==null`));await click(button('Cancel'));assert.deepEqual(await state(),beforeInvalid);
  // Draw an empty Zone in reverse direction.
  await draw(1320,700,1040,430);await name('Method 2');await click(`document.querySelector('[aria-label="Violet"]')`);await click(button('Create'));
  s=await state();assert.equal(s.zones.length,2);const second=s.zones[1],secondExpr=`document.querySelector('[data-zone-id="${second.id}"]')`;
@@ -96,11 +96,11 @@ try {
  await drag(`document.querySelector('[data-article-id="A"]')`,target.x-article.x,target.y-article.y);
  assert.equal(await ev(`document.querySelector('[data-article-id="A"]').dataset.zoneColor`),'violet');
  assert.equal((await state()).zones[0].notes,'Research notes\nNext steps');
- console.log('PASS tiny/overlapping drawings rejected, reverse drawing and transfer');
+ console.log('PASS tiny drawing rejected, overlapping drawing accepted, reverse drawing and transfer');
  // Select by a short real drag to reveal controls, without opening notes.
  await drag(`${secondExpr}.querySelector('button')`,8,0,12);
- await click(`${secondExpr}.querySelector('[aria-label="Edit zone"]')`);await name('Renamed');await click(button('Save'));
- const beforeResize=await state();await drag(`${secondExpr}.querySelector('[aria-label="Resize zone nw"]')`,10,20);
+ await rightClick(secondExpr);await name('Renamed');await click(button('Save'));
+ const beforeResize=await state();await drag(`${secondExpr}.querySelector('[aria-label="Resize group nw"]')`,10,20);
  assert.deepEqual((await state()).positions,beforeResize.positions);
  await ev(`document.documentElement.dataset.papergraphTheme='light'`);await pause(300);
  await writeFile('.utmp/zones-light.png',Buffer.from((await cdp('Page.captureScreenshot',{format:'png'})).data,'base64'));
@@ -108,7 +108,7 @@ try {
  s=await state();assert.deepEqual(s.zones,saved.zones);assert.deepEqual(s.positions,saved.positions);
  console.log('PASS rename, resize, reopen with independent notes');
  await drag(`${secondExpr}.querySelector('button')`,8,0,12);
- await click(`${secondExpr}.querySelector('[aria-label="Edit zone"]')`);await click(button('Delete zone'));await click(button('Delete'));
+ await rightClick(secondExpr);await click(button('Delete zone'));await click(button('Delete'));
  s=await state();assert.equal(s.zones.length,1);assert.equal(Object.keys(s.positions).length,3);
  console.log('PASS deletion preserves papers and other zone notes');
  await ev(`document.querySelector('#dense-fixture').click()`);await pause(200);
@@ -120,7 +120,7 @@ try {
  console.log('PASS drag with 153 nodes and 152 relations');
  await ev(`document.querySelector('#readonly-fixture').click()`);await pause(100);
  assert.equal(await ev(`document.querySelectorAll('[aria-label="Edit zone"],.papergraph-zone-handle').length`),0);
- assert.equal(await ev(`[...document.querySelectorAll('button')].some(e=>e.textContent.includes('Create zone'))`),false);
+ assert.equal(await ev(`[...document.querySelectorAll('button')].some(e=>e.textContent.includes('Create group'))`),false);
  console.log('PASS read-only workspace controls');
  await cdp('Browser.close');
 } finally {clearInterval(keepAlive);ws?.close();browser.kill();await unlink(route);await rmdir(path.dirname(route));}
