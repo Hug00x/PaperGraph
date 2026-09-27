@@ -18,6 +18,7 @@ import type { RecommendedPaper } from "@/lib/academic/discovery/types";
 import { GraphZoneNotes } from "@/components/graph-zone-notes";
 import { GraphZoneLayer } from "@/components/graph-zone-layer";
 import { getZoneForNodePosition, type GraphZone } from "@/lib/graph-zones";
+import { computeMultiEdgeLayout } from "@/lib/multi-relation-layout";
 
 type GraphPaneProps = {
   workspaceId: string;
@@ -207,6 +208,9 @@ export function GraphPane({
   const [draggingArticleId, setDraggingArticleId] = useState<string | null>(null);
   const [viewport, setViewport] = useState({ x: 0, y: 0, scale: 1 });
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
+  const [graphLayoutReady, setGraphLayoutReady] = useState(false);
+  const [initialViewportReady, setInitialViewportReady] = useState(false);
+  const [isViewportAnimating, setIsViewportAnimating] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
   const [filterPanelOpen, setFilterPanelOpen] = useState(false);
   const [activeRelationFilters, setActiveRelationFilters] = useState<Set<GraphRelationFilterType>>(
@@ -248,6 +252,8 @@ export function GraphPane({
   const [deleteArticleError, setDeleteArticleError] = useState<string | null>(null);
   const positionsRef = useRef(articlePositions);
   const viewportRef = useRef(viewport);
+  const graphLayoutReadyRef = useRef(false);
+  const graphLayoutReadyFrameRef = useRef<number | null>(null);
   const hasAutoCenteredRef = useRef(false);
   const onArticlePositionsChangeRef = useRef(onArticlePositionsChange);
   const panStartRef = useRef<{ clientX: number; clientY: number; x: number; y: number } | null>(null);
@@ -275,6 +281,7 @@ export function GraphPane({
 
     window.cancelAnimationFrame(viewportAnimationRef.current);
     viewportAnimationRef.current = null;
+    setIsViewportAnimating(false);
   }, []);
 
   const animateViewportTo = useCallback((targetViewport: { x: number; y: number; scale: number }) => {
@@ -283,6 +290,7 @@ export function GraphPane({
     const startViewport = viewportRef.current;
     const startedAt = performance.now();
     const durationMs = 680;
+    setIsViewportAnimating(true);
 
     const animate = (timestamp: number) => {
       const progress = clamp((timestamp - startedAt) / durationMs, 0, 1);
@@ -302,6 +310,7 @@ export function GraphPane({
       }
 
       viewportAnimationRef.current = null;
+      setIsViewportAnimating(false);
     };
 
     viewportAnimationRef.current = window.requestAnimationFrame(animate);
@@ -330,19 +339,36 @@ export function GraphPane({
       return undefined;
     }
 
-    const updateContainerSize = () => {
-      setContainerSize({
+    const updateContainerSize = (markReady = false) => {
+      const nextSize = {
         width: container.clientWidth,
         height: container.clientHeight,
-      });
+      };
+      if (markReady && nextSize.width > 0 && nextSize.height > 0 && !graphLayoutReadyRef.current) {
+        if (graphLayoutReadyFrameRef.current !== null) {
+          window.cancelAnimationFrame(graphLayoutReadyFrameRef.current);
+        }
+        graphLayoutReadyFrameRef.current = window.requestAnimationFrame(() => {
+          graphLayoutReadyRef.current = true;
+          graphLayoutReadyFrameRef.current = null;
+          setGraphLayoutReady(true);
+        });
+      }
+      setContainerSize(nextSize);
     };
 
     updateContainerSize();
 
-    const observer = new ResizeObserver(updateContainerSize);
+    const observer = new ResizeObserver(() => updateContainerSize(true));
     observer.observe(container);
 
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (graphLayoutReadyFrameRef.current !== null) {
+        window.cancelAnimationFrame(graphLayoutReadyFrameRef.current);
+        graphLayoutReadyFrameRef.current = null;
+      }
+    };
   }, []);
 
   const centerViewportOnNodes = useCallback((positions: Record<string, ArticlePosition>) => {
@@ -411,13 +437,18 @@ export function GraphPane({
       return;
     }
 
+    if (containerSize.width === 0 || containerSize.height === 0) {
+      return;
+    }
+
     const frameId = window.requestAnimationFrame(() => {
       setViewport(centerViewportOnNodes(displayedPositions));
       hasAutoCenteredRef.current = true;
+      window.requestAnimationFrame(() => setInitialViewportReady(true));
     });
 
     return () => window.cancelAnimationFrame(frameId);
-  }, [articles.length, centerViewportOnNodes, displayedPositions]);
+  }, [articles.length, centerViewportOnNodes, containerSize.height, containerSize.width, displayedPositions]);
 
   const manualConnectionSource = articles.find((article) => article.id === manualConnectionSourceId) ?? null;
   const activeManualConnectionSourceId = manualConnectionSource?.id ?? null;
@@ -939,6 +970,10 @@ export function GraphPane({
   };
   const graphVisualScale = clamp(viewport.scale, 0.52, 1.38);
   const relationStrokeScale = clamp(viewport.scale, 0.58, 1.28);
+  const relationLayouts = useMemo(
+    () => computeMultiEdgeLayout(relationEntries, activeArticle?.id ?? null, relationStrokeScale),
+    [activeArticle?.id, relationEntries, relationStrokeScale],
+  );
 
   return (
     <section className="papergraph-graph-pane relative isolate min-h-0 w-full flex-1 overflow-hidden">
@@ -1148,7 +1183,11 @@ export function GraphPane({
           {canEdit && <button type="button" aria-pressed={creatingZone}
             onClick={() => { stopViewportAnimation(); setCreatingZone((value) => !value); setFilterPanelOpen(false); setContextMenu(null); setManualConnectionSourceId(null); }}
             className={`flex h-10 items-center gap-2 rounded-xl border px-3 text-sm font-medium shadow-sm backdrop-blur-xl focus-visible:outline-2 focus-visible:outline-[var(--accent)] ${creatingZone ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]" : "border-[var(--border)] bg-[var(--surface)] text-[var(--foreground)]"}`}>
-            <span aria-hidden="true">?</span>{isEnglish ? "Create zone" : "Criar zona"}
+            <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="4" y="5" width="16" height="14" rx="2" strokeDasharray="3 2" />
+              <path d="M12 9v6M9 12h6" />
+            </svg>
+            {isEnglish ? "Create zone" : "Criar zona"}
           </button>}
           <button
             type="button"
@@ -1265,20 +1304,23 @@ export function GraphPane({
                   : isCitationRelation || isSemanticRelation
                     ? 1.75
                     : 1.15;
+              const layout = relationLayouts.get(entry.relation.id);
+              if (!layout) return null;
+              const path = `M ${entry.fromPosition.x} ${entry.fromPosition.y} Q ${layout.controlPoint.x} ${layout.controlPoint.y} ${entry.toPosition.x} ${entry.toPosition.y}`;
 
             return (
-              <line
-                key={entry.key}
-                x1={entry.fromPosition.x}
-                y1={entry.fromPosition.y}
-                x2={entry.toPosition.x}
-                y2={entry.toPosition.y}
+                <g key={entry.key}>
+                <path
+                  d={path}
                 stroke={strokeColor}
                 strokeOpacity={activeArticle === null ? 0.7 : isActiveRelation ? 1 : 0.38}
                 strokeWidth={baseStrokeWidth * relationStrokeScale}
                 strokeLinecap="round"
+                  fill="none"
                 filter={isManualRelation || isActiveRelation ? "url(#glow)" : undefined}
+                className={`papergraph-relation-path ${!graphLayoutReady || !initialViewportReady || draggingArticleId || isPanning || isViewportAnimating ? "is-live" : ""}`}
               />
+                </g>
             );
           })}
         </svg>

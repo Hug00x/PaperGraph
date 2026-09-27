@@ -41,6 +41,16 @@ html[data-papergraph-theme="light"] {
   box-sizing: border-box;
 }
 
+.papergraph-app,
+.papergraph-app * {
+  scrollbar-width: none;
+}
+
+.papergraph-app::-webkit-scrollbar,
+.papergraph-app *::-webkit-scrollbar {
+  display: none;
+}
+
 html {
   height: 100%;
   scroll-behavior: smooth;
@@ -236,6 +246,20 @@ html[data-papergraph-theme="light"] .papergraph-graph-pane.papergraph-app {
 
 .papergraph-graph-backdrop {
   background: var(--graph-canvas-background);
+}
+
+.papergraph-relation-path {
+  transition: stroke-opacity 180ms ease, stroke-width 180ms ease;
+}
+
+.papergraph-relation-path.is-live {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .papergraph-relation-path {
+    transition: none;
+  }
 }
 
 .abstract-editor-field {

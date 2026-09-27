@@ -4085,7 +4085,9 @@ export default function Home() {
 
     const nextPairKey = relationPairKey(fromArticleId, toArticleId);
     const nextRelations = currentRelations.filter(
-      (existingRelation) => relationPairKey(existingRelation.fromArticleId, existingRelation.toArticleId) !== nextPairKey,
+      (existingRelation) =>
+        existingRelation.relationType !== "manual" ||
+        relationPairKey(existingRelation.fromArticleId, existingRelation.toArticleId) !== nextPairKey,
     );
     const nextArticles = currentArticles;
     const nextArticlePositions = currentArticlePositions;
