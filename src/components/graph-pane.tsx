@@ -19,6 +19,7 @@ import { GraphZoneNotes } from "@/components/graph-zone-notes";
 import { GraphZoneLayer } from "@/components/graph-zone-layer";
 import { getBlendedZoneColor, getZoneForNodePosition, getZonesForNodePosition, type GraphZone } from "@/lib/graph-zones";
 import { computeMultiEdgeLayout } from "@/lib/multi-relation-layout";
+import { graphActivityLabel, graphPreview, type GraphActivity, type GraphPeer } from "@/lib/graph-live";
 
 type GraphPaneProps = {
   workspaceId: string;
@@ -31,6 +32,8 @@ type GraphPaneProps = {
   unlinkedMentions: UnlinkedMention[];
   articlePositions: Record<string, ArticlePosition>;
   zones: GraphZone[];
+  graphPeers?: GraphPeer[];
+  onGraphActivity?: (activity: GraphActivity | null, committed?: boolean) => void;
   onZonesChange: (zones: GraphZone[], positions: Record<string, ArticlePosition>) => void;
   articlePresenceByArticleId?: Record<
     string,
@@ -178,6 +181,8 @@ export function GraphPane({
   unlinkedMentions,
   articlePositions,
   zones,
+  graphPeers = [],
+  onGraphActivity,
   onZonesChange,
   articlePresenceByArticleId = {},
   canEdit,
@@ -202,7 +207,15 @@ export function GraphPane({
   const [notesZoneId, setNotesZoneId] = useState<string | null>(null);
   const notesDirtyRef = useRef(false);
   const notesZone = zones.find((zone) => zone.id === notesZoneId);
-  const displayedZones = draftZones ?? zones;
+  const preview = useMemo(() => graphPreview(articlePositions, zones, graphPeers), [articlePositions, zones, graphPeers]);
+  const displayedZones = draftZones ?? preview.zones;
+  const activityCallback = useRef(onGraphActivity);
+  useEffect(() => { activityCallback.current = onGraphActivity; }, [onGraphActivity]);
+  useEffect(() => {
+    if (notesZoneId && canEdit) activityCallback.current?.({ target: { kind: "zone", id: notesZoneId }, action: "edit" });
+    return () => { if (notesZoneId) activityCallback.current?.(null); };
+  }, [notesZoneId, canEdit]);
+  useEffect(() => () => activityCallback.current?.(null), []);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [draftPositions, setDraftPositions] = useState<Record<string, ArticlePosition> | null>(null);
@@ -351,8 +364,11 @@ export function GraphPane({
 
   const displayedPositions = useMemo(() => {
     const nextPositions: Record<string, ArticlePosition> = {
-      ...(draftPositions ?? articlePositions),
+      ...preview.positions,
     };
+    if (draftPositions) for (const [id, position] of Object.entries(draftPositions)) {
+      if (position.x !== articlePositions[id]?.x || position.y !== articlePositions[id]?.y) nextPositions[id] = position;
+    }
 
     articles.forEach((article, index) => {
       if (!nextPositions[article.id]) {
@@ -361,7 +377,7 @@ export function GraphPane({
     });
 
     return nextPositions;
-  }, [articlePositions, articles, draftPositions]);
+  }, [articlePositions, articles, draftPositions, preview.positions]);
 
   useLayoutEffect(() => {
     const container = containerRef.current;
@@ -700,6 +716,7 @@ export function GraphPane({
 
     positionsRef.current = nextPositions;
     setDraftPositions(nextPositions);
+    activityCallback.current?.({ target: { kind: "article", id: articleId }, action: "move", positions: { [articleId]: nextPosition } });
 
     return nextPositions;
   }
@@ -797,6 +814,7 @@ export function GraphPane({
       setDraggingArticleId(null);
       setDraftPositions(null);
       onArticlePositionsChangeRef.current(nextPositions);
+      activityCallback.current?.(null, true);
       dragStartRef.current = null;
     };
 
@@ -805,6 +823,7 @@ export function GraphPane({
       dragFrame = null;
       positionsRef.current = articlePositions;
       setDraftPositions(null); setDraggingArticleId(null); dragStartRef.current = null;
+      activityCallback.current?.(null);
     };
     window.addEventListener("pointercancel", handlePointerCancel);
     window.addEventListener("pointermove", handlePointerMove);
@@ -1206,7 +1225,8 @@ export function GraphPane({
         }}
       >
         <div data-graph-background className="papergraph-graph-backdrop absolute inset-0 z-0" />
-        <GraphZoneLayer zones={displayedZones} positions={displayedPositions}
+        <GraphZoneLayer zones={draftZones ?? zones} positions={draftPositions ?? articlePositions}
+          graphPeers={graphPeers} onActivity={onGraphActivity}
           selectedId={selectedZoneId} onSelect={setSelectedZoneId} viewport={viewport} size={containerSize}
           canEdit={canEdit} isEnglish={isEnglish} creating={creatingZone}
           onFinishDrawing={() => setCreatingZone(false)} onOpenNotes={openZoneNotes}
@@ -1382,6 +1402,8 @@ export function GraphPane({
             const isDragging = draggingArticleId === article.id;
             const nodeVisualScale = graphVisualScale * (isActive ? 1.1 : 1);
             const nodePresence = articlePresenceByArticleId[article.id] ?? [];
+            const mapPresence = graphPeers.filter((peer) => (peer.activity?.target.kind === "article" && peer.activity.target.id === article.id) ||
+              (peer.activity?.positions && Object.hasOwn(peer.activity.positions, article.id)));
 
             return (
               <button
@@ -1500,6 +1522,9 @@ export function GraphPane({
                 >
                   {article.title}
                 </span>
+                {mapPresence.length > 0 && <span data-graph-presence className="max-w-[12rem] rounded-lg border border-[var(--accent)] bg-[var(--surface-strong)] px-2 py-1 text-[10px] text-[var(--accent)]">
+                  {mapPresence.map((peer) => graphActivityLabel(peer, isEnglish)).join(", ")}
+                </span>}
               </button>
             );
           })}

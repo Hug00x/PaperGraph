@@ -54,7 +54,8 @@ The repository currently targets a Windows x64 desktop application. A Next.js de
 - Email/password authentication through Supabase Auth.
 - Multiple workspaces, invitations, membership roles, ownership transfer, and workspace deletion.
 - Viewer and editor permissions enforced by Supabase policies.
-- Atomic workspace snapshots with revision checks to prevent stale clients from overwriting newer data.
+- Atomic workspace snapshots with revision checks and three-way merging of independent changes. Conflicting field edits and edit/delete races preserve the local copy for recovery.
+- Live graph collaboration: article/group drag previews, collaborator labels, automatic updates after saves, and reconnect catch-up.
 - Supabase Realtime presence for current workspace activity and Yjs-based collaborative LaTeX state with remote cursors.
 - Local UI state remembers the active workspace, tab, and selected article.
 

@@ -55,6 +55,7 @@ import {
 import { deleteArticleCollaborationStateFromSupabase } from "@/lib/supabase-collaboration";
 import { getSupabaseBrowserClient } from "@/lib/supabase-client";
 import { paperGraphAssetBucket, uploadWorkspaceAssetToSupabase } from "@/lib/supabase-storage";
+import { useWorkspaceLive } from "@/lib/use-workspace-live";
 import { getFriendlyErrorMessage, getFriendlyResponseError } from "@/lib/friendly-errors";
 import Image from "next/image";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -622,7 +623,7 @@ function HelpSection({ language }: { language: AppLanguage }) {
             },
             {
               title: "Shared workspace conflict",
-              body: "If another device saves first, PaperGraph blocks the stale save instead of overwriting newer work. Reload the workspace before continuing.",
+              body: "PaperGraph automatically combines independent changes when saving. Incompatible edits to the same field, or editing an element someone deleted, require resolution. Keep your local copy before reloading.",
             },
             {
               title: "Model download problems",
@@ -835,7 +836,7 @@ function HelpSection({ language }: { language: AppLanguage }) {
             },
             {
               title: "Conflito numa workspace",
-              body: "Se outro dispositivo guardar primeiro, o PaperGraph bloqueia a gravação desatualizada em vez de apagar trabalho mais recente. Recarrega a workspace antes de continuar.",
+              body: "O PaperGraph combina automaticamente alterações independentes ao guardar. Alterações incompatíveis ao mesmo campo, ou editar um elemento que alguém apagou, exigem resolução. Guarda a tua cópia local antes de recarregar.",
             },
             {
               title: "Problemas no download do modelo",
@@ -1632,10 +1633,13 @@ export default function Home() {
   }, []);
 
   const [workspace, setWorkspaceState] = useState<WorkspaceSnapshot>(defaultSnapshot);
+  const workspaceRef = useRef<WorkspaceSnapshot>(defaultSnapshot);
   const setWorkspace = useCallback((snapshot: WorkspaceSnapshot) => {
-    setWorkspaceState((previous) => ({ ...snapshot,
-      persistenceSession: snapshot.persistenceSession === undefined ? previous.persistenceSession : snapshot.persistenceSession,
-    }));
+    const next = { ...snapshot,
+      persistenceSession: snapshot.persistenceSession === undefined ? workspaceRef.current.persistenceSession : snapshot.persistenceSession,
+    };
+    workspaceRef.current = next;
+    setWorkspaceState(next);
   }, []);
   const [workspaceRecovery, setWorkspaceRecovery] = useState<{ workspaceId: string; snapshot: WorkspaceSnapshot } | null>(null);
   const [selectedArticleId, setSelectedArticleId] = useState(defaultSnapshot.selectedArticleId);
@@ -1701,6 +1705,7 @@ export default function Home() {
   );
   const saveRequestIdRef = useRef(0);
   const saveQueueRef = useRef(Promise.resolve());
+  const pendingSavesRef = useRef(0);
   const isEnglish = appLanguage === "en";
   const supabase = useMemo(() => getSupabaseBrowserClient(), []);
   const [presenceClientId] = useState(createPresenceClientId);
@@ -2536,6 +2541,13 @@ export default function Home() {
   }, [presenceClientId]);
   const collaborationClientId = authUserId && accountWorkspaceId ? presenceClientId : undefined;
   const collaborationUserName = visibleAccountName ?? authUserEmail ?? (isEnglish ? "Collaborator" : "Colaborador");
+  const graphLive = useWorkspaceLive({
+    client: supabase, workspaceId: accountWorkspaceId, clientId: presenceClientId,
+    userName: collaborationUserName, language: appLanguage, canEdit: canEditCurrentWorkspace,
+    read: () => pendingSavesRef.current || isArticleSubmissionRunning || hasPendingEditorResubmission || workspaceRecovery ||
+      displayedWorkspaceIdRef.current !== accountWorkspaceId ? null : workspaceRef.current,
+    apply: setWorkspace,
+  });
 
   useEffect(() => {
     if (!supabase || !authUserId || !accountWorkspaceId) {
@@ -2818,6 +2830,7 @@ export default function Home() {
 
     const saveRequestId = saveRequestIdRef.current + 1;
     saveRequestIdRef.current = saveRequestId;
+    pendingSavesRef.current++;
 
     const runSave = async () => {
       try {
@@ -2852,6 +2865,8 @@ export default function Home() {
           );
         }
         if (throwOnError) throw error;
+      } finally {
+        pendingSavesRef.current--;
       }
     };
 
@@ -5007,6 +5022,8 @@ export default function Home() {
                 unlinkedMentions={activeArticleUnlinkedMentions}
                 articlePositions={currentArticlePositions}
                 zones={workspace.zones}
+                graphPeers={graphLive.peers}
+                onGraphActivity={graphLive.updateActivity}
                 onZonesChange={(zones: GraphZone[], positions: Record<string, ArticlePosition>) => updateArticlePositions(positions, zones)}
                 articlePresenceByArticleId={workspacePresenceByArticleId}
                 canEdit={canEditCurrentWorkspace}

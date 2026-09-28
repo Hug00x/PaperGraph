@@ -122,10 +122,15 @@ export function getFriendlyErrorMessage(
   if (/pdf-import-too-large/.test(normalizedMessage)) return text(language, "O PDF excede o limite de 50 MB.", "The PDF exceeds the 50 MB limit.");
   if (/pdf-import-read-only/.test(normalizedMessage)) return text(language, "Não tens permissão para importar nesta workspace.", "You cannot import into this workspace.");
 
-  if (/workspace-save-conflict|workspace-reload-required/.test(normalizedMessage)) {
+  if (/workspace-save-conflict/.test(normalizedMessage)) {
     return text(language,
-      "A gravação foi interrompida para proteger alterações de outro dispositivo. A tua cópia local foi mantida. Guarda o texto que estás a editar e recarrega a workspace antes de voltar a guardar.",
-      "Saving stopped to protect changes from another device. Your local copy was kept. Copy any text you are editing and reload the workspace before saving again.");
+      "Há alterações incompatíveis com as de outro colaborador, dispositivo ou separador. A tua cópia local foi mantida. Guarda o texto que estás a editar e descarrega a cópia local antes de recarregar a workspace.",
+      "Your changes conflict with changes from another collaborator, device or tab. Your local copy was kept. Copy any text you are editing and download your local copy before reloading the workspace.");
+  }
+  if (/workspace-reload-required/.test(normalizedMessage)) {
+    return text(language,
+      "Não foi possível confirmar uma gravação segura. A tua cópia local foi mantida. Guarda o texto que estás a editar e descarrega a cópia local antes de recarregar a workspace.",
+      "A safe save could not be confirmed. Your local copy was kept. Copy any text you are editing and download your local copy before reloading the workspace.");
   }
   if (/load_workspace_snapshot|save_workspace_snapshot/.test(normalizedMessage)) {
     return text(language,

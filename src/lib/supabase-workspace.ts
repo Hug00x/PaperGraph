@@ -8,7 +8,8 @@ import {
   type WorkspaceSnapshot,
 } from "./workspace-data.ts";
 import type { AppLanguage } from "@/lib/portuguese-labels";
-import { persistWorkspace, rememberWorkspaceRevision } from "./workspace-persistence.ts";
+import { persistWorkspace, rememberWorkspaceRevision, refreshWorkspace } from "./workspace-persistence.ts";
+import type { CloudSnapshot } from "./workspace-merge.ts";
 import { discoveredMetadata } from "./academic/discovery/identity.ts";
 
 type ArticleStatus = "Draft" | "Review" | "Published";
@@ -532,6 +533,11 @@ export async function loadWorkspaceSnapshotFromSupabase(
   const { data, error } = await supabase.rpc("load_workspace_snapshot", { p_workspace_id: workspaceId });
   assertSupabaseResult(error, "Could not load workspace snapshot.");
   if (!data || typeof data.revision !== "string") throw new Error("workspace-reload-required");
+  const persistenceSession = rememberWorkspaceRevision(supabase, workspaceId, data.revision, data);
+  return decodeWorkspaceSnapshot(data, persistenceSession);
+}
+
+function decodeWorkspaceSnapshot(data: CloudSnapshot, persistenceSession: string | null | undefined): WorkspaceSnapshot {
   const articlesResult = { data: data.articles };
   const articleVersionsResult = { data: data.article_versions };
   const relationsResult = { data: data.relations };
@@ -601,7 +607,6 @@ export async function loadWorkspaceSnapshotFromSupabase(
   const ignoredUnlinkedMentionKeys = ((ignoredMentionsResult.data ?? []) as IgnoredMentionRow[]).map(
     (mention) => mention.mention_key,
   );
-  const persistenceSession = rememberWorkspaceRevision(supabase, workspaceId, data.revision);
   return {
     ...defaultSnapshot,
     persistenceSession,
@@ -651,6 +656,26 @@ export async function saveWorkspaceSnapshotToSupabase(
   workspace: WorkspaceRow,
   snapshot: WorkspaceSnapshot,
 ) {
+  await persistWorkspace(supabase, workspace.id, workspaceSnapshotPayload(workspace, snapshot), false, snapshot.persistenceSession);
+}
+
+export async function refreshWorkspaceSnapshotFromSupabase(
+  supabase: SupabaseClient, workspace: WorkspaceRow,
+  read: () => WorkspaceSnapshot | null,
+  apply: (snapshot: WorkspaceSnapshot) => void,
+) {
+  let current: WorkspaceSnapshot | null = null;
+  return refreshWorkspace(supabase, workspace.id, () => {
+    current = read();
+    if (!current) return null;
+    const captured = current;
+    return { identity: captured.persistenceSession, payload: workspaceSnapshotPayload(workspace, captured), isCurrent: () => read() === captured };
+  }, (data) => {
+    apply({ ...decodeWorkspaceSnapshot(data, current?.persistenceSession), selectedArticleId: current?.selectedArticleId ?? "" });
+  });
+}
+
+function workspaceSnapshotPayload(workspace: WorkspaceRow, snapshot: WorkspaceSnapshot) {
   const articleIds = new Set(snapshot.articles.map((article) => article.id));
   const positionRows = Object.entries(snapshot.articlePositions)
     .filter(([articleId]) => articleIds.has(articleId))
@@ -724,7 +749,7 @@ export async function saveWorkspaceSnapshotToSupabase(
     })
     .filter((row): row is NonNullable<typeof row> => Boolean(row));
 
-  await persistWorkspace(supabase, workspace.id, {
+  return {
     language: workspace.language,
     articles: workspaceArticleRows(workspace.id, snapshot.articles),
     article_positions: positionRows,
@@ -733,5 +758,5 @@ export async function saveWorkspaceSnapshotToSupabase(
     assets: assetRows,
     article_versions: articleVersionRows,
     ignored_unlinked_mentions: ignoredMentionRows,
-  }, false, snapshot.persistenceSession);
+  };
 }

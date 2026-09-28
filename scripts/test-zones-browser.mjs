@@ -67,15 +67,15 @@ try {
  const zone=s.zones[0],zoneExpr=`document.querySelector('[data-zone-id="${zone.id}"]')`;
  // Use the pencil to open dedicated notes, then save multiline text.
  await click(`${zoneExpr}.querySelector('[aria-label="Open group notes"]')`);
- await wait(`!!document.querySelector('[aria-label="Zone notes"]')`);
+ await wait(`!!document.querySelector('textarea[aria-label^="Notes:"]')`);
  await ev(`(()=>{const e=document.querySelector('textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(e,'Research notes\\nNext steps');e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));})()`);await pause(100);
  await click(button('Save notes'));assert.equal((await state()).zones[0].notes,'Research notes\nNext steps');
- // Empty Zone background also opens notes. Closing without saving leaves persisted notes intact.
- const zr=await rect(zoneExpr);await mouse('mousePressed',zr.left+20,zr.top+zr.height-20,{button:'left',clickCount:1});await mouse('mouseReleased',zr.left+20,zr.top+zr.height-20,{button:'left',clickCount:1});await pause(150);
+ // Reopening the notes drawer shows saved content. Closing preserves it.
+ await click(`${zoneExpr}.querySelector('[aria-label="Open group notes"]')`);
  assert.equal(await ev(`document.querySelector('textarea')?.value`),'Research notes\nNext steps');await click(button('Close'));
  console.log('PASS pencil opens dedicated notes; notes persist');
  await drag(`${zoneExpr}.querySelector('button')`,50,60,12);
- assert.equal(await ev(`document.querySelector('[aria-label="Zone notes"]')!==null`),false);
+ assert.equal(await ev(`document.querySelector('textarea[aria-label^="Notes:"]')!==null`),false);
  s=await state();const dx=s.zones[0].x-zone.x;
  assert.ok(dx>0);for(const id of ['A','B'])assert.ok(Math.abs(s.positions[id].x-initial.positions[id].x-dx)<1e-8);
  const zrect=await rect(zoneExpr),c=await rect(`document.querySelector('[data-article-id="C"]')`);
@@ -99,7 +99,7 @@ try {
  console.log('PASS tiny drawing rejected, overlapping drawing accepted, reverse drawing and transfer');
  // Select by a short real drag to reveal controls, without opening notes.
  await drag(`${secondExpr}.querySelector('button')`,8,0,12);
- await rightClick(secondExpr);await name('Renamed');await click(button('Save'));
+ await rightClick(`${secondExpr}.querySelector('button')`);await name('Renamed');await click(button('Save'));
  const beforeResize=await state();await drag(`${secondExpr}.querySelector('[aria-label="Resize group nw"]')`,10,20);
  assert.deepEqual((await state()).positions,beforeResize.positions);
  await ev(`document.documentElement.dataset.papergraphTheme='light'`);await pause(300);
@@ -108,9 +108,47 @@ try {
  s=await state();assert.deepEqual(s.zones,saved.zones);assert.deepEqual(s.positions,saved.positions);
  console.log('PASS rename, resize, reopen with independent notes');
  await drag(`${secondExpr}.querySelector('button')`,8,0,12);
- await rightClick(secondExpr);await click(button('Delete zone'));await click(button('Delete'));
+ await rightClick(`${secondExpr}.querySelector('button')`);await click(button('Delete group'));await click(button('Delete'));
  s=await state();assert.equal(s.zones.length,1);assert.equal(Object.keys(s.positions).length,3);
  console.log('PASS deletion preserves papers and other zone notes');
+ // The first zone's notes button/NE handle are under the later zone's body,
+ // then under its header. Actual mouse hits must still reach selected controls.
+ const overlapZones = [
+   {id:'overlap-back',name:'Behind',color:'teal',notes:'Behind notes',x:40,y:40,width:22,height:22},
+   {id:'overlap-front',name:'Front',color:'violet',notes:'Front notes',x:52,y:36,width:24,height:26},
+ ];
+ const behind = `document.querySelector('[data-zone-id="overlap-back"]')`;
+ const front = `document.querySelector('[data-zone-id="overlap-front"]')`;
+ const assertHit = async expression => {
+   assert.equal(await ev(`(()=>{const e=${expression},r=e.getBoundingClientRect();return e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));})()`),true,'control receives the pointer above overlapping zones');
+ };
+ for (const frontY of [36,40]) {
+   overlapZones[1].y=frontY;
+   await ev(`localStorage.setItem('zones-fixture',${JSON.stringify(JSON.stringify({zones:overlapZones,positions:initial.positions}))});document.querySelector('#restore-fixture').click()`);
+   await pause(800);
+   await click(`${behind}.querySelector('button')`);
+   const notesButton = `${behind}.querySelector('[aria-label="Open group notes"]')`;
+   await assertHit(notesButton);
+   await assertHit(`${behind}.querySelector('[aria-label="Resize group ne"]')`);
+   const beforeNotes = await state();
+   await click(notesButton);
+   await wait(`document.querySelector('textarea[aria-label="Notes: Behind"]')?.value==='Behind notes'`);
+   assert.deepEqual(await state(),beforeNotes,'opening notes never moves either zone');
+   await click(button('Close'));
+   // Raising the selected controls must not raise its entire background.
+   await assertHit(`${front}.querySelector('button')`);
+   await click(`${front}.querySelector('button')`);
+   await click(`${front}.querySelector('[aria-label="Open group notes"]')`);
+   await wait(`document.querySelector('textarea[aria-label="Notes: Front"]')?.value==='Front notes'`);
+   await click(button('Close'));
+   await assertHit(`document.querySelector('[data-article-id="B"]')`);
+ }
+ await click(`${behind}.querySelector('button')`);
+ const beforeOverlapResize = await state();
+ await drag(`${behind}.querySelector('[aria-label="Resize group ne"]')`,15,-15);
+ assert.ok((await state()).zones[0].width>beforeOverlapResize.zones[0].width);
+ assert.deepEqual((await state()).positions,beforeOverlapResize.positions);
+ console.log('PASS overlapping bodies/headers keep notes, resize handles, other headers and articles clickable');
  await ev(`document.querySelector('#dense-fixture').click()`);await pause(200);
  assert.equal(await ev(`document.querySelectorAll('[data-graph-node]').length`),153);
  const visibleDenseId = await ev(`(()=>{for(const e of document.querySelectorAll('[data-article-id^="dense-"]')){const r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;if(x>370&&x<1300&&y>100&&y<800&&document.elementFromPoint(x,y)?.closest('[data-article-id]')===e)return e.dataset.articleId;}})()`);

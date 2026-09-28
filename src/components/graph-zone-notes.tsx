@@ -6,7 +6,8 @@ import { ZONE_CONFIG, type GraphZone } from "@/lib/graph-zones";
 export function GraphZoneNotes({ zone, canEdit, isEnglish, onSave, onRequestClose, onDirtyChange }: {
   zone: GraphZone; canEdit: boolean; isEnglish: boolean; onSave: (notes: string) => void; onRequestClose: () => void; onDirtyChange: (dirty: boolean) => void;
 }) {
-  const [notes, setNotes] = useState(zone.notes ?? "");
+  const [draft, setNotes] = useState<string | null>(null);
+  const notes = draft ?? zone.notes ?? "";
   const dialog = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const trigger = document.activeElement as HTMLElement | null;

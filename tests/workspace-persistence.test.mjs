@@ -2,9 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { PGlite } from "@electric-sql/pglite";
-import { persistWorkspace, rememberWorkspaceRevision } from "../src/lib/workspace-persistence.ts";
-import { loadWorkspaceSnapshotFromSupabase, saveWorkspaceSnapshotToSupabase, saveWorkspaceArticles } from "../src/lib/supabase-workspace.ts";
+import { persistWorkspace, rememberWorkspaceRevision, refreshWorkspace } from "../src/lib/workspace-persistence.ts";
+import { loadWorkspaceSnapshotFromSupabase, saveWorkspaceSnapshotToSupabase, saveWorkspaceArticles, refreshWorkspaceSnapshotFromSupabase } from "../src/lib/supabase-workspace.ts";
 import { defaultSnapshot } from "../src/lib/workspace-data.ts";
+import { mergeWorkspace } from "../src/lib/workspace-merge.ts";
 
 const owner = "00000000-0000-0000-0000-000000000001";
 const viewer = "00000000-0000-0000-0000-000000000002";
@@ -55,12 +56,193 @@ async function database(uuidIds = false) {
   await db.exec(await readFile(new URL("../supabase/migrations/202609240001_atomic_workspace.sql", import.meta.url), "utf8"));
   await db.exec(await readFile(new URL("../supabase/migrations/202609270001_graph_zones.sql", import.meta.url), "utf8"));
   await db.exec(await readFile(new URL("../supabase/migrations/202609270002_zone_notes.sql", import.meta.url), "utf8"));
+  await db.exec(await readFile(new URL("../supabase/migrations/202609280001_workspace_merge_language.sql", import.meta.url), "utf8"));
   await db.exec(`set role authenticated; set test.user_id='${owner}';`);
   return db;
 }
 const save = async (db, revision, snapshot = payload(), partial = false, id = workspace) =>
   (await db.query("select public.save_workspace_snapshot($1,$2,$3,$4) as revision", [id, revision, snapshot, partial])).rows[0].revision;
 const load = async (db, id = workspace) => (await db.query("select public.load_workspace_snapshot($1) as snapshot", [id])).rows[0].snapshot;
+
+function databaseClient(db) {
+  return { rpc: async (name, args) => {
+    try {
+      const data = name === "load_workspace_snapshot" ? await load(db, args.p_workspace_id) :
+        await save(db, args.p_expected_revision, args.p_snapshot, args.p_articles_only, args.p_workspace_id);
+      return { data, error: null };
+    } catch (error) { return { data: null, error: { message: error.message } }; }
+  } };
+}
+
+test("live refresh receives groups and positions, retains local drafts and rebases the next save", async () => {
+  const db = await database();
+  try {
+    await save(db, "0");
+    const a = databaseClient(db), b = databaseClient(db);
+    let visible = await loadWorkspaceSnapshotFromSupabase(b, workspace);
+    const first = await loadWorkspaceSnapshotFromSupabase(a, workspace);
+    visible = { ...visible, articles: visible.articles.map(row => ({ ...row, title: "Unsaved local title" })) };
+    first.zones = [{ id: "live-zone", name: "Live group", color: "green", x: 20, y: 20, width: 25, height: 25 }];
+    first.articlePositions[articleId] = { x: 36, y: 37 };
+    await saveWorkspaceSnapshotToSupabase(a, { id: workspace, language: "pt" }, first);
+    assert.equal(await refreshWorkspaceSnapshotFromSupabase(b, { id: workspace, language: "pt" }, () => visible, next => { visible = next; }), true);
+    assert.deepEqual(visible.zones, first.zones);
+    assert.deepEqual(visible.articlePositions[articleId], { x: 36, y: 37 });
+    assert.equal(visible.articles[0].title, "Unsaved local title");
+    assert.equal((await load(db)).articles[0].title, article.title, "refresh never writes local drafts");
+    visible.articlePositions[articleId] = { x: 40, y: 41 };
+    await saveWorkspaceSnapshotToSupabase(b, { id: workspace, language: "pt" }, visible);
+    assert.equal((await load(db)).articles[0].title, "Unsaved local title");
+    assert.deepEqual((await load(db)).zones, first.zones);
+  } finally { await db.close(); }
+});
+
+test("live refresh discards responses when editing, switching sessions or queuing a save during the fetch", async () => {
+  for (const change of ["edit", "session", "save"]) {
+    let release;
+    let started;
+    const fetching = new Promise(resolve => { started = resolve; });
+    const client = { rpc: async (name) => {
+      if (name === "load_workspace_snapshot") { started(); return new Promise(resolve => { release = resolve; }); }
+      return { data: "2", error: null };
+    } };
+    const baseline = payload();
+    const identity = rememberWorkspaceRevision(client, workspace, "1", baseline);
+    let current = true, applied = false;
+    const refresh = refreshWorkspace(client, workspace, () => ({ identity, payload: baseline, isCurrent: () => current }), () => { applied = true; });
+    await fetching;
+    let savePromise;
+    if (change === "edit") current = false;
+    if (change === "session") rememberWorkspaceRevision(client, workspace, "5", baseline);
+    if (change === "save") savePromise = persistWorkspace(client, workspace, baseline, false, identity);
+    release({ data: { ...baseline, revision: "1" }, error: null });
+    assert.equal(await refresh, false);
+    if (savePromise) await savePromise;
+    assert.equal(applied, false, change);
+  }
+});
+
+test("private map policies isolate workspaces and restrict viewer broadcasts", async () => {
+  const db = await database();
+  try {
+    await db.exec(`reset role;
+      create schema realtime;
+      create table realtime.messages(extension text);
+      alter table realtime.messages enable row level security;
+      create function realtime.topic() returns text language sql stable as $$ select current_setting('test.topic', true) $$;
+      grant usage on schema realtime to authenticated;
+      grant select, insert on realtime.messages to authenticated;
+      insert into realtime.messages values ('broadcast'), ('presence');
+    `);
+    await db.exec(await readFile(new URL("../supabase/migrations/202609280002_graph_realtime.sql", import.meta.url), "utf8"));
+    await db.exec(`set role authenticated; set test.user_id='${viewer}'; set test.topic='papergraph:workspace:${workspace}:map';`);
+    assert.equal((await db.query("select * from realtime.messages")).rows.length, 2);
+    await db.exec("insert into realtime.messages values ('presence')");
+    await assert.rejects(db.exec("insert into realtime.messages values ('broadcast')"), /row-level security/);
+    await db.exec(`set test.user_id='${owner}';`);
+    await db.exec("insert into realtime.messages values ('broadcast')");
+    await db.exec(`set test.user_id='${outsider}';`);
+    assert.equal((await db.query("select * from realtime.messages")).rows.length, 0);
+    await assert.rejects(db.exec("insert into realtime.messages values ('presence')"), /row-level security/);
+  } finally { await db.close(); }
+});
+
+test("two sessions merge independent article changes and preserve unseen additions on subsequent saves", async () => {
+  const db = await database();
+  try {
+    const other = { ...article, id: "other", title: "Other" };
+    await save(db, "0", payload({ articles: [article, other] }));
+    const a = databaseClient(db), b = databaseClient(db);
+    const first = await loadWorkspaceSnapshotFromSupabase(a, workspace);
+    const second = await loadWorkspaceSnapshotFromSupabase(b, workspace);
+    const saveSnapshot = (client, snapshot) => saveWorkspaceSnapshotToSupabase(client, { id: workspace, language: "pt" }, snapshot);
+    first.articles[0].title = "Writer A";
+    first.articles.push({ ...article, id: "new", title: "New remote article", updatedAt: "now" });
+    await saveSnapshot(a, first);
+    second.articles.find((row) => row.id === "other").title = "Writer B";
+    await saveSnapshot(b, second);
+    let current = await load(db);
+    assert.equal(current.articles.find((row) => row.id === articleId).title, "Writer A");
+    assert.equal(current.articles.find((row) => row.id === "other").title, "Writer B");
+    assert.ok(current.articles.some((row) => row.id === "new"));
+    second.articles.find((row) => row.id === "other").source = "B edits again without reloading";
+    await saveSnapshot(b, second);
+    current = await load(db);
+    assert.equal(current.articles.length, 3);
+    assert.equal(current.articles.find((row) => row.id === articleId).title, "Writer A");
+    assert.equal(current.articles.find((row) => row.id === "other").source, "B edits again without reloading");
+  } finally { await db.close(); }
+});
+
+test("same-field conflicts preserve the winner and block further stale saves", async () => {
+  const db = await database();
+  try {
+    await save(db, "0");
+    const a = databaseClient(db), b = databaseClient(db);
+    const first = await loadWorkspaceSnapshotFromSupabase(a, workspace);
+    const second = await loadWorkspaceSnapshotFromSupabase(b, workspace);
+    first.articles[0].source = "A's text";
+    second.articles[0].source = "B's text";
+    await saveWorkspaceArticles(a, workspace, first.articles, first.persistenceSession);
+    await assert.rejects(saveWorkspaceArticles(b, workspace, second.articles, second.persistenceSession), /workspace-save-conflict/);
+    await assert.rejects(saveWorkspaceArticles(b, workspace, second.articles, second.persistenceSession), /workspace-reload-required/);
+    assert.equal((await load(db)).articles[0].source, "A's text");
+    assert.equal(second.articles[0].source, "B's text");
+  } finally { await db.close(); }
+});
+
+test("three-way merge handles fields, geometry, timestamps, language and partial upserts", () => {
+  const zone = { id: "z", name: "Zone", color: "green", x: 10, y: 10, width: 20, height: 20 };
+  const base = payload({ zones: [zone] });
+  const local = structuredClone(base), remote = structuredClone(base);
+  local.articles[0].title = "Local title";
+  remote.articles[0].source = "Remote text";
+  remote.articles[0].updated_at = "later";
+  local.zones[0].name = "Local zone";
+  remote.zones[0].x = 40;
+  remote.language = "en";
+  local.relations[0].created_at = "local time";
+  remote.relations[0].id = "regenerated";
+  const merged = mergeWorkspace(base, local, remote);
+  assert.equal(merged.articles[0].title, "Local title");
+  assert.equal(merged.articles[0].source, "Remote text");
+  assert.equal(merged.zones[0].name, "Local zone");
+  assert.equal(merged.zones[0].x, 40);
+  assert.equal(merged.language, "en");
+  assert.equal(merged.relations.length, 1);
+  const partial = mergeWorkspace(base, { articles: [{ ...article, id: "new" }] }, remote, true);
+  assert.equal(partial.articles.length, 2);
+  assert.equal(partial.articles.find((row) => row.id === articleId).source, "Remote text");
+  assert.deepEqual(partial.zones, remote.zones);
+});
+
+test("edit/delete races and newly added dependent elements cannot silently disappear", () => {
+  const base = payload();
+  const deleted = payload({ articles: [], article_versions: [], relations: [], article_positions: [], assets: [], ignored_unlinked_mentions: [] });
+  const edited = payload({ articles: [{ ...article, source: "Changed" }] });
+  assert.throws(() => mergeWorkspace(base, deleted, edited), /workspace-save-conflict/);
+  assert.throws(() => mergeWorkspace(base, edited, deleted), /workspace-save-conflict/);
+  const withNewAsset = structuredClone(base);
+  withNewAsset.assets.push({ ...base.assets[0], id: "new-asset" });
+  assert.throws(() => mergeWorkspace(base, deleted, withNewAsset), /workspace-save-conflict/);
+  assert.throws(() => mergeWorkspace(base, withNewAsset, deleted), /workspace-save-conflict/);
+  assert.deepEqual(mergeWorkspace(base, base, deleted).articles, []);
+});
+
+test("merge retries remain bounded when other writers keep winning", async () => {
+  const base = payload();
+  let saves = 0, loads = 0;
+  const client = { rpc: async (name) => {
+    if (name === "load_workspace_snapshot") { loads++; return { data: { ...base, revision: String(loads + 1) }, error: null }; }
+    saves++;
+    return { data: null, error: { message: "workspace-save-conflict" } };
+  } };
+  rememberWorkspaceRevision(client, workspace, "1", base);
+  await assert.rejects(persistWorkspace(client, workspace, base), /workspace-reload-required/);
+  assert.equal(saves, 4);
+  assert.equal(loads, 3);
+  await assert.rejects(persistWorkspace(client, workspace, base), /workspace-reload-required/);
+});
 
 test("Zones and member positions save atomically, survive old clients, validate geometry and respect permissions", async () => {
   const db = await database();
@@ -155,9 +337,9 @@ test("UUID article schema, scientific metadata and vectors survive partial and f
 test("uncertain network outcome freezes writes instead of retrying against a fresh revision", async () => {
   let calls = 0;
   const client = { rpc: async () => { calls++; throw new Error("Network disconnected after commit"); } };
-  rememberWorkspaceRevision(client, workspace, "1");
-  await assert.rejects(persistWorkspace(client, workspace, {}), /Network disconnected/);
-  await assert.rejects(persistWorkspace(client, workspace, {}), /workspace-reload-required/);
+  rememberWorkspaceRevision(client, workspace, "1", payload());
+  await assert.rejects(persistWorkspace(client, workspace, payload()), /Network disconnected/);
+  await assert.rejects(persistWorkspace(client, workspace, payload()), /workspace-reload-required/);
   assert.equal(calls, 1);
 });
 
