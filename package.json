@@ -1,6 +1,6 @@
 {
   "name": "papergraph",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "A collaborative LaTeX research workspace with article maps.",
   "author": "PaperGraph",
   "main": "electron/main.cjs",
