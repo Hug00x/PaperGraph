@@ -71,6 +71,31 @@ const graphRelationFilterTypes = ["manual", "explicit", "citation", "semantic"] 
 const graphZoomLimits = { min: 0.16, max: 2.1 };
 type GraphRelationFilterType = (typeof graphRelationFilterTypes)[number];
 
+function graphFiltersStorageKey(workspaceId: string) {
+  return `papergraph-graph-filters:${workspaceId || "local"}`;
+}
+
+function readGraphFilters(workspaceId: string): {
+  relationTypes: GraphRelationFilterType[];
+  librarySearch: string;
+} {
+  const defaults = { relationTypes: [...graphRelationFilterTypes], librarySearch: "" };
+  if (typeof window === "undefined") return defaults;
+
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(graphFiltersStorageKey(workspaceId)) ?? "null");
+    if (!saved || typeof saved !== "object") return defaults;
+    return {
+      relationTypes: Array.isArray(saved.relationTypes) && saved.relationTypes.every(
+        (value: unknown) => graphRelationFilterTypes.includes(value as GraphRelationFilterType),
+      ) ? saved.relationTypes : defaults.relationTypes,
+      librarySearch: typeof saved.librarySearch === "string" ? saved.librarySearch : "",
+    };
+  } catch {
+    return defaults;
+  }
+}
+
 function isGraphRelationFilterType(
   relationType: WorkspaceRelation["relationType"],
 ): relationType is GraphRelationFilterType {
@@ -228,8 +253,10 @@ export function GraphPane({
   const [isViewportAnimating, setIsViewportAnimating] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
   const [filterPanelOpen, setFilterPanelOpen] = useState(false);
+  // GraphPane is keyed by workspace in its parent, so each workspace restores its own preferences.
+  const [storedFilters] = useState(() => readGraphFilters(workspaceId));
   const [activeRelationFilters, setActiveRelationFilters] = useState<Set<GraphRelationFilterType>>(
-    () => new Set(graphRelationFilterTypes),
+    () => new Set(storedFilters.relationTypes),
   );
   const [manualConnectionSourceId, setManualConnectionSourceId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ articleId: string; x: number; y: number } | null>(null);
@@ -291,7 +318,18 @@ export function GraphPane({
     return () => observer.disconnect();
   }, [contextMenu, showContextRelations]);
 
-  const [librarySearch, setLibrarySearch] = useState("");
+  const [librarySearch, setLibrarySearch] = useState(storedFilters.librarySearch);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(graphFiltersStorageKey(workspaceId), JSON.stringify({
+        relationTypes: [...activeRelationFilters],
+        librarySearch,
+      }));
+    } catch {
+      // Filtering remains available when browser storage is blocked or full.
+    }
+  }, [workspaceId, activeRelationFilters, librarySearch]);
   const [deleteCandidateArticleId, setDeleteCandidateArticleId] = useState<string | null>(null);
   const [isDeletingArticle, setIsDeletingArticle] = useState(false);
   const [deleteArticleError, setDeleteArticleError] = useState<string | null>(null);
