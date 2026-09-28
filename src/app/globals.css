@@ -348,7 +348,6 @@ html[data-papergraph-theme="light"] [data-zone-color="pink"] { --zone-color: #be
 }
 .papergraph-zone.is-selected { border-style: dashed; border-color: var(--zone-color); }
 .papergraph-zone.is-candidate { background: color-mix(in srgb, var(--zone-color) 14%, transparent); border-color: var(--zone-color); }
-.papergraph-zone.is-invalid { border-color: #ef4444; border-style: dashed; }
 .papergraph-zone-handle { background: var(--graph-node-background); border-color: var(--zone-color); }
 .papergraph-zone-swatch { background: var(--zone-color); border-color: var(--zone-color); }
 .papergraph-graph-node-core.has-zone {
@@ -574,15 +573,6 @@ html[data-papergraph-theme="light"] .papergraph-app .papergraph-diff-removed {
   animation: papergraph-edge-flow 8s linear infinite;
 }
 
-.papergraph-auth-line {
-  position: absolute;
-  height: 2px;
-  transform-origin: left center;
-  background: linear-gradient(90deg, transparent, rgba(142, 231, 255, 0.68), rgba(74, 222, 128, 0.45), transparent);
-  box-shadow: 0 0 28px rgba(142, 231, 255, 0.22);
-  animation: papergraph-line-pulse 4.8s ease-in-out infinite;
-}
-
 .papergraph-auth-node {
   display: flex;
   z-index: 2;
@@ -648,19 +638,6 @@ html[data-papergraph-theme="light"] .papergraph-app .papergraph-diff-removed {
   }
 }
 
-@keyframes papergraph-line-pulse {
-  0%,
-  100% {
-    opacity: 0.28;
-    transform: scaleX(0.88);
-  }
-
-  50% {
-    opacity: 0.86;
-    transform: scaleX(1);
-  }
-}
-
 @keyframes papergraph-edge-flow {
   from {
     stroke-dashoffset: 0;
@@ -702,7 +679,6 @@ html[data-papergraph-theme="light"] .papergraph-app .papergraph-diff-removed {
   .papergraph-auth-background::before,
   .papergraph-auth-background::after,
   .papergraph-auth-edge,
-  .papergraph-auth-line,
   .papergraph-auth-node,
   .papergraph-auth-stream span {
     animation: none;

@@ -1,5 +1,9 @@
 "use client";
 
+import { extractArxivIds } from "../lib/academic/arxiv.ts";
+
+import { createBrowserUuid } from "../lib/browser-uuid.ts";
+
 import type { GraphZone } from "@/lib/graph-zones";
 
 import { isViewOnlyArticle } from "@/lib/article-presentation";
@@ -1016,35 +1020,6 @@ function getPresenceModeLabel(mode: WorkspacePresenceMode, language: AppLanguage
   }
 }
 
-function createBrowserUuid() {
-  if (typeof globalThis.crypto?.randomUUID === "function") {
-    return globalThis.crypto.randomUUID();
-  }
-
-  const bytes = new Uint8Array(16);
-
-  if (typeof globalThis.crypto?.getRandomValues === "function") {
-    globalThis.crypto.getRandomValues(bytes);
-  } else {
-    for (let index = 0; index < bytes.length; index += 1) {
-      bytes[index] = Math.floor(Math.random() * 256);
-    }
-  }
-
-  bytes[6] = (bytes[6] & 0x0f) | 0x40;
-  bytes[8] = (bytes[8] & 0x3f) | 0x80;
-
-  const hexBytes = [...bytes].map((byte) => byte.toString(16).padStart(2, "0"));
-
-  return [
-    hexBytes.slice(0, 4).join(""),
-    hexBytes.slice(4, 6).join(""),
-    hexBytes.slice(6, 8).join(""),
-    hexBytes.slice(8, 10).join(""),
-    hexBytes.slice(10, 16).join(""),
-  ].join("-");
-}
-
 function createPresenceClientId() {
   return createBrowserUuid();
 }
@@ -1069,18 +1044,6 @@ function normalizeLinkTarget(value: string) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
-}
-
-function extractArxivIdsFromText(value: string) {
-  const matches = value.match(/\b(?:arxiv:)?\d{4}\.\d{4,5}(?:v\d+)?\b/gi) ?? [];
-
-  return Array.from(
-    new Set(
-      matches
-        .map((match) => match.replace(/^arxiv:/i, "").replace(/v\d+$/i, "").toLowerCase())
-        .filter(Boolean),
-    ),
-  );
 }
 
 function parseWikilinkTarget(value: string) {
@@ -4433,7 +4396,7 @@ export default function Home() {
     const importedArticleTitle = extractedPdf.metadata.title ?? getTitleFromPdfFileName(pdfFile.name, appLanguage);
     const importedAcademicText = extractedPdf.text;
     const importedPdfDois = extractedPdf.metadata.doi ? [extractedPdf.metadata.doi] : [];
-    const importedArxivDois = extractArxivIdsFromText(`${pdfFile.name}\n${importedArticleTitle}\n${importedAcademicText.split("\f")[0]}`).map(
+    const importedArxivDois = extractArxivIds(`${pdfFile.name}\n${importedArticleTitle}\n${importedAcademicText.split("\f")[0]}`).map(
       (arxivId) => `10.48550/arXiv.${arxivId}`,
     );
     const identity = { title: extractedPdf.metadata.title ?? "", doi: importedPdfDois[0] ?? importedArxivDois[0] };

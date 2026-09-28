@@ -1,3 +1,4 @@
+import { assertSupabaseResult } from "./supabase-result.ts";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { normalizeZones } from "./graph-zones.ts";
 import {
@@ -217,12 +218,6 @@ function parseIgnoredMentionKey(mentionKey: string) {
 
 function getStoredNameFromStoragePath(storagePath: string) {
   return storagePath.split("/").filter(Boolean).at(-1) ?? storagePath;
-}
-
-function assertSupabaseResult(error: { message: string } | null, fallbackMessage: string) {
-  if (error) {
-    throw new Error(error.message || fallbackMessage);
-  }
 }
 
 function normalizeWorkspaceLanguage(value: string): AppLanguage {

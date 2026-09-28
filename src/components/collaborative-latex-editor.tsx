@@ -1,5 +1,9 @@
 "use client";
 
+import { getCollaboratorColor } from "../lib/collaborator-color.ts";
+
+import { createBrowserUuid } from "../lib/browser-uuid.ts";
+
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { basicSetup } from "codemirror";
 import { StreamLanguage } from "@codemirror/language";
@@ -58,46 +62,6 @@ const setRemoteCursorsEffect = StateEffect.define<RemoteCursor[]>();
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
-}
-
-function createBrowserUuid() {
-  if (typeof globalThis.crypto?.randomUUID === "function") {
-    return globalThis.crypto.randomUUID();
-  }
-
-  const bytes = new Uint8Array(16);
-
-  if (typeof globalThis.crypto?.getRandomValues === "function") {
-    globalThis.crypto.getRandomValues(bytes);
-  } else {
-    for (let index = 0; index < bytes.length; index += 1) {
-      bytes[index] = Math.floor(Math.random() * 256);
-    }
-  }
-
-  bytes[6] = (bytes[6] & 0x0f) | 0x40;
-  bytes[8] = (bytes[8] & 0x3f) | 0x80;
-
-  const hexBytes = [...bytes].map((byte) => byte.toString(16).padStart(2, "0"));
-
-  return [
-    hexBytes.slice(0, 4).join(""),
-    hexBytes.slice(4, 6).join(""),
-    hexBytes.slice(6, 8).join(""),
-    hexBytes.slice(8, 10).join(""),
-    hexBytes.slice(10, 16).join(""),
-  ].join("-");
-}
-
-function getCursorColor(value: string) {
-  const colors = ["#8ee7ff", "#6ee7b7", "#fbbf24", "#fda4af", "#c4b5fd", "#93c5fd"];
-  let hash = 0;
-
-  for (let index = 0; index < value.length; index += 1) {
-    hash = (hash * 31 + value.charCodeAt(index)) | 0;
-  }
-
-  return colors[Math.abs(hash) % colors.length];
 }
 
 function encodeUint8Array(value: Uint8Array) {
@@ -618,7 +582,7 @@ export const CollaborativeLatexEditor = forwardRef<
             event: "cursor",
             payload: {
               clientId: currentClientId,
-              color: getCursorColor(currentClientId),
+              color: getCollaboratorColor(currentClientId),
               selectionEnd: selection.end,
               selectionStart: selection.start,
               userName,
@@ -676,7 +640,7 @@ export const CollaborativeLatexEditor = forwardRef<
               ...currentCursors.filter((cursor) => cursor.clientId !== remoteClientId),
               {
                 clientId: remoteClientId,
-                color: message.color ?? getCursorColor(remoteClientId),
+                color: message.color ?? getCollaboratorColor(remoteClientId),
                 selectionEnd,
                 selectionStart,
                 updatedAt: Date.now(),

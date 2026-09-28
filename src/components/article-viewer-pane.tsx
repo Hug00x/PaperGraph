@@ -1,5 +1,7 @@
 "use client";
 
+import { normalizeKeywordTags } from "../lib/article-tags.ts";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { articleAbstract } from "@/lib/article-presentation";
 import { discoveredMetadata, safePublicationUrl } from "@/lib/academic/discovery/identity";
@@ -12,24 +14,6 @@ import { getArticleStatusLabel, type AppLanguage } from "@/lib/portuguese-labels
 import type { WorkspaceArticle, WorkspaceArticleVersion, WorkspaceImageAsset } from "@/lib/workspace-data";
 
 type SubmittedArticleStatus = Exclude<WorkspaceArticle["status"], "Draft">;
-
-function normalizeTags(value: string) {
-  const seenTags = new Set<string>();
-
-  return value
-    .split(",")
-    .map((tag) => tag.trim())
-    .filter((tag) => {
-      const normalizedTag = tag.toLowerCase();
-
-      if (!tag || seenTags.has(normalizedTag)) {
-        return false;
-      }
-
-      seenTags.add(normalizedTag);
-      return true;
-    });
-}
 
 function getEditableArticleTags(article: WorkspaceArticle) {
   if (!article.source.includes("\\includepdf")) {
@@ -145,7 +129,7 @@ export function ArticleViewerPane({
   const previewScrollerRef = useRef<HTMLDivElement | null>(null);
   const previewContainerRef = useRef<HTMLDivElement | null>(null);
   const isEnglish = language === "en";
-  const metadataTags = normalizeTags(metadataTagsInput);
+  const metadataTags = normalizeKeywordTags(metadataTagsInput);
   const editableArticleTags = getEditableArticleTags(article);
   const hasMetadataChanges =
     metadataTitle.trim() !== article.title ||

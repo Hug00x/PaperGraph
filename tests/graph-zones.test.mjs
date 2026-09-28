@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getDrawnZoneBounds, isValidZoneBounds, getZoneForNodePosition, getZonesForNodePosition, getBlendedZoneColor, isPointInsideZone, normalizeZones, getSelectionBounds, findFreeZoneBounds, moveZoneMembers, resizeZone, zonesOverlap } from '../src/lib/graph-zones.ts';
+import { getDrawnZoneBounds, isValidZoneBounds, getZoneForNodePosition, getZonesForNodePosition, getBlendedZoneColor, isPointInsideZone, normalizeZones, moveZoneMembers, resizeZone } from '../src/lib/graph-zones.ts';
 const a = { id: 'a', name: 'Method 1', color: 'green', x: 10, y: 10, width: 20, height: 15 };
 const b = { ...a, id: 'b', name: 'Method 2', color: 'violet', x: 40 };
 test('center containment, half-open boundaries and a deterministic overlap fallback', () => {
@@ -21,21 +21,6 @@ test('overlapping zones share article membership and blend their colors', () => 
   const overlap = { ...b, x: 20, y: 15, width: 20, height: 15 };
   assert.deepEqual(getZonesForNodePosition({ x: 22, y: 16 }, [overlap, a]).map((zone) => zone.id), ['a', 'b']);
   assert.equal(getBlendedZoneColor([a, overlap]), 'rgb(135 202 191)');
-});
-test('creation bounds enclose selected centers with padding, including world edges', () => {
-  const positions = { one: { x: 2, y: 2 }, two: { x: 98, y: 98 } };
-  const bounds = getSelectionBounds(['one', 'two'], positions);
-  assert.ok(Object.values(positions).every(p => isPointInsideZone(p, bounds)));
-  assert.equal(getSelectionBounds([], positions), null);
-  const single = getSelectionBounds(['one'], positions);
-  assert.ok(single.width >= 8 && single.height >= 6);
-});
-test('creation from existing zones finds free space and preserves selection layout', () => {
-  const bounds = getSelectionBounds(['one', 'two'], { one: { x: 15, y: 15 }, two: { x: 17, y: 17 } });
-  const free = findFreeZoneBounds(bounds, [a, b]);
-  assert.ok(free && ![a, b].some(z => zonesOverlap(z, free)));
-  assert.deepEqual(findFreeZoneBounds(bounds, [b, a]), free);
-  assert.equal(findFreeZoneBounds({ x: 0, y: 0, width: 100, height: 100 }, [a]), null);
 });
 test('moving a zone moves only its members exactly once', () => {
   const positions = { one: { x: 15, y: 15 }, two: { x: 20, y: 20 }, external: { x: 45, y: 15 } };

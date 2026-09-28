@@ -1,3 +1,4 @@
+import { extractArxivIds } from "./arxiv.ts";
 import { decodeImportedPdfText, importedPdfMetadata } from "./pdf-metadata.ts";
 import { openAlexClient } from "./openalex-client.ts";
 import { normalizeDoi, discoveredMetadata } from "./discovery/identity.ts";
@@ -62,18 +63,6 @@ function extractDois(value: string) {
 
 function extractDoi(value: string) {
   return extractDois(value)[0] ?? null;
-}
-
-function extractArxivIds(value: string) {
-  const matches = value.match(/\b(?:arxiv:)?\d{4}\.\d{4,5}(?:v\d+)?\b/gi) ?? [];
-
-  return Array.from(
-    new Set(
-      matches
-        .map((match) => match.replace(/^arxiv:/i, "").replace(/v\d+$/i, "").toLowerCase())
-        .filter(Boolean),
-    ),
-  );
 }
 
 export function abstractFromInvertedIndex(index: unknown) {
@@ -253,7 +242,6 @@ export function buildCitationRelations(profiles: ArticleAcademicProfile[], langu
 
   return relations;
 }
-
 
 export function citationProfile(article: ArticleInput, metadata: { doi: string | null; openalex_id: string | null; referenced_work_ids: string[] }): ArticleAcademicProfile {
   return { article, doi: metadata.doi ? normalizeDoi(metadata.doi) : getArticleDoi(article), openAlexId: metadata.openalex_id,

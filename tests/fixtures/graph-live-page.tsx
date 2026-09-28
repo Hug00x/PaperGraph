@@ -46,7 +46,7 @@ function transport() {
   };
 }
 export default function Fixture() {
-  const backend = useMemo(transport, []);
+  const backend = useMemo(() => transport(), []);
   const client = backend as unknown as SupabaseClient;
   const [name] = useState(() => typeof window === "undefined" ? "" : new URLSearchParams(location.search).get("name") ?? "Alice");
   const [clientId] = useState(() => crypto.randomUUID());

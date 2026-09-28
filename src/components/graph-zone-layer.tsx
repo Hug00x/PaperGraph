@@ -20,7 +20,7 @@ type Props = {
   onActivity?: (activity: GraphActivity | null, committed?: boolean) => void;
 };
 type Gesture = { zone: GraphZone; zones: GraphZone[]; positions: Positions; clientX: number; clientY: number;
-  scale: number; corner: string | null; nextZone: GraphZone; nextPositions: Positions; invalid: boolean };
+  scale: number; corner: string | null; nextZone: GraphZone; nextPositions: Positions };
 const colorNames = {
   en: ["Red", "Orange", "Amber", "Green", "Teal", "Blue", "Violet", "Pink"],
   pt: ["Vermelho", "Laranja", "Âmbar", "Verde", "Verde-azulado", "Azul", "Violeta", "Rosa"],
@@ -38,7 +38,6 @@ export function GraphZoneLayer(props: Props) {
   const [name, setName] = useState("");
   const [color, setColor] = useState<ZoneColor>("teal");
   const [error, setError] = useState("");
-  const [invalidId, setInvalidId] = useState<string | null>(null);
   const gesture = useRef<Gesture | null>(null);
   const frame = useRef<number | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -83,7 +82,7 @@ export function GraphZoneLayer(props: Props) {
     setMovingId(zone.id);
     onActivity?.({ target: { kind: "zone", id: zone.id }, action: corner ? "resize" : "move" });
     gesture.current = { zone: { ...zone }, zones: zones.map((item) => ({ ...item })), positions: { ...positions }, clientX: event.clientX, clientY: event.clientY, scale: viewport.scale,
-      corner, nextZone: { ...zone }, nextPositions: { ...positions }, invalid: false };
+      corner, nextZone: { ...zone }, nextPositions: { ...positions } };
   }
   function calculate(clientX: number, clientY: number) {
     const g = gesture.current; if (!g) return;
@@ -95,7 +94,6 @@ export function GraphZoneLayer(props: Props) {
     }
     g.nextZone = { ...g.zone, ...(g.corner ? resizeZone(g.zone, g.corner, dx, dy) : { x: g.zone.x + dx, y: g.zone.y + dy }) };
     g.nextPositions = g.corner ? g.positions : moveZoneMembers(g.zone, g.zones, g.positions, dx, dy);
-    g.invalid = false;
   }
   function move(event: ReactPointerEvent<HTMLElement>) {
     if (!gesture.current) return;
@@ -104,7 +102,6 @@ export function GraphZoneLayer(props: Props) {
     frame.current = requestAnimationFrame(() => {
       frame.current = null;
       const g = gesture.current; if (!g) return;
-      setInvalidId(g.invalid ? g.zone.id : null);
       onPreview(g.zones.map((z) => z.id === g.zone.id ? g.nextZone : z), g.nextPositions);
       broadcastGesture(g);
     });
@@ -118,18 +115,16 @@ export function GraphZoneLayer(props: Props) {
     calculate(event.clientX, event.clientY);
     suppressClick.current = cancel || Math.hypot(event.clientX - g.clientX, event.clientY - g.clientY) > 4;
     if (frame.current !== null) cancelAnimationFrame(frame.current);
-    frame.current = null; gesture.current = null; setMovingId(null); setInvalidId(null); onPreview(null, null);
-    if (!cancel && !g.invalid && canEdit && (g.nextZone.x !== g.zone.x || g.nextZone.y !== g.zone.y || g.nextZone.width !== g.zone.width || g.nextZone.height !== g.zone.height)) {
+    frame.current = null; gesture.current = null; setMovingId(null); onPreview(null, null);
+    if (!cancel && canEdit && (g.nextZone.x !== g.zone.x || g.nextZone.y !== g.zone.y || g.nextZone.width !== g.zone.width || g.nextZone.height !== g.zone.height)) {
       broadcastGesture(g);
       onCommit(g.zones.map((z) => z.id === g.zone.id ? g.nextZone : z), g.nextPositions); setError("");
       onActivity?.(null, true);
     } else {
       onActivity?.(null);
-      if (g.invalid) setError(isEnglish ? "Groups cannot overlap. The move was cancelled." : "Os grupos não podem sobrepor-se. O movimento foi cancelado.");
     }
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   }
-  const displayedZones = zones;
   return <>
     {creating && canEdit && <GraphZoneDrawing viewport={viewport} size={size} isEnglish={isEnglish}
       onCancel={onFinishDrawing} onComplete={(bounds) => { setDrawnBounds(bounds); onFinishDrawing(); open(); }} />}
@@ -138,7 +133,7 @@ export function GraphZoneLayer(props: Props) {
       {error && !dialog && <p role="status" className="max-w-xs rounded-lg bg-[var(--surface-strong)] p-2 text-xs text-[var(--foreground)]">{error}</p>}
     </div>
     {/* eslint-disable-next-line react-hooks/refs -- Gesture refs are accessed only inside the event handlers below, never during rendering. */}
-    {displayedZones.map((zone) => {
+    {zones.map((zone) => {
       const selected = selectedId === zone.id;
       const shown = preview.zones.find((item) => item.id === zone.id) ?? zone;
       const collaborators = graphPeers.filter((peer) => peer.activity?.target.kind === "zone" && peer.activity.target.id === zone.id);
@@ -170,7 +165,7 @@ export function GraphZoneLayer(props: Props) {
           onSelect(zone.id);
         }}
         style={{ left, top, width: shown.width * 30 * viewport.scale, height: shown.height * 30 * viewport.scale }}>
-        <div data-zone-background className={`papergraph-zone pointer-events-auto absolute inset-0 z-[1] rounded-2xl border ${selected ? "is-selected" : ""} ${candidateId === zone.id ? "is-candidate" : ""} ${invalidId === zone.id ? "is-invalid" : ""}`} />
+        <div data-zone-background className={`papergraph-zone pointer-events-auto absolute inset-0 z-[1] rounded-2xl border ${selected ? "is-selected" : ""} ${candidateId === zone.id ? "is-candidate" : ""}`} />
         {collaborators.length > 0 && <span data-graph-presence className="pointer-events-none absolute -top-7 left-2 z-[22] max-w-xs truncate rounded-lg border border-[var(--accent)] bg-[var(--surface-strong)] px-2 py-1 text-[10px] text-[var(--accent)]">
           {collaborators.map((peer) => graphActivityLabel(peer, isEnglish)).join(", ")}
         </span>}

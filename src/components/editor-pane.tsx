@@ -1,5 +1,9 @@
 "use client";
 
+import { getCollaboratorColor } from "../lib/collaborator-color.ts";
+
+import { normalizeKeywordTags } from "../lib/article-tags.ts";
+
 import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import {
@@ -154,24 +158,6 @@ function SubmissionStatusToggle({
   );
 }
 
-function normalizeKeywordTags(value: string) {
-  const seenTags = new Set<string>();
-
-  return value
-    .split(",")
-    .map((tag) => tag.trim())
-    .filter((tag) => {
-      const normalizedTag = tag.toLowerCase();
-
-      if (!tag || seenTags.has(normalizedTag)) {
-        return false;
-      }
-
-      seenTags.add(normalizedTag);
-      return true;
-    });
-}
-
 function getImageCaption(imageAsset: WorkspaceImageAsset) {
   return imageAsset.originalName.replace(/\.[^/.]+$/, "");
 }
@@ -230,17 +216,6 @@ function getDefaultImageInsertionIndex(documentSource: string) {
   const endDocumentIndex = documentSource.lastIndexOf("\\end{document}");
 
   return endDocumentIndex === -1 ? documentSource.length : endDocumentIndex;
-}
-
-function getCollaboratorColor(value: string) {
-  const colors = ["#8ee7ff", "#6ee7b7", "#fbbf24", "#fda4af", "#c4b5fd", "#93c5fd"];
-  let hash = 0;
-
-  for (let index = 0; index < value.length; index += 1) {
-    hash = (hash * 31 + value.charCodeAt(index)) | 0;
-  }
-
-  return colors[Math.abs(hash) % colors.length];
 }
 
 export function EditorPane({

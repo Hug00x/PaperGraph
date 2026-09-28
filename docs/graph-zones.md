@@ -10,6 +10,8 @@ Membership is **derived from the article center and Zone geometry**, rather than
 
 ## Interaction
 
+The selection-based creation and free-area placement described below are historical. The current UI creates groups by drawing a rectangle, permits overlapping groups, and blends their colors. The obsolete placement helpers and their tests have been removed.
+
 - Shift+click selects multiple articles. “Select papers” provides the same interaction without a keyboard, including touch. The active article is the default selection when no multiple selection exists.
 - “Create zone” opens one name/color dialog. Bounds enclose the selection with padding. If it overlaps existing Zones, creation proposes the nearest available rectangle, explains the relocation and translates the selected articles together. Existing Zones are retained, including empty ones. If there is no room, creation reports this without changing anything. The viewport frames the new Zone.
 - Article drag previews its destination color and highlights the candidate Zone. Drop commits positions once; membership then follows those positions. Leaving all Zones restores normal styling. Dropping in another Zone transfers membership.
@@ -31,12 +33,12 @@ Cloud behavior matches existing graph snapshots: simultaneous stale edits report
 
 ## Files and verification
 
-- `src/lib/graph-zones.ts`: types, palette keys, validation, membership, bounds, free-area search and movement helpers.
+- `src/lib/graph-zones.ts`: types, palette keys, validation, membership, drawn bounds and movement helpers.
 - `src/components/graph-zone-layer.tsx`: Zone rendering, controls, dialogs and move/resize gestures.
 - `src/components/graph-pane.tsx`, `src/app/globals.css`: selection, drag previews, node tinting and theme integration.
 - `src/lib/workspace-data.ts`, `src/lib/supabase-workspace.ts`, `src/app/api/workspace/route.ts`, `src/app/page.tsx`: snapshot persistence and integration.
 - `supabase/migrations/202609270001_graph_zones.sql`: validated storage and atomic RPC extension.
-- `tests/graph-zones.test.mjs`: containment/boundaries, transfer/exit, bounds, free-area placement, move/resize/delete, malformed data and serialization.
+- `tests/graph-zones.test.mjs`: containment/boundaries, transfer/exit, drawn bounds, move/resize/delete, malformed data and serialization.
 - `tests/workspace-persistence.test.mjs`: SQL rollback, old-client preservation, overlap/color rejection, permissions and client adapter round trip.
 - `tests/fixtures/graph-zones-page.tsx`, `scripts/test-zones-browser.mjs`: real GraphPane browser fixture; no user workspace is accessed. The runner temporarily installs a test route and removes it afterwards.
 - `package.json`: test commands. `eslint.config.mjs`: ignores generated `.next-stale-*` directories.

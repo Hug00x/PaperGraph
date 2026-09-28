@@ -1,3 +1,4 @@
+import { assertSupabaseResult } from "./supabase-result.ts";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 type CollaborationStateRow = {
@@ -6,12 +7,6 @@ type CollaborationStateRow = {
   updated_at: string | null;
   workspace_id: string;
 };
-
-function assertSupabaseResult(error: { message: string } | null, fallbackMessage: string) {
-  if (error) {
-    throw new Error(error.message || fallbackMessage);
-  }
-}
 
 export async function loadArticleCollaborationStateFromSupabase(
   supabase: SupabaseClient,
