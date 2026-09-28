@@ -68,6 +68,7 @@ type ArticleRelationEntry = {
 };
 
 const graphRelationFilterTypes = ["manual", "explicit", "citation", "semantic"] as const;
+const graphZoomLimits = { min: 0.16, max: 2.1 };
 type GraphRelationFilterType = (typeof graphRelationFilterTypes)[number];
 
 function isGraphRelationFilterType(
@@ -443,7 +444,7 @@ export function GraphPane({
     const availableHeight = Math.max((containerBounds?.height ?? 640) - 260, 360);
     const nextScale = clamp(
       Math.min(availableWidth / graphWidth, availableHeight / graphHeight, 1),
-      0.16,
+      graphZoomLimits.min,
       1,
     );
     const centerX = (minX + maxX) / 2;
@@ -517,14 +518,15 @@ export function GraphPane({
     return articles.filter((article) => {
       const matchesSearch =
         normalizedSearch.length === 0 ||
-        [article.title, article.author, article.status, getArticleStatusLabel(article.status, language), ...article.tags]
+        [article.title, article.author, article.status, getArticleStatusLabel(article.status, language), ...article.tags,
+          ...getZonesForNodePosition(displayedPositions[article.id], displayedZones).map((zone) => zone.name)]
           .join(" ")
           .toLowerCase()
           .includes(normalizedSearch);
 
       return matchesSearch;
     });
-  }, [articles, language, librarySearch]);
+  }, [articles, language, librarySearch, displayedPositions, displayedZones]);
   const activeOutgoingRelations = useMemo(
     () => {
       if (!activeArticle) {
@@ -738,7 +740,7 @@ export function GraphPane({
       const cursorY = event.clientY - bounds.top - bounds.height / 2;
       const zoomStep = event.deltaY > 0 ? 0.92 : 1.08;
       const currentViewport = viewportRef.current;
-      const nextScale = clamp(currentViewport.scale * zoomStep, 0.55, 2.1);
+      const nextScale = clamp(currentViewport.scale * zoomStep, graphZoomLimits.min, graphZoomLimits.max);
       const scaleRatio = nextScale / currentViewport.scale;
       const nextViewport = {
         x: cursorX - (cursorX - currentViewport.x) * scaleRatio,
@@ -1112,7 +1114,7 @@ export function GraphPane({
           <input
             value={librarySearch}
             onChange={(event) => setLibrarySearch(event.target.value)}
-            placeholder={isEnglish ? "Search articles, tags, status" : "Pesquisar artigos, tags, estado"}
+            placeholder={isEnglish ? "Articles, tags, status, groups" : "Artigos, tags, estado, grupos"}
             className="w-full rounded-[18px] border border-[var(--border)] bg-black/20 px-4 py-3 text-sm text-white outline-none transition-colors placeholder:text-white/35 focus:border-[var(--accent)]"
           />
         </label>
