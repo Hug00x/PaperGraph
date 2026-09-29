@@ -64,6 +64,21 @@ const save = async (db, revision, snapshot = payload(), partial = false, id = wo
   (await db.query("select public.save_workspace_snapshot($1,$2,$3,$4) as revision", [id, revision, snapshot, partial])).rows[0].revision;
 const load = async (db, id = workspace) => (await db.query("select public.load_workspace_snapshot($1) as snapshot", [id])).rows[0].snapshot;
 
+test("PDF highlights survive snapshot saves and follow article deletion", async () => {
+  const db = await database();
+  try {
+    await db.exec('reset role');
+    await db.exec(await readFile(new URL('../supabase/migrations/202609280003_pdf_highlights.sql', import.meta.url), 'utf8'));
+    await db.exec(`set role authenticated; set test.user_id='${owner}'`);
+    await save(db, '0');
+    await db.query(`insert into public.pdf_highlights(workspace_id,article_id,document_key,page_number,selected_text,rects) values ($1,$2,$3,1,'Passage',$4)`, [workspace,articleId,'a'.repeat(64),JSON.stringify([{x:0.1,y:0.1,width:0.2,height:0.1}])]);
+    await save(db, '1', payload({articles:[{...article,title:'Renamed article'}]}));
+    assert.equal((await db.query('select * from public.pdf_highlights')).rows.length,1);
+    await save(db, '2', payload({articles:[],article_versions:[],relations:[],article_positions:[],assets:[],ignored_unlinked_mentions:[]}));
+    assert.equal((await db.query('select * from public.pdf_highlights')).rows.length,0);
+  } finally { await db.close(); }
+});
+
 function databaseClient(db) {
   return { rpc: async (name, args) => {
     try {

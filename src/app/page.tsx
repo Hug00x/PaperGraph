@@ -6,7 +6,7 @@ import { createBrowserUuid } from "../lib/browser-uuid.ts";
 
 import type { GraphZone } from "@/lib/graph-zones";
 
-import { isViewOnlyArticle } from "@/lib/article-presentation";
+import { isImportedPdfArticle, isViewOnlyArticle } from "@/lib/article-presentation";
 
 import { extractPdfMetadata, titleFromPdfItems, type PdfMetadata, type PdfTextItem } from "@/lib/academic/pdf-metadata";
 import type { PdfImportResult } from "@/lib/pdf-import-queue";
@@ -1277,16 +1277,6 @@ function isSubmittedArticle(article: WorkspaceArticle): article is WorkspaceArti
   return article.status !== "Draft";
 }
 
-function isImportedPdfArticle(article: { source?: string; tags: string[] }) {
-  const normalizedTags = article.tags.map((tag) => tag.toLowerCase());
-
-  return (
-    article.source?.includes("papergraph-import-text:") === true ||
-    article.source?.includes("\\includepdf") === true ||
-    (normalizedTags.includes("pdf") && (normalizedTags.includes("importado") || normalizedTags.includes("imported")))
-  );
-}
-
 function articleUsesImageAsset(article: WorkspaceArticle, imageAsset: WorkspaceImageAsset) {
   return article.source.includes(imageAsset.storedName) || article.source.includes(imageAsset.originalName);
 }
@@ -2439,7 +2429,6 @@ export default function Home() {
   );
   const hasPendingEditorResubmission =
     activeTab === "editor" && pendingEditorResubmission?.articleId === selectedArticleId;
-  const selectedArticleIsImportedPdf = selectedArticle ? isImportedPdfArticle(selectedArticle) : false;
   const selectedArticleCanBeEdited =
     canEditCurrentWorkspace && selectedArticle ? !isViewOnlyArticle(selectedArticle) : false;
   const shouldUseArticleViewer = !canEditCurrentWorkspace || Boolean(selectedArticle && isViewOnlyArticle(selectedArticle));
@@ -3663,57 +3652,6 @@ export default function Home() {
     void saveWorkspace(snapshot);
   }
 
-  async function updateArticleMetadata(nextArticle: {
-    articleId: string;
-    status: Exclude<WorkspaceArticle["status"], "Draft">;
-    tags: string[];
-    title: string;
-  }) {
-    if (!canEditCurrentWorkspace) {
-      showReadOnlyWorkspaceError();
-      return;
-    }
-
-    const articleToUpdate = currentArticles.find((article) => article.id === nextArticle.articleId);
-
-    if (!articleToUpdate) {
-      return;
-    }
-
-    const updatedArticle: WorkspaceArticle = {
-      ...articleToUpdate,
-      title: nextArticle.title,
-      status: nextArticle.status,
-      tags: nextArticle.tags,
-      updatedAt: "agora",
-    };
-
-    const nextArticles = currentArticles.map((article) =>
-      article.id === updatedArticle.id ? updatedArticle : article,
-    );
-    const nextSubmittedArticles = nextArticles.filter(isSubmittedArticle);
-    const academicRefresh = await refreshAcademicRelations(nextSubmittedArticles, currentRelations);
-    const nextRelations = academicRefresh.relations;
-    const nextArticleVersions = addArticleVersion(currentArticleVersions, updatedArticle);
-    const snapshot: WorkspaceSnapshot = {
-      selectedArticleId: updatedArticle.id,
-      articles: nextArticles,
-      relations: nextRelations,
-      articlePositions: currentArticlePositions,
-      zones: workspace.zones,
-      ignoredUnlinkedMentionKeys: currentIgnoredUnlinkedMentionKeys,
-      imageAssets: currentImageAssets,
-      articleVersions: nextArticleVersions,
-    };
-
-    setWorkspace(snapshot);
-    setConnectionValidationError(academicRefresh.issue ?? null);
-    setSelectedArticleId(updatedArticle.id);
-    rememberSelectedArticle(updatedArticle.id);
-    selectGraphArticle(updatedArticle.id);
-    void saveWorkspace(snapshot);
-  }
-
   function restoreArticleVersion(versionId: string) {
     if (!canEditCurrentWorkspace) {
       showReadOnlyWorkspaceError();
@@ -4910,10 +4848,11 @@ export default function Home() {
                   articleCollaborators={articlePresence}
                   authAccessToken={authAccessToken}
                   articleVersions={selectedArticleVersions}
-                  canEditMetadata={canEditCurrentWorkspace && selectedArticleIsImportedPdf}
+
+                  canAnnotate={canEditCurrentWorkspace}
                   imageAssets={selectedArticleImageAssets}
                   language={appLanguage}
-                  onSaveArticleMetadata={updateArticleMetadata}
+
                 />
               ) : selectedArticle ? (
                 <EditorPane

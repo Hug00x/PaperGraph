@@ -9,7 +9,7 @@ import {
 } from "@/lib/portuguese-labels";
 import { getFriendlyErrorMessage } from "@/lib/friendly-errors";
 import type { ArticlePosition, UnlinkedMention, WorkspaceArticle, WorkspaceRelation } from "@/lib/workspace-data";
-import { isViewOnlyArticle } from "@/lib/article-presentation";
+import { getVisibleArticleTags, isImportedPdfArticle, isViewOnlyArticle } from "@/lib/article-presentation";
 import { PdfImportControl } from "@/components/pdf-import-control";
 import type { PdfImportResult } from "@/lib/pdf-import-queue";
 import { RecommendationsPanel } from "@/components/recommendations-panel";
@@ -180,23 +180,6 @@ function getPresenceModeLabel(
     case "browsing":
       return language === "en" ? "browsing" : "a navegar";
   }
-}
-
-function isImportedPdfArticle(article: WorkspaceArticle) {
-  const normalizedTags = article.tags.map((tag) => tag.toLowerCase());
-
-  return (
-    article.source.includes("\\includepdf") ||
-    (normalizedTags.includes("pdf") && (normalizedTags.includes("importado") || normalizedTags.includes("imported")))
-  );
-}
-
-function getVisibleArticleTags(article: WorkspaceArticle) {
-  if (!isImportedPdfArticle(article)) {
-    return article.tags;
-  }
-
-  return article.tags.filter((tag) => tag.toLowerCase() !== "pdf");
 }
 
 export function GraphPane({

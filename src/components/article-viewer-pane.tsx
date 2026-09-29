@@ -1,27 +1,14 @@
 "use client";
 
-import { normalizeKeywordTags } from "../lib/article-tags.ts";
-
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { articleAbstract } from "@/lib/article-presentation";
+import { articleAbstract, getVisibleArticleTags, isImportedPdfArticle } from "@/lib/article-presentation";
 import { discoveredMetadata, safePublicationUrl } from "@/lib/academic/discovery/identity";
 import type { ScientificPaper } from "@/lib/academic/discovery/types";
 import { ArticleHistoryPanel } from "@/components/article-history-panel";
-import { PdfZoomControls } from "@/components/pdf-zoom-controls";
+import { AnnotatedPdfViewer } from "@/components/annotated-pdf-viewer";
 import { getFriendlyErrorMessage, getFriendlyResponseError } from "@/lib/friendly-errors";
-import { getPdfFitScale } from "@/lib/pdf-preview-layout";
-import { getArticleStatusLabel, type AppLanguage } from "@/lib/portuguese-labels";
+import { type AppLanguage } from "@/lib/portuguese-labels";
 import type { WorkspaceArticle, WorkspaceArticleVersion, WorkspaceImageAsset } from "@/lib/workspace-data";
-
-type SubmittedArticleStatus = Exclude<WorkspaceArticle["status"], "Draft">;
-
-function getEditableArticleTags(article: WorkspaceArticle) {
-  if (!article.source.includes("\\includepdf")) {
-    return article.tags;
-  }
-
-  return article.tags.filter((tag) => tag.toLowerCase() !== "pdf");
-}
 
 type ArticleViewerPaneProps = {
   workspaceId?: string;
@@ -33,15 +20,9 @@ type ArticleViewerPaneProps = {
   }>;
   authAccessToken?: string | null;
   articleVersions?: WorkspaceArticleVersion[];
-  canEditMetadata?: boolean;
+  canAnnotate?: boolean;
   imageAssets: WorkspaceImageAsset[];
   language: AppLanguage;
-  onSaveArticleMetadata?: (article: {
-    articleId: string;
-    status: SubmittedArticleStatus;
-    tags: string[];
-    title: string;
-  }) => void;
 };
 
 export function ArticleViewerPane({
@@ -50,10 +31,9 @@ export function ArticleViewerPane({
   articleCollaborators = [],
   authAccessToken,
   articleVersions = [],
-  canEditMetadata = false,
+  canAnnotate = false,
   imageAssets,
   language,
-  onSaveArticleMetadata,
 }: ArticleViewerPaneProps) {
   const discovered = useMemo(() => discoveredMetadata(article.source), [article.source]);
   const [resolvedPublication, setResolvedPublication] = useState<{ source: string; attempt: number; paper: ScientificPaper | null; failed?: boolean } | null>(null);
@@ -64,13 +44,13 @@ export function ArticleViewerPane({
 
   const [publicationAttempt, setPublicationAttempt] = useState(0);
   const [embeddedPdfFailureUrl, setEmbeddedPdfFailureUrl] = useState<string | null>(null);
-  const [embeddedPdf, setEmbeddedPdf] = useState<{ key: string; url: string } | null>(null);
+  const [embeddedPdf, setEmbeddedPdf] = useState<{ key: string; buffer: ArrayBuffer } | null>(null);
   const publicationLoading = Boolean(discovered && workspaceId && authAccessToken && (resolvedPublication?.source !== article.source || resolvedPublication.attempt !== publicationAttempt));
   const publicationFailed = !publicationLoading && resolvedPublication?.source === article.source && resolvedPublication.failed;
-  const keywords = [...new Set([...getEditableArticleTags(article).filter((tag) => !/^(openalex|importado|imported|pdf)$/i.test(tag) && !/^10\.\d{4,9}\//.test(tag)), ...(publication?.topics.map((topic) => topic.name) ?? [])])];
+  const keywords = [...new Set([...getVisibleArticleTags(article).filter((tag) => !/^(openalex|importado|imported|pdf)$/i.test(tag) && !/^10\.\d{4,9}\//.test(tag)), ...(publication?.topics.map((topic) => topic.name) ?? [])])];
   const publicationUrl = safePublicationUrl(publication?.url);
   const embeddedPdfKey = publicationPdfUrl ? `${article.id}:${publicationAttempt}:${publicationPdfUrl}` : null;
-  const embeddedPdfUrl = embeddedPdf?.key === embeddedPdfKey ? embeddedPdf.url : null;
+  const embeddedPdfBuffer = embeddedPdf?.key === embeddedPdfKey ? embeddedPdf.buffer : null;
 
   useEffect(() => {
     if (!embeddedPdfKey || !workspaceId || !authAccessToken) {
@@ -78,7 +58,6 @@ export function ArticleViewerPane({
     }
 
     const controller = new AbortController();
-    let objectUrl: string | null = null;
     void fetch("/api/recommendations", {
       method: "POST",
       signal: controller.signal,
@@ -86,15 +65,17 @@ export function ArticleViewerPane({
       body: JSON.stringify({ action: "publication-pdf", workspaceId, articleId: article.id }),
     }).then(async (response) => {
       if (!response.ok) throw new Error("PDF unavailable");
-      objectUrl = URL.createObjectURL(await response.blob());
-      if (!controller.signal.aborted) setEmbeddedPdf({ key: embeddedPdfKey, url: objectUrl });
+      const buffer = await response.arrayBuffer();
+      if (!controller.signal.aborted) {
+        setEmbeddedPdf({ key: embeddedPdfKey, buffer });
+        setEmbeddedPdfFailureUrl(null);
+      }
     }).catch(() => {
       if (!controller.signal.aborted) setEmbeddedPdfFailureUrl(embeddedPdfKey);
     });
 
     return () => {
       controller.abort();
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [article.id, authAccessToken, embeddedPdfKey, workspaceId]);
 
@@ -115,31 +96,42 @@ export function ArticleViewerPane({
     return () => controller.abort();
   }, [article.id, article.source, authAccessToken, discovered, workspaceId, publicationAttempt]);
 
-  const [metadataTitle, setMetadataTitle] = useState(article.title);
-  const [metadataTagsInput, setMetadataTagsInput] = useState(getEditableArticleTags(article).join(", "));
-  const [metadataStatus, setMetadataStatus] = useState<SubmittedArticleStatus>(
-    article.status === "Published" ? "Published" : "Review",
-  );
   const [compileState, setCompileState] = useState<"idle" | "rendering" | "ready" | "error">(
     article.source.trim() ? "rendering" : "idle",
   );
   const [compileError, setCompileError] = useState<string | null>(null);
   const [pdfBuffer, setPdfBuffer] = useState<ArrayBuffer | null>(null);
-  const [pdfZoom, setPdfZoom] = useState(100);
-  const previewScrollerRef = useRef<HTMLDivElement | null>(null);
-  const previewContainerRef = useRef<HTMLDivElement | null>(null);
+  const [pdfSourceIdentity, setPdfSourceIdentity] = useState<string | undefined>();
+  const compileControllerRef = useRef<AbortController | null>(null);
   const isEnglish = language === "en";
-  const metadataTags = normalizeKeywordTags(metadataTagsInput);
-  const editableArticleTags = getEditableArticleTags(article);
-  const hasMetadataChanges =
-    metadataTitle.trim() !== article.title ||
-    metadataStatus !== article.status ||
-    metadataTags.join("\u0001") !== editableArticleTags.join("\u0001");
+  const isImportedPdf = isImportedPdfArticle(article);
   const editingCollaborators = articleCollaborators.filter((collaborator) => collaborator.mode === "editing");
   const collaboratorNames = articleCollaborators.map((collaborator) => collaborator.userName).join(", ");
 
+  // Live snapshots recreate asset objects every poll. Depend on the PDF request's
+  // values, not those object identities, so reading and selections remain intact.
+  const importedPdf = isImportedPdf
+    ? imageAssets.find((asset) => asset.mimeType === "application/pdf" && article.source.includes(asset.storedName))
+    : undefined;
+  const importedPdfUrl = importedPdf
+    ? `/api/images/${encodeURIComponent(importedPdf.storedName)}?path=${encodeURIComponent(importedPdf.storagePath ?? importedPdf.storedName)}`
+    : null;
+  const compileAssets = imageAssets.map((asset) => ({
+    id: asset.id, articleId: asset.articleId, originalName: asset.originalName,
+    storedName: asset.storedName, storagePath: asset.storagePath, mimeType: asset.mimeType,
+    size: asset.size, uploadedAt: asset.uploadedAt,
+  })).sort((a, b) => a.id.localeCompare(b.id));
+  const requestBody = importedPdfUrl ? undefined : JSON.stringify({
+    articleId: article.id, imageAssets: compileAssets, title: article.title, source: article.source,
+  });
+  const sourceIdentity = importedPdfUrl ? undefined : JSON.stringify([article.source, compileAssets.map((asset) => asset.storagePath ?? asset.storedName)]);
+  const hasPdfSource = !discovered && Boolean(article.source.trim());
+
   const compileDocument = useCallback(async () => {
-    if (discovered || !article.source.trim()) {
+    compileControllerRef.current?.abort();
+    const controller = new AbortController();
+    compileControllerRef.current = controller;
+    if (!hasPdfSource) {
       setPdfBuffer(null);
       setCompileError(null);
       setCompileState("idle");
@@ -150,19 +142,20 @@ export function ArticleViewerPane({
     setCompileError(null);
 
     try {
-      const response = await fetch("/api/compile", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(authAccessToken ? { Authorization: `Bearer ${authAccessToken}` } : {}),
-        },
-        body: JSON.stringify({
-          articleId: article.id,
-          imageAssets,
-          title: article.title,
-          source: article.source,
-        }),
-      });
+      const response = importedPdfUrl
+        ? await fetch(importedPdfUrl, {
+            signal: controller.signal,
+            headers: authAccessToken ? { Authorization: `Bearer ${authAccessToken}` } : {},
+          })
+        : await fetch("/api/compile", {
+            signal: controller.signal,
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(authAccessToken ? { Authorization: `Bearer ${authAccessToken}` } : {}),
+            },
+            body: requestBody,
+          });
 
       if (!response.ok) {
         throw new Error(
@@ -173,9 +166,13 @@ export function ArticleViewerPane({
         );
       }
 
-      const pdfBlob = await response.blob();
-      setPdfBuffer(await pdfBlob.arrayBuffer());
+      const buffer = await response.arrayBuffer();
+      if (controller.signal.aborted) return;
+      setPdfSourceIdentity(sourceIdentity);
+      setPdfBuffer(buffer);
+      setCompileState("ready");
     } catch (error) {
+      if (controller.signal.aborted) return;
       setCompileState("error");
       setCompileError(
         getFriendlyErrorMessage(error, language, {
@@ -184,114 +181,19 @@ export function ArticleViewerPane({
         }),
       );
     }
-  }, [article.id, article.source, article.title, authAccessToken, discovered, imageAssets, isEnglish, language]);
+  }, [hasPdfSource, importedPdfUrl, requestBody, sourceIdentity, authAccessToken, isEnglish, language]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
       void compileDocument();
     }, 0);
 
-    return () => window.clearTimeout(timeoutId);
+    return () => {
+      window.clearTimeout(timeoutId);
+      compileControllerRef.current?.abort();
+    };
   }, [compileDocument]);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function renderPreview() {
-      const previewContainer = previewContainerRef.current;
-      const previewScroller = previewScrollerRef.current;
-
-      if (!pdfBuffer || !previewContainer || !previewScroller) {
-        return;
-      }
-
-      setCompileState("rendering");
-
-      const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-      pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-        "pdfjs-dist/legacy/build/pdf.worker.min.mjs",
-        import.meta.url,
-      ).toString();
-
-      const loadingTask = pdfjs.getDocument({ data: new Uint8Array(pdfBuffer.slice(0)) });
-      const pdfDocument = await loadingTask.promise;
-      previewContainer.innerHTML = "";
-      previewScrollerRef.current?.scrollTo({ top: 0, left: 0 });
-
-      if (cancelled) {
-        return;
-      }
-
-      for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
-        const page = await pdfDocument.getPage(pageNumber);
-        const unscaledViewport = page.getViewport({ scale: 1 });
-        const fitScale = getPdfFitScale(previewScroller, unscaledViewport, { maxWidth: 880 });
-        const scale = fitScale * (pdfZoom / 100);
-        const viewport = page.getViewport({ scale });
-        const canvas = document.createElement("canvas");
-        const context = canvas.getContext("2d");
-
-        if (!context || cancelled) {
-          return;
-        }
-
-        canvas.width = Math.floor(viewport.width);
-        canvas.height = Math.floor(viewport.height);
-        canvas.className = "papergraph-pdf-page rounded-lg bg-[#f7fbff] shadow-[0_14px_34px_rgba(0,0,0,0.28)] ring-1 ring-[rgba(142,231,255,0.18)]";
-        canvas.style.width = `${Math.floor(viewport.width)}px`;
-        canvas.style.height = `${Math.floor(viewport.height)}px`;
-
-        previewContainer.appendChild(canvas);
-
-        await page.render({ canvas, canvasContext: context, viewport }).promise;
-
-        if (pageNumber < pdfDocument.numPages) {
-          const spacer = document.createElement("div");
-          spacer.style.height = "32px";
-          previewContainer.appendChild(spacer);
-        }
-      }
-
-      if (!cancelled) {
-        setCompileState("ready");
-      }
-    }
-
-    void renderPreview().catch((error) => {
-      if (!cancelled) {
-        setCompileState("error");
-        setCompileError(
-          getFriendlyErrorMessage(error, language, {
-            context: "preview",
-            fallback: isEnglish ? "Could not render the article PDF." : "Não foi possível renderizar o PDF do artigo.",
-          }),
-        );
-      }
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [isEnglish, language, pdfBuffer, pdfZoom]);
-
-  function saveMetadata() {
-    if (!canEditMetadata || !onSaveArticleMetadata) {
-      return;
-    }
-
-    const nextTitle = metadataTitle.trim();
-
-    if (!nextTitle) {
-      return;
-    }
-
-    onSaveArticleMetadata({
-      articleId: article.id,
-      status: metadataStatus,
-      tags: metadataTags,
-      title: nextTitle,
-    });
-  }
 
   return (
     <section className="grid h-full min-h-0 flex-1 gap-5 overflow-y-auto pb-5 pt-3 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] xl:gap-6 xl:overflow-hidden">
@@ -301,12 +203,11 @@ export function ArticleViewerPane({
           <p className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
             {isEnglish ? "Article view" : "Visualização do artigo"}
           </p>
-          {canEditMetadata ? <input aria-label={isEnglish ? "Article title" : "T\u00edtulo do artigo"} value={metadataTitle} onChange={(event) => setMetadataTitle(event.target.value)} className="mt-2 w-full border-b border-[var(--border)] bg-transparent py-3 text-lg font-medium text-[var(--foreground)] outline-none focus:border-[var(--accent)]" /> : <h2 className="mt-2 break-words text-xl font-semibold leading-8 text-[var(--foreground)]">{article.title}</h2>}
+          <h2 className="mt-2 break-words text-xl font-semibold leading-8 text-[var(--foreground)]">{article.title}</h2>
 
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          {!discovered ? <>
+        {!discovered && !isImportedPdf ? <div className="flex flex-wrap items-center gap-2">
           <ArticleHistoryPanel
             articleTitle={article.title}
             language={language}
@@ -329,8 +230,7 @@ export function ArticleViewerPane({
                 ? "Refresh PDF"
                 : "Atualizar PDF"}
           </button>
-          </> : null}
-        </div>
+        </div> : null}
       </div>
 
       {articleCollaborators.length > 0 ? (
@@ -364,68 +264,12 @@ export function ArticleViewerPane({
         </p>
       </details>
 
-      {canEditMetadata ? (
-        <section className="mt-4 rounded-[20px] border border-[var(--border)] bg-black/15 p-4">
-          <div className="grid gap-4">
-            <fieldset>
-              <legend className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
-                {isEnglish ? "State" : "Estado"}
-              </legend>
-              <div className="mt-2 grid grid-cols-2 rounded-full border border-[var(--border)] bg-black/20 p-1">
-                {(["Review", "Published"] as const).map((statusOption) => {
-                  const isSelectedStatus = metadataStatus === statusOption;
-
-                  return (
-                    <button
-                      key={statusOption}
-                      type="button"
-                      aria-pressed={isSelectedStatus}
-                      onClick={() => setMetadataStatus(statusOption)}
-                      className={`rounded-full px-3 py-2 text-xs font-semibold transition-colors ${
-                        isSelectedStatus
-                          ? "bg-[var(--accent)] text-[#041016]"
-                          : "text-[var(--muted)] hover:text-[var(--foreground)]"
-                      }`}
-                    >
-                      {getArticleStatusLabel(statusOption, language)}
-                    </button>
-                  );
-                })}
-              </div>
-            </fieldset>
-
-            <button
-              type="button"
-              disabled={!hasMetadataChanges || !metadataTitle.trim()}
-              onClick={saveMetadata}
-              className="rounded-full border border-[var(--accent)] bg-[var(--accent)] px-4 py-3 text-xs font-semibold uppercase tracking-[0.18em] text-[#041016] transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {isEnglish ? "Save" : "Guardar"}
-            </button>
-          </div>
-
-          <label className="mt-3 block">
-            <span className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
-              {isEnglish ? "Keywords" : "Palavras-chave"}
-            </span>
-            <input
-              value={metadataTagsInput}
-              onChange={(event) => setMetadataTagsInput(event.target.value)}
-              className="mt-2 w-full rounded-[18px] border border-[var(--border)] bg-black/20 px-4 py-3 text-sm text-white outline-none transition-colors placeholder:text-white/35 focus:border-[var(--accent)]"
-              placeholder={isEnglish ? "e.g. imported, archive" : "ex. importado, arquivo"}
-            />
-          </label>
-        </section>
-      ) : null}
-
-      {!canEditMetadata ? (
         <section className="mt-5">
           <h3 className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">{isEnglish ? "Keywords" : "Palavras-chave"}</h3>
           <div className="mt-3 flex flex-wrap gap-2">
             {keywords.length ? keywords.map((keyword) => <span key={keyword} className="rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 py-1.5 text-xs text-[var(--foreground)]">{keyword}</span>) : <p className="text-sm text-[var(--muted)]">{isEnglish ? "No keywords available." : "Sem palavras-chave dispon\u00edveis."}</p>}
           </div>
         </section>
-      ) : null}
       </aside>
       <div className="flex min-h-[30rem] min-w-0 flex-col xl:min-h-0">
       {discovered ? (
@@ -438,15 +282,8 @@ export function ArticleViewerPane({
               {publicationPdfUrl && publicationUrl ? <a href={publicationUrl} target="_blank" rel="noopener noreferrer" className="hover:underline">{isEnglish ? "View publication" : "Ver publicação"}</a> : null}
             </div>
           </div>
-          {embeddedPdfUrl && embeddedPdfFailureUrl !== embeddedPdfKey ? (
-            <iframe
-              src={embeddedPdfUrl}
-              title={article.title}
-              referrerPolicy="no-referrer"
-              onLoad={() => setEmbeddedPdfFailureUrl(null)}
-              onError={() => setEmbeddedPdfFailureUrl(embeddedPdfKey)}
-              className="min-h-0 w-full flex-1 border-0"
-            />
+          {embeddedPdfBuffer && embeddedPdfFailureUrl !== embeddedPdfKey ? (
+            <AnnotatedPdfViewer buffer={embeddedPdfBuffer} workspaceId={workspaceId} articleId={article.id} canEdit={canAnnotate} language={language} />
           ) : (
             <div className="flex flex-1 flex-col items-center justify-center gap-5 p-8 text-center">
               <p role="status" className="max-w-sm text-sm leading-6 text-[var(--muted)]">
@@ -468,65 +305,14 @@ export function ArticleViewerPane({
           )}
         </section>
       ) : (
-      <div className="flex min-h-0 flex-1 justify-center">
-        <div className="papergraph-pdf-preview-shell relative flex h-full min-h-0 w-full flex-col overflow-hidden rounded-[24px] border border-[var(--border)] shadow-[0_18px_40px_rgba(0,0,0,0.18)]">
-          {pdfBuffer ? (
-            <PdfZoomControls
-              className="absolute left-4 top-4 z-10"
-              language={language}
-              onChange={setPdfZoom}
-              value={pdfZoom}
-            />
-          ) : null}
-          <div className="papergraph-pdf-preview-status absolute right-4 top-4 z-10 rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.3em] backdrop-blur-xl">
-            {compileState === "rendering"
-              ? isEnglish
-                ? "loading"
-                : "a carregar"
-              : compileState === "error"
-                ? isEnglish
-                  ? "error"
-                  : "erro"
-                : isEnglish
-                  ? "ready"
-                  : "pronto"}
-          </div>
-
-          <div className="papergraph-pdf-preview-stage relative flex min-h-0 flex-1 flex-col">
-            {pdfBuffer ? (
-              <div ref={previewScrollerRef} className="min-h-0 flex-1 overflow-auto overscroll-contain px-8 py-10 lg:px-14 lg:py-12">
-                <div ref={previewContainerRef} className="flex w-max min-w-full flex-col items-center" />
-              </div>
-            ) : (
-              <div className="flex min-h-0 flex-1 items-center justify-center px-8 text-center text-sm leading-6 text-[var(--muted)]">
-                <div>
-                  <p className="text-base font-medium text-white">
-                    {isEnglish ? "No PDF loaded yet" : "Ainda não há PDF carregado"}
-                  </p>
-                  <p className="mt-2">
-                    {isEnglish
-                      ? "The article PDF will appear here after it is prepared."
-                      : "O PDF do artigo aparece aqui depois de ser preparado."}
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {compileState === "rendering" ? (
-              <div className="absolute inset-0 flex items-center justify-center bg-white/20 backdrop-blur-[1px]">
-                <div className="rounded-full border border-slate-300 bg-white/90 px-4 py-2 text-xs uppercase tracking-[0.24em] text-slate-700 shadow-lg">
-                  {isEnglish ? "preparing PDF" : "a preparar PDF"}
-                </div>
-              </div>
-            ) : null}
-          </div>
-
-          {compileState === "error" ? (
-            <div className="border-t border-white/10 bg-red-500/10 px-4 py-3 text-sm text-red-100">
-              {compileError ?? (isEnglish ? "Preview failed." : "A visualização falhou.")}
-            </div>
-          ) : null}
-        </div>
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)]">
+        {isImportedPdf ? <div className="border-b border-[var(--border)] p-4"><h3 className="text-sm font-semibold text-[var(--foreground)]">{isEnglish ? "Full article" : "Artigo completo"}</h3></div> : null}
+        {compileState === "error" ? <p role="alert" className="p-4 text-sm text-red-400">{compileError}</p> : null}
+        {compileState === "rendering" ? <p role="status" className="p-4 text-sm text-[var(--muted)]">{isEnglish ? "Preparing PDF…" : "A preparar PDF…"}</p> : null}
+        {pdfBuffer && compileState === "ready" ? <AnnotatedPdfViewer
+          buffer={pdfBuffer} workspaceId={workspaceId} articleId={article.id} canEdit={canAnnotate} language={language}
+          sourceIdentity={pdfSourceIdentity}
+        /> : null}
       </div>
       )}
       </div>

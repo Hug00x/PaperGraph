@@ -39,6 +39,7 @@ The repository currently targets a Windows x64 desktop application. A Next.js de
 - Image and PDF assets associated with an article, including LaTeX insertion helpers.
 - Multiple-PDF import with sequential processing, duplicate detection, per-file progress, and retryable failures.
 - Local extraction of title, DOI, and abstract from the first three pages of text-layer PDFs.
+- Selectable PDF text and persistent highlights in yellow, green, blue, pink or purple. The highlights list has collapsible single-line entries, page navigation, color changes and deletion. Imported and discovered PDFs share the same viewer. Workspace members can read highlights; editors can create, recolor and delete them.
 
 ### Research graph
 
@@ -195,10 +196,15 @@ npm run test:semantic
 npm run test:recommendations
 npm run test:persistence
 npm run test:pdf-import
+npm run test:pdf-highlights
 npm run test:runtime
 ```
 
 The tests cover embedding contracts and caching, recommendation ranking, workspace conflict handling, PDF import queue behavior, and Ollama runtime lifecycle logic. Additional scripts in `scripts/` exercise packaged runtime, desktop discovery, persistence, installer, and bundle behavior when their external prerequisites are available.
+
+PDF highlights require `supabase/migrations/202609280003_pdf_highlights.sql` followed by `supabase/migrations/202609290001_pdf_highlight_colors.sql` in the Supabase database. Existing highlights default to yellow. Highlights are separate records, not part of the PDF bytes or workspace snapshot writes. Original PDFs are identified by a SHA-256 content hash; compiled PDFs use their LaTeX source and asset identities. Replacing a document does not reuse the previous version's highlights. Local workspaces store highlights in this installation's browser storage. Comments, OCR and exporting highlights into the PDF are not included.
+
+For the isolated browser acceptance test, start `npm run dev -- --port 3011`, then run `npm run test:pdf-highlights:browser`. The test creates and removes a temporary fixture route and uses an isolated browser profile; it does not access real workspaces. Set `PDF_TEST_URL` to the full fixture URL when using a different port.
 
 ## Project Structure
 

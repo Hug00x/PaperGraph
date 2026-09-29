@@ -1,6 +1,6 @@
 {
   "name": "papergraph",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "A collaborative LaTeX research workspace with article maps.",
   "author": "PaperGraph",
   "main": "electron/main.cjs",
@@ -25,6 +25,8 @@
     "test:graph-live": "node --experimental-strip-types --test tests/graph-live.test.mjs",
     "test:graph-live:browser": "node scripts/test-graph-live-browser.mjs",
     "test:pdf-import": "node --experimental-strip-types --test tests/pdf-import.test.mjs",
+    "test:pdf-highlights": "node --experimental-strip-types --test tests/pdf-highlights.test.mjs",
+    "test:pdf-highlights:browser": "node scripts/test-pdf-highlights-browser.mjs",
     "runtime:prepare": "node scripts/fetch-ollama-runtime.mjs",
     "test:runtime": "node --test tests/ollama-runtime.test.cjs"
   },
