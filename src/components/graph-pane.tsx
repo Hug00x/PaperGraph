@@ -1310,7 +1310,7 @@ export function GraphPane({
                 containerRef.current?.querySelector<HTMLButtonElement>('[aria-controls="graph-filters"]')?.focus();
               }
             }}
-            className="absolute right-4 top-[4.25rem] z-40 flex w-[min(20rem,calc(100%_-_2rem))] max-h-[calc(100%_-_5.25rem)] flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface-strong)] shadow-[0_16px_48px_rgba(0,0,0,0.2)]">
+            className="absolute right-4 top-[4.25rem] z-[60] flex w-[min(20rem,calc(100%_-_2rem))] max-h-[calc(100%_-_5.25rem)] flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface-strong)] shadow-[0_16px_48px_rgba(0,0,0,0.2)]">
             <div className="flex items-start justify-between gap-3 px-4 pb-3 pt-4">
               <div>
                 <h2 className="text-sm font-semibold text-[var(--foreground)]">{isEnglish ? "Visible links" : "Ligações visíveis"}</h2>
