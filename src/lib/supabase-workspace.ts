@@ -1,4 +1,5 @@
 import { assertSupabaseResult } from "./supabase-result.ts";
+import { getWorkspaceAvatarUrls } from "./profile-avatar.ts";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { normalizeZones } from "./graph-zones.ts";
 import {
@@ -33,6 +34,7 @@ export type AccountWorkspace = {
 };
 
 export type WorkspaceMember = {
+  avatarUrl?: string | null;
   workspaceId: string;
   userId: string;
   role: WorkspaceMemberRole;
@@ -384,7 +386,8 @@ export async function listWorkspaceMembersFromSupabase(
 
   const rows = Array.isArray(data) ? (data as WorkspaceMemberRpcRow[]) : [];
 
-  return rows.map(mapWorkspaceMemberRow);
+  const avatarUrls = await getWorkspaceAvatarUrls(supabase, workspaceId).catch(() => new Map<string, string>());
+  return rows.map(row => ({ ...mapWorkspaceMemberRow(row), avatarUrl: avatarUrls.get(String(row.user_id)) ?? null }));
 }
 
 export async function listWorkspaceInvitesFromSupabase(

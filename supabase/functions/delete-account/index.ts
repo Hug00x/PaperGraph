@@ -137,6 +137,16 @@ Deno.serve(async (request) => {
       ),
     ];
 
+    const avatarBucket = serviceClient.storage.from("papergraph-avatars");
+    for (;;) {
+      const { data: photos, error: photosError } = await avatarBucket.list(user.id, { limit: 100 });
+      if (photosError) throw new Error(photosError.message);
+      const paths = (photos ?? []).filter((photo) => photo.id).map((photo) => `${user.id}/${photo.name}`);
+      if (!paths.length) break;
+      const { error: removePhotoError } = await avatarBucket.remove(paths);
+      if (removePhotoError) throw new Error(removePhotoError.message);
+    }
+
     const { error: cleanupError } = await serviceClient.rpc("delete_user_account_data", {
       target_user_id: user.id,
     });

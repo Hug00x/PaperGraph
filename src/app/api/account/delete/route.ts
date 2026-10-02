@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { getPaperGraphAssetDirectory } from "@/lib/server-paths";
 import { getSupabaseServerStorageClient } from "@/lib/supabase-client";
 import { paperGraphAssetBucket } from "@/lib/supabase-storage";
+import { deleteProfileAvatarFiles } from "@/lib/profile-avatar";
 
 export const runtime = "nodejs";
 
@@ -151,6 +152,8 @@ export async function DELETE(request: Request) {
           .filter((storagePath): storagePath is string => Boolean(storagePath)),
       ),
     ];
+
+    await deleteProfileAvatarFiles(serviceClient, user.id);
 
     const { error: cleanupError } = await serviceClient.rpc("delete_user_account_data", {
       target_user_id: user.id,

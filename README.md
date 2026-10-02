@@ -53,6 +53,7 @@ The repository currently targets a Windows x64 desktop application. A Next.js de
 ### Workspaces and collaboration
 
 - Email/password authentication through Supabase Auth.
+- Profile photos in Account settings and workspace member lists, with initials as a fallback. JPG, PNG and WebP uploads up to 5 MB are center-cropped and stored as 256px WebP avatars in a private bucket accessible to the owner and users sharing a workspace.
 - Multiple workspaces, invitations, membership roles, ownership transfer, and workspace deletion.
 - Viewer and editor permissions enforced by Supabase policies.
 - Atomic workspace snapshots with revision checks and three-way merging of independent changes. Conflicting field edits and edit/delete races preserve the local copy for recovery.
@@ -197,6 +198,7 @@ npm run test:recommendations
 npm run test:persistence
 npm run test:pdf-import
 npm run test:pdf-highlights
+npm run test:profile-avatars
 npm run test:runtime
 ```
 
@@ -205,6 +207,8 @@ The tests cover embedding contracts and caching, recommendation ranking, workspa
 PDF highlights require `supabase/migrations/202609280003_pdf_highlights.sql` followed by `supabase/migrations/202609290001_pdf_highlight_colors.sql` in the Supabase database. Existing highlights default to yellow. Highlights are separate records, not part of the PDF bytes or workspace snapshot writes. Original PDFs are identified by a SHA-256 content hash; compiled PDFs use their LaTeX source and asset identities. Replacing a document does not reuse the previous version's highlights. Local workspaces store highlights in this installation's browser storage. Comments, OCR and exporting highlights into the PDF are not included.
 
 For the isolated browser acceptance test, start `npm run dev -- --port 3011`, then run `npm run test:pdf-highlights:browser`. The test creates and removes a temporary fixture route and uses an isolated browser profile; it does not access real workspaces. Set `PDF_TEST_URL` to the full fixture URL when using a different port.
+
+Profile photos require `supabase/migrations/202610020001_profile_avatars.sql`. It creates the private avatar bucket, owner-only write policies, workspace-peer read access, and the member-avatar RPC. Redeploy the `delete-account` Edge Function to include avatar cleanup when using the packaged application. The existing member-list RPC remains compatible. To test the photo UI with isolated mock storage, start a dev server on port 3012 and run `npm run test:profile-avatars:browser`; use `PROFILE_PHOTO_TEST_URL` for another port. The test covers upload, resizing, removal, account reopening, invalid files, and recovery from a failed save without accessing real accounts.
 
 ## Project Structure
 
