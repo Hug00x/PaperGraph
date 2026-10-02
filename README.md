@@ -1,263 +1,227 @@
-# PaperGraph
+﻿# PaperGraph
 
 <div align="center">
-
 <img src="src/imagens/PapergraphLogo.png" alt="PaperGraph" width="180">
 
-**A Windows desktop workspace for writing, organising, and exploring scientific literature.**
+**A Windows desktop workspace for writing, organizing, and exploring scientific literature.**
 
 [Download releases](https://github.com/Hug00x/PaperGraph/releases) · [Report an issue](https://github.com/Hug00x/PaperGraph/issues)
-
 </div>
 
-PaperGraph brings LaTeX writing, PDF-based paper collection, and a visual research graph into one workspace. Papers can be drafted, submitted for review, connected through explicit links or citations, and enriched with OpenAlex metadata. A local BGE-M3 embedding pipeline can also identify semantic relationships and rerank related-paper recommendations.
+## Overview
 
-The repository currently targets a Windows x64 desktop application. A Next.js development server is also available for working on the web UI and server routes.
-
-## Contents
-
-- [Features](#features)
-- [How It Works](#how-it-works)
-- [Architecture](#architecture)
-- [Local Semantic Processing](#local-semantic-processing)
-- [External Services and Data](#external-services-and-data)
-- [Installation](#installation)
-- [Development](#development)
-- [Building](#building)
-- [Project Structure](#project-structure)
-- [Configuration](#configuration)
-- [Limitations](#limitations)
-- [Contributing and License](#contributing-and-license)
+PaperGraph **0.1.9** combines LaTeX writing, PDF collection, a research graph, spatial Groups, academic discovery, and shared workspaces. OpenAlex supplies metadata and discovery candidates; local BGE-M3 inference helps connect and rank papers. The packaged target is Windows x64; Next.js development mode is also available.
 
 ## Features
 
-### Writing and PDFs
+### Writing and LaTeX
 
-- CodeMirror-based LaTeX editor with syntax highlighting.
-- Draft autosave, review and published states, version history, and restoration.
-- Local LaTeX compilation with Tectonic and an in-app PDF preview with zoom controls.
-- Image and PDF assets associated with an article, including LaTeX insertion helpers.
-- Multiple-PDF import with sequential processing, duplicate detection, per-file progress, and retryable failures.
-- Local extraction of title, DOI, and abstract from the first three pages of text-layer PDFs.
-- Selectable PDF text and persistent highlights in yellow, green, blue, pink or purple. The highlights list has collapsible single-line entries, page navigation, color changes and deletion. Imported and discovered PDFs share the same viewer. Workspace members can read highlights; editors can create, recolor and delete them.
+- CodeMirror syntax highlighting, draft autosave, review/published states, saved version history, and restoration.
+- Local Tectonic compilation and PDF preview; article image/PDF assets with insertion helpers.
+- Yjs-based collaborative LaTeX and remote cursors over Supabase Realtime.
+
+### PDFs
+
+- Single or multiple PDF import with sequential processing, duplicate detection, per-file status, retryable failures, and a 50 MiB file limit.
+- Text-layer metadata extraction: title from first-page layout; DOI and abstract from up to the first three pages. There is no OCR or conversion to editable LaTeX.
+- PDF.js viewer with zoom, selectable text, and persistent yellow, green, blue, pink, or purple highlights. Expand entries, navigate to pages, recolor, or delete highlights.
+- Workspace members read highlights; editors create, recolor, and delete them. Cloud highlights are separate database records; local-workspace highlights use browser storage. They do not modify PDF bytes.
+- Imported PDFs use a SHA-256 content identity; compiled previews use source and asset identities. Replacing a document does not inherit old highlights. Highlight comments and PDF annotation export are absent.
 
 ### Research graph
 
-- Articles are graph nodes with persisted positions.
-- Manual and explicit relations, including `[[Article]]` and `[[Article|visible text]]` links.
-- Citation relations from OpenAlex metadata.
-- Semantic relations based on stored vector similarity.
-- Unlinked-mention detection and relation-type filtering.
-- Recommendations can be added to a workspace as published articles.
+- Papers as nodes with persisted positions, selection, pan/zoom, search, and unlinked-mention detection.
+- Manual, Wikilink (`[[Paper]]` or `[[Paper|visible text]]`), Citation, and Semantic relationships with remembered type filters.
+- Multiple types can connect a pair. Edges form a compact bundle by default, fan out when either paper is selected, and collapse on deselection. Stable type ordering and recalculated geometry support dragging and zoom.
+- Types and relationship notes appear in the selected paper's inspection list. Current graph paths have no inline relationship labels or directional citation arrowheads.
 
-### Workspaces and collaboration
+### Visual organization: Groups
 
-- Email/password authentication through Supabase Auth.
-- Profile photos in Account settings and workspace member lists, with initials as a fallback. JPG, PNG and WebP uploads up to 5 MB are center-cropped and stored as 256px WebP avatars in a private bucket accessible to the owner and users sharing a workspace.
-- Multiple workspaces, invitations, membership roles, ownership transfer, and workspace deletion.
-- Viewer and editor permissions enforced by Supabase policies.
-- Atomic workspace snapshots with revision checks and three-way merging of independent changes. Conflicting field edits and edit/delete races preserve the local copy for recovery.
-- Live graph collaboration: article/group drag previews, collaborator labels, automatic updates after saves, and reconnect catch-up.
-- Supabase Realtime presence for current workspace activity and Yjs-based collaborative LaTeX state with remote cursors.
-- Local UI state remembers the active workspace, tab, and selected article.
+- Draw named colored Groups; select, rename, recolor, resize, delete, and save plain-text notes.
+- Membership follows a paper's center position. Drag papers into/out of Groups; moving a Group moves the papers currently inside it. Resizing changes membership without moving papers.
+- Groups overlap; papers in multiple Groups blend their colors. Deletion preserves papers and relationships.
+- Geometry, notes, and positions persist through revision-checked snapshots. Editors modify them; viewers browse. Collaborators receive live previews and committed changes.
+
+See [Limitations](#limitations) for the current overlapping-Group pointer issue.
+
+### Workspaces, accounts, and settings
+
+- Supabase email/password authentication, sessions, sign-out, and account deletion through a deployed Edge Function.
+- Workspaces, invitations, viewer/editor roles, ownership transfer, member management, and workspace deletion.
+- Profile photos in Account settings and member lists, with initials fallback. JPG/PNG/WebP inputs up to 5 MiB are center-cropped and re-encoded to 256 × 256 WebP.
+- Private avatar bucket with owner/workspace-peer reads through signed URLs; owner uploads/removal. Updated account-deletion deployment includes avatar cleanup.
+- Atomic cloud snapshots, revision checks, and three-way merge for independent edits; conflicts preserve local recovery state.
+- Workspace presence, graph drag previews, save notifications, reconnect catch-up, and collaborative editor state.
+- English/Portuguese, dark/light themes, built-in help, and remembered workspace/tab/article selection.
+
+### Desktop updates
+
+Packaged builds check GitHub Releases once, about 4.5 seconds after startup. Download requires confirmation. Real `electron-updater` download events drive a **Windows taskbar progress bar**, without an in-app numeric percentage or byte counter. Completion offers restart/install now or later; downloaded updates are configured to install on quit. Errors clear progress and show a dialog. No periodic scheduler or manual check button is implemented.
 
 ## How It Works
 
-The main workflow connects the writing surface to the graph without treating an imported PDF as editable LaTeX source:
-
 ```mermaid
 flowchart LR
-	A[Create or import paper] --> B[Metadata and abstract]
-	B --> C[LaTeX editor or PDF viewer]
-	C --> D[Tectonic PDF preview]
-	B --> E[OpenAlex enrichment]
-	E --> F[BGE-M3 embedding]
-	F --> G[Supabase pgvector]
-	G --> H[Semantic graph links and recommendations]
-	B --> I[Manual, explicit, and citation links]
-	I --> J[Persisted research graph]
-	H --> J
+  Write[Write LaTeX] --> Preview[Tectonic preview]
+  Import[Import PDF] --> PDF[Viewer and text-layer metadata]
+  Preview --> Paper[Paper metadata and saved state]
+  PDF --> Paper
+  Paper --> Graph[Research graph and Groups]
+  Paper --> OA[OpenAlex enrichment and candidates]
+  OA --> AI[Local BGE-M3 embeddings and reranking]
+  AI --> Graph
+  AI --> Recommendations[Recommendations: add to workspace]
 ```
 
-Imported PDFs are stored as article assets and can be viewed in the application. Their text layer may supply metadata for academic processing, but the PDF itself is not converted into an editable LaTeX project.
+Imported PDFs remain documents to read. Recommendation reranking can fall back to OpenAlex ordering when local inference is unavailable.
 
 ## Architecture
 
-PaperGraph uses Electron as its Windows shell around a standalone Next.js application. In development, `npm run desktop:dev` starts the local Next server and opens Electron. In a packaged build, Electron starts the standalone server on a loopback address, loads it in a sandboxed `BrowserWindow`, and provides the managed embedding runtime separately.
+Electron starts a loopback Next.js server, loads it in a sandboxed window, and owns a separate managed Ollama process. Packaged builds use standalone output; desktop development starts Next.js development mode.
 
 ```mermaid
 flowchart TB
-	Renderer[Next.js React renderer]
-	Main[Electron main process]
-	Server[Local Next.js server]
-	Files[Local application data]
-	Supabase[Supabase Auth, Postgres, Storage, Realtime]
-	OpenAlex[OpenAlex API]
-	Ollama[Managed Ollama on 127.0.0.1]
-	Tectonic[Tectonic compiler]
-
-	Main -->|loads loopback URL| Renderer
-	Main -->|starts and stops| Server
-	Renderer --> Server
-	Server --> Files
-	Server --> Supabase
-	Server --> OpenAlex
-	Server -->|embedding bridge| Ollama
-	Server --> Tectonic
+  Main[Electron main] -->|starts and stops| Server[Loopback Next.js server]
+  Main -->|creates| Renderer[React renderer]
+  Renderer -->|fixed preload API| Main
+  Renderer --> Server
+  Renderer -->|accounts, data, assets, collaboration| Cloud[Supabase Auth / Postgres / Storage / Realtime]
+  Server -->|authenticated academic operations| Cloud
+  Server --> Files[Local JSON and asset cache]
+  Server --> Tectonic[Tectonic compiler]
+  Server --> OpenAlex[OpenAlex API]
+  Server -->|per-launch token bridge| Manager[Electron Ollama manager]
+  Manager --> Ollama[Owned loopback Ollama]
+  Main --> Updates[GitHub Releases updater]
 ```
 
-The Electron window uses context isolation, sandboxing, and disabled Node integration. The preload exposes only semantic-runtime state, retry, and subscription methods. The packaged server receives public Supabase configuration, while private server keys are removed from the Electron-launched environment.
+Node integration is disabled; context isolation and sandboxing are enabled. Preload exposes only semantic-runtime state, retry, and subscription methods. The local workspace, asset, and compilation HTTP routes do not have a complete authentication boundary: do not expose them as a public web service. See [SECURITY_AUDIT.md](SECURITY_AUDIT.md) and [RELEASE_READINESS.md](RELEASE_READINESS.md).
 
 ## Local Semantic Processing
 
-The packaged Windows application includes a pinned Ollama 0.34.3 Windows x64 runtime, but not the model weights. PaperGraph starts this runtime itself, on loopback, with a private model directory and `OLLAMA_NO_CLOUD=1`. It does not use an Ollama installation found on `PATH`, and it does not modify the user's normal `.ollama` directory.
+The desktop includes **Ollama 0.34.3**, pinned to the official Windows amd64 archive and SHA-256 in `electron/embedding-runtime-config.json`. Preparation verifies the archive/executable manifest, rejects traversal entries, and preserves upstream notices. Model weights are not bundled.
 
-On first semantic use, the managed runtime checks for `bge-m3` and downloads it through Ollama if it is missing. The UI receives download and preparation states. The model is then checked with a real embedding request and must return a non-zero 1,024-dimensional vector. The runtime is stopped with the Electron application and its model data is preserved across uninstall (`deleteAppDataOnUninstall` is `false`).
+At window startup, the manager starts Ollama, checks for **`bge-m3`**, downloads it if missing, and validates a real non-zero **1,024-dimensional** vector. Preparation begins at startup, rather than waiting for the first recommendation. The status UI reports model download/preparation and offers retry after failure.
 
-PaperGraph embeds exactly the article title followed by its abstract. The vector is stored in the `articles.embedding` `vector(1024)` column in Supabase using pgvector. A database trigger invalidates it when the title or abstract changes. The graph asks for up to three nearest neighbours per article and creates semantic relations only when the raw cosine similarity meets the configured threshold, which defaults to `0.50`.
+Ollama prefers `127.0.0.1:11435`, selecting another port if occupied. Models are stored in `%LOCALAPPDATA%\PaperGraph\ollama\models`, beside an isolated home and runtime logs. PaperGraph ignores Ollama on `PATH`, leaves the user's normal `.ollama` directory alone, sets `OLLAMA_NO_CLOUD=1`, and verifies the owned listener. A Windows guardian and app shutdown handling stop owned processes. Errors require retry; automatic crash restart is not promised. Models remain outside the install directory and uninstall is configured to preserve app data.
 
-Recommendations use OpenAlex candidates and locally rerank them with BGE-M3 when the embedding service is available. The current service requests up to 30 candidates and displays up to 10. If local reranking is unavailable, the provider order is retained rather than using another embedding API.
+The input is exactly `title + "\n\n" + abstract`. Supabase stores `vector(1024)` embeddings in `articles.embedding`, with model/input-hash metadata. A trigger invalidates vectors after title/abstract changes. Matching hashes and bounded in-memory caches avoid repeated work. Semantic graph discovery requests up to **three** neighbors per paper and requires raw cosine similarity of at least **0.50** by default; this is a score cutoff, not a probability.
 
-For web development without Electron, the Next.js server must be able to reach an Ollama server configured through `OLLAMA_BASE_URL`. The packaged desktop build ignores a user's external Ollama installation and uses its managed runtime.
+## Research Discovery
+
+OpenAlex provides DOI/ID lookup, authors, abstract, year, topics, references, citation counts, publication/PDF URLs, and `search.semantic` discovery. Recommendations request up to **30** candidates, remove seed/workspace duplicates, rerank locally in batches of four when possible, and display up to **10**. Adding a recommendation saves scientific metadata as a published article and creates a graph position. Available publication PDFs can be opened in the viewer.
+
+The client serializes requests with 350 ms ordinary and 1,000 ms semantic spacing, a 15-second timeout, and two attempts for 429/5xx responses. `OPENALEX_API_KEY` is supported. Local reranking failure retains provider order; OpenAlex failure is reported rather than replaced with another provider. Live provider access is a separate validation requirement.
 
 ## External Services and Data
 
-| Service | Purpose | When it is contacted |
-| --- | --- | --- |
-| Supabase Auth | Email/password accounts and sessions | Sign-in, sign-up, confirmation, and sign-out |
-| Supabase Postgres | Workspaces, articles, graph state, metadata, and pgvector embeddings | Workspace reads/writes, academic processing, and similarity queries |
-| Supabase Storage | Workspace image and PDF assets | Asset upload, preview, and compilation |
-| Supabase Realtime | Workspace presence and collaborative editor broadcasts | While authenticated users share a workspace or article |
-| OpenAlex | DOI/ID lookup, metadata enrichment, citation data, and related-paper candidates | During academic scans and recommendations |
-| Ollama | Local BGE-M3 embedding generation | During academic scans and recommendation reranking |
+| Service | Why / when |
+| --- | --- |
+| Supabase Auth | Registration, confirmation, sign-in, refresh, sign-out |
+| Supabase Postgres | Shared articles, workspaces, graph, Groups, highlights, embeddings |
+| Supabase Storage | Workspace PDFs/images and private avatars |
+| Supabase Realtime | Presence, graph previews/notifications, collaborative editing |
+| Supabase account-deletion Edge Function | Authorized account/storage cleanup |
+| OpenAlex | Metadata and discovery queries containing title/abstract text |
+| Publication PDF hosts | Server-side retrieval of available discovered PDFs when opened in the viewer |
+| Local Ollama / model distribution | Local inference and missing-model download |
+| GitHub Releases | Startup update checks and confirmed downloads; build-time runtime retrieval |
+| Tectonic resource distribution | Uncached compiler resources may require network access |
 
-Embedding inference is local to the machine running PaperGraph's server or packaged desktop runtime. This does not make the application fully offline: authentication, shared workspaces, cloud storage, OpenAlex discovery, and initial model download require network access. The application does not contain an OpenAI embedding integration.
+Inference is local, but shared-workspace metadata and vectors are stored in Supabase and discovery queries go to OpenAlex. Accounts, cloud data, initial model download, updates, and uncached compiler resources need network access. PaperGraph is not fully offline and has no OpenAI embedding integration.
 
 ## Installation
 
-### Windows desktop
+1. Download `PaperGraph-Setup-0.1.9.exe` from the releases page.
+2. Run the Windows x64 NSIS installer and choose an install directory if needed.
+3. Launch from the desktop or Start Menu; initial account/model setup requires internet access.
 
-1. Download the installer from the [PaperGraph releases page](https://github.com/Hug00x/PaperGraph/releases).
-2. Run `PaperGraph-Setup-<version>.exe` and choose an installation directory if needed.
-3. Launch PaperGraph from the desktop or Start Menu shortcut.
-
-The installer is a per-user Windows x64 NSIS package. It registers the `papergraph://` protocol and includes the application, Tectonic's Windows compiler, and the pinned Ollama runtime. The BGE-M3 model is downloaded separately on first use, so first semantic setup requires internet access and additional disk space.
+NSIS defaults to per-user installation, with editable path, desktop/Start Menu shortcuts, and `papergraph://` registration. Deep links currently focus the window. Tectonic and Ollama binaries are bundled; BGE-M3 is downloaded separately. The reviewed installer/app are unsigned. Build success does not establish installed upgrade behavior; consult release readiness.
 
 ## Development
 
-### Prerequisites
-
-- Windows x64 for the managed runtime and packaged desktop workflow.
-- Node.js with npm. The embedding backfill uses Node's `--experimental-strip-types` flag; use a Node release that supports it.
-- A Supabase project with the SQL in `supabase/bootstrap-workspace.sql` and the migrations in `supabase/migrations/` applied for authenticated/cloud features.
-
-### Setup
+Use Node.js with npm and `--experimental-strip-types` support (review environment: Node 22.21.0). Windows x64 is required for the bundled compiler/runtime workflow.
 
 ```bash
-npm install
-```
-
-Create `.env.local` for the environment values required by the feature set you are running. No `.env.example` is currently included, so use the [Configuration](#configuration) table as the reference. Never commit private Supabase keys.
-
-### Run the web application
-
-```bash
+npm ci
 npm run dev
-```
-
-Open `http://localhost:3000`. This starts Next.js only. On a non-Electron setup, provide an Ollama server to the Next.js process if you want semantic processing.
-
-### Run the desktop application
-
-```bash
+# Or launch the desktop shell and its local server:
 npm run desktop:dev
 ```
 
-This prepares the pinned Ollama runtime, starts Next.js, and launches Electron. The runtime preparation step downloads and checksum-verifies the official Ollama archive when it is not already present in `build/ollama/`.
+Create an ignored `.env.local` using the table below; no `.env.example` is included. For cloud features, apply `supabase/bootstrap-workspace.sql` then all migrations in filename order to your own project. Redeploy `supabase/functions/delete-account` for avatar cleanup. The documentation review did not deploy migrations or change production data. Web-only development uses its own configured Ollama endpoint.
 
-## Building
+## Building and Testing
 
-| Command | Result |
+| Command | Purpose |
 | --- | --- |
-| `npm run build` | Next.js production standalone build in `.next/` |
-| `npm run start` | Starts the built Next.js application |
-| `npm run desktop:prepare` | Prepares the standalone Next/Electron files and Windows icon |
-| `npm run desktop:dir` | Builds an unpacked Electron directory |
-| `npm run desktop:build` | Builds the Windows x64 NSIS installer in `desktop-dist/` |
-| `npm run desktop:publish` | Builds and publishes the installer through the GitHub provider configured in `package.json` |
-| `npm run runtime:prepare` | Downloads and verifies the pinned Ollama runtime into `build/ollama/` |
+| `npm run dev` / `npm run start` | Development / built Next.js server |
+| `npm run build` | Standalone production build |
+| `npm run desktop:dev` | Prepare runtime and launch desktop development |
+| `npm run desktop:clean` | Delete generated desktop output |
+| `npm run runtime:prepare` | Prepare pinned runtime without model weights |
+| `npm run desktop:prepare` | Runtime, standalone resources, public configuration, compiler, icons |
+| `npm run desktop:dir` | Clean/build/prepare an unpacked desktop bundle |
+| `npm run desktop:build` | Clean/build/prepare Windows NSIS installer |
+| `npm run desktop:publish` | Build/publish via configured GitHub provider; authorized releases only |
+| `npm run lint` | ESLint |
+| `npm run embeddings:backfill` | Administrative embedding backfill; writes configured database data |
 
-The configured publisher is the GitHub repository `Hug00x/PaperGraph`. A published packaged application checks for updates about 4.5 seconds after startup. Downloads require confirmation; an update can be installed immediately or on application quit. There is no periodic update scheduler or manual update button, and a release-to-release update has not been validated in this repository.
-
-### Tests and checks
+Current suites: `test:semantic`, `test:recommendations`, `test:persistence`, `test:zones`, `test:graph-live`, `test:pdf-import`, `test:pdf-highlights`, `test:profile-avatars`, and `test:runtime`. Multi-relation layout has a test file without a dedicated npm script. Run all Node suites with:
 
 ```bash
+node --experimental-strip-types --test tests/*.test.mjs tests/*.test.cjs
 npm run lint
-npm run test:semantic
-npm run test:recommendations
-npm run test:persistence
-npm run test:pdf-import
-npm run test:pdf-highlights
-npm run test:profile-avatars
-npm run test:runtime
+npm run build
+npm audit
+node scripts/verify-desktop-bundle.cjs
 ```
 
-The tests cover embedding contracts and caching, recommendation ranking, workspace conflict handling, PDF import queue behavior, and Ollama runtime lifecycle logic. Additional scripts in `scripts/` exercise packaged runtime, desktop discovery, persistence, installer, and bundle behavior when their external prerequisites are available.
+Browser scripts: `test:zones:browser`, `test:graph-live:browser`, `test:pdf-highlights:browser`, and `test:profile-avatars:browser`. They temporarily create fixture routes and use isolated profiles/mock services. Run against a development server with Chrome/Edge installed. `GRAPH_TEST_URL` is the base URL (default port 3000); `PDF_TEST_URL` and `PROFILE_PHOTO_TEST_URL` are full fixture URLs (default ports 3011/3012). `BROWSER_PATH` overrides discovery. Fixture success does not validate deployed Supabase or an installed upgrade.
 
-PDF highlights require `supabase/migrations/202609280003_pdf_highlights.sql` followed by `supabase/migrations/202609290001_pdf_highlight_colors.sql` in the Supabase database. Existing highlights default to yellow. Highlights are separate records, not part of the PDF bytes or workspace snapshot writes. Original PDFs are identified by a SHA-256 content hash; compiled PDFs use their LaTeX source and asset identities. Replacing a document does not reuse the previous version's highlights. Local workspaces store highlights in this installation's browser storage. Comments, OCR and exporting highlights into the PDF are not included.
-
-For the isolated browser acceptance test, start `npm run dev -- --port 3011`, then run `npm run test:pdf-highlights:browser`. The test creates and removes a temporary fixture route and uses an isolated browser profile; it does not access real workspaces. Set `PDF_TEST_URL` to the full fixture URL when using a different port.
-
-Profile photos require `supabase/migrations/202610020001_profile_avatars.sql`. It creates the private avatar bucket, owner-only write policies, workspace-peer read access, and the member-avatar RPC. Redeploy the `delete-account` Edge Function to include avatar cleanup when using the packaged application. The existing member-list RPC remains compatible. To test the photo UI with isolated mock storage, start a dev server on port 3012 and run `npm run test:profile-avatars:browser`; use `PROFILE_PHOTO_TEST_URL` for another port. The test covers upload, resizing, removal, account reopening, invalid files, and recovery from a failed save without accessing real accounts.
+On Windows, use `npm.cmd` if execution policy blocks `npm.ps1`. Additional packaged-runtime, installer, and live-service scripts have prerequisites: inspect them before running against any installation/database.
 
 ## Project Structure
 
-```text
-PaperGraph/
-├── electron/       Electron main/preload processes and managed Ollama lifecycle
-├── src/app/        Next.js routes, page, server APIs, and global styles
-├── src/components/ React UI for the library, editor, graph, PDF, auth, and settings
-├── src/lib/        Workspace persistence, Supabase services, PDF, LaTeX, and academic logic
-├── supabase/       Bootstrap schema, migrations, storage policies, and account function
-├── scripts/        Runtime preparation, Electron packaging, backfill, and acceptance checks
-├── tests/          Node test suites for core workflows
-├── public/         Public application assets
-├── build/          Prepared Ollama runtime and build-time notices
-└── desktop-dist/   Generated Windows installer artifacts
-```
+| Path | Contents |
+| --- | --- |
+| `electron/` | Main/preload, Ollama manager/guardian, runtime pin |
+| `src/app/`, `src/components/` | Next.js routes and React UI |
+| `src/lib/` | Persistence, merge, collaboration, academic/asset logic |
+| `supabase/` | Bootstrap, ordered migrations, account function |
+| `scripts/`, `tests/` | Packaging/validation, Node suites, browser fixtures |
+| `public/`, `src/imagens/` | Assets and logos |
+| `build/`, `desktop-dist/` | Generated runtime/resources and installers |
 
-Important implementation entry points are `src/app/page.tsx`, `src/components/editor-pane.tsx`, `src/components/graph-pane.tsx`, `src/app/api/compile/route.ts`, `src/lib/academic/papers.ts`, and `electron/main.cjs`.
+Internal filenames, SQL columns, and test commands retain `zone`; the current UI calls the feature **Groups**. `docs/zones.md` describes an earlier implementation and is not authoritative for current overlap or Realtime behavior.
 
 ## Configuration
 
-| Variable | Required | Purpose |
-| --- | --- | --- |
-| `NEXT_PUBLIC_SUPABASE_URL` | For Supabase features | Supabase project URL |
-| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | For Supabase features | Browser-safe Supabase key |
-| `NEXT_PUBLIC_AUTH_CONFIRMATION_URL` | Optional | Public URL used for auth confirmation redirects |
-| `SUPABASE_SERVICE_ROLE_KEY` or `SUPABASE_SECRET_KEY` | Server/admin flows only | Server-side storage and account operations; never expose in the client or desktop package |
-| `SUPABASE_ACCESS_TOKEN` | Backfill only | Authenticated token used by the embedding backfill script |
-| `SUPABASE_DELETE_ACCOUNT_FUNCTION_URL` | Optional | Overrides the deployed account-deletion Edge Function URL |
-| `OLLAMA_BASE_URL` | Web semantic development | Ollama endpoint used by the Next.js server; the packaged desktop runtime overrides it |
-| `OLLAMA_EMBEDDING_MODEL` | Optional | Embedding model name; defaults to `bge-m3` |
-| `SEMANTIC_SIMILARITY_THRESHOLD` | Optional | Cosine threshold from 0 to 1; defaults to `0.50` |
-| `PAPERGRAPH_DATA_DIR` | Optional | Local workspace data directory used by the server |
-| `PAPERGRAPH_TECTONIC_PATH` | Optional | Explicit path to a Tectonic executable |
+| Variable | Purpose |
+| --- | --- |
+| `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Public cloud configuration |
+| `NEXT_PUBLIC_AUTH_CONFIRMATION_URL` | Optional confirmation redirect |
+| `SUPABASE_SERVICE_ROLE_KEY` / `SUPABASE_SECRET_KEY` | Server/admin only; never distribute private keys |
+| `SUPABASE_DELETE_ACCOUNT_FUNCTION_URL` | Optional deletion endpoint override |
+| `SUPABASE_ACCESS_TOKEN` | Backfill authenticated access |
+| `OLLAMA_BASE_URL` | Web inference endpoint; desktop supplies its bridge |
+| `OLLAMA_EMBEDDING_MODEL` | Web model, default `bge-m3`; desktop manager fixes its model |
+| `SEMANTIC_SIMILARITY_THRESHOLD` | 0..1 cosine threshold; default 0.50 |
+| `OPENALEX_API_KEY` | Optional provider credential |
+| `PAPERGRAPH_DATA_DIR`, `PAPERGRAPH_TECTONIC_PATH` | Local data/compiler overrides |
 
-`OPENALEX_API_KEY` is also recognized by the OpenAlex client when configured, but the provider can operate without it. `PAPERGRAPH_MANAGED_EMBEDDINGS` and `PAPERGRAPH_EMBEDDING_TOKEN` are internal values set by the Electron-managed runtime bridge rather than normal user configuration.
+`PAPERGRAPH_MANAGED_EMBEDDINGS` and `PAPERGRAPH_EMBEDDING_TOKEN` are internal per-launch values. Packaging removes developer environment files and emits allowlisted public settings; Electron strips private Supabase/OpenAI key variables from the child environment.
 
 ## Limitations
 
-- The managed embedding runtime and bundled LaTeX compiler target Windows x64; the repository does not provide a packaged macOS or Linux workflow.
-- PDF metadata extraction depends on a readable text layer. Scanned PDFs require OCR, which is not implemented.
-- Imported PDFs are viewer-oriented assets, not editable LaTeX sources.
-- Semantic relations depend on valid title/abstract metadata, an available model, the pgvector migration, and the configured similarity threshold.
-- OpenAlex, Supabase, and model download failures can leave an article saved with partial academic metadata; the UI reports warnings and can retry academic processing.
-- The packaged installer is not Authenticode-signed in the current repository.
-- The account-deletion Edge Function must be deployed for the corresponding cloud deletion path.
+- Windows x64 packaging; no macOS/Linux installer workflow.
+- Overlapping Groups can obstruct another Group's header. Current browser acceptance reproduces a pointer failure; later dense-graph checks were not reached.
+- No graph-path relationship labels/citation arrowheads, OCR, PDF-to-LaTeX conversion, highlight comments, or annotation export.
+- Deployed cloud schema and account-deletion function are required; network failures can leave partial metadata with warnings/retry.
+- Unsigned distribution and a real upgrade/update remain release concerns; see readiness.
+- Local HTTP routes need an authentication boundary before public web deployment.
+- Discovered-PDF retrieval lacks private-address/redirect restrictions and a download-size cap; the current audit documents this external-data risk.
 
 ## Contributing and License
 
-Contributions are welcome. Please inspect the existing implementation and tests before making changes, and run the relevant lint/test commands before opening a pull request.
-
-No root `LICENSE` file is currently present, so this repository does not declare a project license here. The packaged Ollama runtime and its dependencies retain their own upstream license and notice files in the generated runtime bundle.
+Read the implementation and run relevant checks before proposing changes. No root `LICENSE` exists, so a project license is not declared here. Bundled runtime notices do not license the PaperGraph source itself.

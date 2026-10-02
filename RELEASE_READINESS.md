@@ -1,311 +1,156 @@
-# PaperGraph Release Readiness
+﻿# PaperGraph Release Readiness
 
 ## Release Candidate
 
-- **Version:** 0.1.6
-- **Date:** 2026-09-27
-- **Platform:** Windows x64
-- **Source of truth:** `package.json`, `package-lock.json`, and generated installer metadata
+- **Version:** 0.1.9
+- **Review date:** 2026-10-02 (Europe/Lisbon)
+- **Platform:** Windows x64, NSIS desktop application
+- **Reviewed source:** `b93ecad` plus this documentation-only working-tree change
+- **Version sources:** package manifest, lockfile root/package entry, standalone manifest, packaged `app.asar/package.json`, Windows executable ProductVersion `0.1.9.0`, installer name, and `latest.yml` all agree.
+- **Actual tools:** Node 22.21.0; Next.js 16.3.6; Electron installed/packaged by this run 43.7.7; electron-builder 26.15.3. Semver ranges in package.json are not installed runtime versions.
+
+Version-reference classification: current manifests, app/installer/update metadata and these three documents are **CURRENT**. Older Git release tags, archived `.next-stale-*` output and preserved `.utmp` artifacts are **HISTORICAL**, not candidate evidence. Mixed older-version/current-readiness statements in the previous report were **STALE / INCORRECT** and were removed. Dependency versions matching the same number pattern are not PaperGraph releases. No global version substitution was used.
 
 ## Decision
 
-# NOT READY FOR RELEASE
+**NOT READY FOR RELEASE**
 
-The application source, production build, packaged executable smoke test, runtime bundle, automated tests, and isolated NSIS lifecycle test passed. The release is not ready for public distribution because the generated installer and main application executable are not Authenticode-signed, and a real upgrade from the previous public version was not executed. First-run model download from an empty user profile was also not exercised in this validation run.
+Three release gates remain open. The source builds, all 97 Node tests pass, and fresh desktop packaging/bundle checks succeed. Browser acceptance reproduces an overlapping-Group interaction failure. The installer/app are unsigned, and installed upgrade/update plus clean model-first-run acceptance have not been performed. Buildability and mocked tests do not close those release gates.
 
-## Executive Summary
+## Findings Summary and Release Blockers
 
-PaperGraph 0.1.2 is a Windows Electron application with a Next.js renderer/server, Supabase authentication and persistence, OpenAlex discovery, Tectonic LaTeX compilation, PDF import/rendering, a graph UI, and a managed Ollama/BGE-M3 embedding runtime.
+| ID | Classification | Current evidence / required resolution |
+| --- | --- | --- |
+| B1 | BLOCKER: release integrity | Fresh installer and PaperGraph.exe are `NotSigned`. Define signing/release trust and validate signed artifacts before public distribution. This is a distribution risk, not a demonstrated source-code exploit. |
+| B2 | BLOCKER: acceptance evidence | No clean installed lifecycle, previous-release upgrade/update, data/model preservation across upgrade/uninstall, or genuinely empty-model first run was executed. Validate these on an isolated Windows installation/staging feed. |
+| B3 | BLOCKER: graph acceptance | Groups browser suite fails twice at `scripts/test-zones-browser.mjs:139`: the front Group header fails the pointer hit-test after opening/closing another overlapping Group's notes. Fix/retest before treating Group interaction acceptance as complete. |
+| M1 | Major, deployment-scoped | Workspace/assets/compile HTTP routes lack complete authentication. Electron binds loopback; public Next.js deployment remains unsupported without a boundary. See security H1. |
+| M2 | Major validation gap | Deployed Auth, workspace administration, RLS/Realtime integration, account cleanup, and live OpenAlex were not exercised. Local SQL/mock coverage is not production acceptance. |
+| M3 | Major external-data risk | Publication-PDF route accepts private/loopback HTTP(S) destinations and lacks a body-size cap. A controlled local fixture reproduced retrieval with mocked authenticated workspace/OpenAlex fallback; see security M4. |
+| N1 | Minor/operational | Root project LICENSE and environment example are absent. Project licensing needs a decision. |
+| N2 | Minor/maintenance | Node tests emit MODULE_TYPELESS_PACKAGE_JSON warnings; mock graph-live browser logs also show hydration mismatch/recovery messages despite passing interaction assertions. No clean-console claim is made. |
+| N3 | Minor/test harness | Existing packaged smoke requires the status card on every launch, although the UI intentionally hides it after preparation. The original suite fails on the second launch; a temporary adjusted harness checks the implemented dismissal behavior. |
 
-The current candidate is technically buildable and the main automated coverage is healthy:
+Counts: **3 release blockers, 3 major findings/gaps, 3 minor/operational findings**. Validation gaps are not claims that the underlying feature necessarily fails.
 
-- Fresh `npm ci`: PASS after stopping stale PaperGraph development processes.
-- `npm run lint`: PASS.
-- All repository tests: PASS, 60 tests total.
-- `npm run build`: PASS.
-- `npm run desktop:build`: PASS; generated a 1.529 GB NSIS installer.
-- Packaged executable smoke test: PASS twice, including normal shutdown and no repeated model download.
-- Bundle verifier: PASS; runtime checksum, guardian, licenses and secret exclusion verified.
-- Isolated NSIS install/reinstall/uninstall acceptance: PASS.
-- `npm audit --audit-level=high`: PASS, 0 vulnerabilities.
+## Fresh Validation Results
 
-The candidate still fails the public-release bar because release trust and upgrade evidence are incomplete.
+| Check | Result | Scope / evidence |
+| --- | --- | --- |
+| Version consistency | PASS | Source and fresh artifact metadata agree on 0.1.9 |
+| Clean dependency install (`npm ci`) | NOT TESTED | Existing node_modules used; do not inherit the old clean-install result |
+| `npm.cmd run lint` | PASS | ESLint exit 0 |
+| All Node suites | PASS | 97 tests, 0 failed/skipped/cancelled; includes multi-relation layout, Groups, live graph, PDF import/highlights, avatar SQL policies, persistence, recommendations, semantics, runtime |
+| `npm.cmd run build` | PASS | Fresh production build and TypeScript checks |
+| `npm.cmd audit --json --cache .utmp/npm-cache` | PASS | Fresh registry response: 0 Critical/High/Moderate/Low; 715 total dependency entries |
+| Full desktop command | WARNING | Build/runtime prepare succeeded; initial packaging could not download Electron within restricted network; explicit no-publish packaging retry passed |
+| Desktop packaging retry | PASS | `npm.cmd exec -- electron-builder --win nsis --publish never`; fresh NSIS installer/blockmap/update metadata, no publication |
+| Fresh bundle verifier | PASS | Pinned runtime/executable checksum, guardian, notices, no bundled model, no known local private-key values; 1,286 scanned files |
+| Installer SHA-512 vs latest.yml | PASS | Fresh file size and base64 digest match metadata |
+| Authenticode | FAIL | Installer and application `NotSigned` |
+| Groups browser | FAIL | Reproduced twice, including a standalone rerun; earlier creation/movement/notes/resize/delete checks passed |
+| Graph-live browser | PASS | Two-page mock collaboration, drag/cancel, Group creation/movement/resize, viewer presence, reconnect |
+| PDF-highlights browser | PASS | Selection, colors, persistence/reload, zoom/resize/rotation, cross-page selections, read-only controls, failed-save recovery, replacement identity |
+| Profile-avatar browser | PASS | Initials, upload, 256px WebP, validation, reopen, failed save, removal; mock storage |
+| Updater mocked-event check | PASS | Temporary harness executes current main-process updater: timer, confirmation, progress mapping/clamp, completion, error/reset, destroyed-window guard, install command |
+| Publication-PDF private-address probe | FAIL security boundary | Current route fetched/returned a harmless loopback PDF; Auth/database/OpenAlex mocked, actual loopback HTTP request; no cloud writes |
+| Real update detection/download/install | NOT TESTED | No controlled earlier-release feed; mocked install command does not install an update |
+| Original packaged smoke script | FAIL | Restricted attempt timed out; permitted run reached ready and first normal shutdown, then failed the second-launch status-card assertion |
+| Adjusted packaged smoke | PASS | See packaged section; isolated existing-model profile, two launches, readiness, HTTP checks and normal shutdown |
 
-## Release Blockers
+PowerShell initially blocked `npm.ps1`; commands were rerun using npm.cmd without changing execution policy. Initial production build hit `EPERM` on a read-only OneDrive reparse point in prior output. The old `.next` tree was preserved under `.utmp/review-prior-next`, then a clean-output build passed. Previous desktop output was preserved under `.utmp/review-prior-desktop`. These are environment/output obstacles, not inherited application failures.
 
-### BLOCKER-001: Public application and installer are unsigned
+## Build / Packaging / Installer
 
-- **Severity:** BLOCKER
-- **Area:** Installer / distribution trust
-- **Description:** `Get-AuthenticodeSignature` reported `NotSigned` for:
-  - `desktop-dist/PaperGraph-Setup-0.1.2.exe`
-  - `desktop-dist/win-unpacked/PaperGraph.exe`
-- **Expected:** The public installer and application executable should be signed with the project's protected Authenticode certificate before distribution.
-- **Actual:** Electron-builder logged signing attempts, but no valid signature is present on the application or installer. The bundled Ollama executable did report `Valid`.
-- **Impact:** Windows SmartScreen/user trust, tamper detection and update authenticity are weakened. A compromised distribution path is materially harder to detect.
-- **Fix:** Configure a protected signing certificate/provider in the release environment, fail the release if the installer or app signature is absent/invalid, and verify signatures on the final published files.
-- **Status:** OPEN. No certificate was invented or added during this audit.
+The freshly generated artifact is **`desktop-dist/PaperGraph-Setup-0.1.9.exe`**, **1,533,743,856 bytes** (1.534 GB decimal; approximately 1.428 GiB). Its blockmap is **1,596,143 bytes**. `latest.yml` records 0.1.9 and the matching size/SHA-512. The installer present before review was 1,529,188,365 bytes; that is historical artifact evidence, not this run's size.
 
-### BLOCKER-002: Upgrade from the previous public version not tested
+The fresh bundle contains Next.js standalone/public/static files, Tectonic, pinned Ollama 0.34.3, the guardian, and runtime notices. BGE-M3 weights are not bundled. The verifier scans known private credential values from local configuration and selected textual/asar files; it is not an exhaustive secret or provenance audit.
 
-- **Severity:** BLOCKER
-- **Area:** Update / migration
-- **Description:** The repository contains an existing 0.1.2 release artifact, but no controlled upgrade from a prior public installation to this candidate was executed. The generated local build does not produce `latest.yml` or a blockmap unless the publish/update flow is used.
-- **Expected:** A previous version is installed, the new installer/update is applied, the app starts, user data remains accessible, and the managed model is preserved.
-- **Actual:** Only the isolated installer-validation package was installed, reinstalled and uninstalled. This is not evidence of a real upgrade path.
-- **Impact:** Release can still fail for existing users through updater metadata, resource replacement, data migration, or preserved model paths.
-- **Fix:** Install the previous public version in an isolated Windows profile, publish candidate metadata to a staging update location, execute the update, and verify startup, workspace persistence, model preservation and rollback behavior.
-- **Status:** OPEN / NOT TESTED.
+NSIS configuration is assisted, Windows x64, default per-user, editable install directory, desktop/Start Menu shortcuts, `papergraph://`, and `deleteAppDataOnUninstall: false`. These are **STATICALLY VERIFIED**. Clean install, reinstall, registration, shortcuts, actual uninstaller behavior, and persistence across uninstall are **NOT TESTED**. The existing NSIS test expects a separately built validation identity; running the production installer was not substituted for that fixture.
 
-### BLOCKER-003: Empty-profile first-run model setup not tested
+Electron-builder logs mention signtool steps; direct Windows signature checks still report `NotSigned`. Logs are not signing proof.
 
-- **Severity:** BLOCKER
-- **Area:** First execution / BGE-M3
-- **Description:** The packaged smoke test used a profile where the BGE-M3 model was already present. It verified the `starting-runtime -> checking-model -> ready` path twice and confirmed no repeated download, but did not verify a clean profile with no model and a real download.
-- **Expected:** A new user without an Ollama installation or model sees progress, completes setup, can retry a failed download, and reaches a usable application state.
-- **Actual:** The model-download path was not executed in this release pass.
-- **Impact:** First-run is a required part of the product architecture and can still fail due to download size, permissions, disk space, network interruption, or model registry behavior.
-- **Fix:** Run the packaged smoke test with a new isolated profile and record download progress, successful embedding, interrupted download recovery, offline failure/retry and disk-space/error messaging.
-- **Status:** OPEN / NOT TESTED.
+## Packaged Executable and First Run
 
-## Findings Summary
+The freshly packaged executable reached `starting-runtime`, `checking-model`, and `ready` using the existing isolated profile at `.utmp/packaged-profile`. Ollama validated a real 1,024-dimensional embedding. The original script's first launch shut down normally, but its second launch expected a status card that current UI hides when localStorage already records preparation.
 
-| ID | Severity | Area | Finding | Status |
-|---|---|---|---|---|
-| BLOCKER-001 | Blocker | Installer | Main app and installer are unsigned | Open |
-| BLOCKER-002 | Blocker | Update | Real upgrade path not tested | Open / not tested |
-| BLOCKER-003 | Blocker | First run | Empty-profile BGE-M3 download not tested | Open / not tested |
-| MAJOR-001 | Major | Release artifacts | Local `desktop:build` does not create `latest.yml`/blockmap; publish flow remains unvalidated | Open |
-| MAJOR-002 | Major | Dependencies | Clean install initially failed with `EPERM` because stale dev processes held `lightningcss`; succeeded after cleanup | Environment-specific warning |
-| MINOR-001 | Minor | Test quality | Node test runs emit `MODULE_TYPELESS_PACKAGE_JSON` warnings | Open |
-| MINOR-002 | Minor | Documentation | No changelog/release-notes draft was found for 0.1.2 | Open |
-| POLISH-001 | Polish | Packaging | Installer is approximately 1.529 GB because it includes the bundled Ollama runtime | Documented |
+A temporary copy, `.utmp/review-packaged-runtime.cjs`, accepts either the visible card or the preparation flag plus rendered page content. It retains both launches, runtime readiness, HTTP 200, unauthenticated academic-route 401, normal shutdown, and no second model download assertions. This is existing-model packaged smoke, **not a clean first run**. No tracked test/product code was changed.
 
-## Functional Testing
+**NOT TESTED:** empty model/profile setup, real download progress/interruption/offline retry, disk/permission failures, owner-crash cleanup, coexistence with a running user Ollama. Runtime Node mocks verify failure/retry/port/ownership logic, but do not replace these real lifecycle tests.
 
-| Area | Result | Evidence |
-|---|---|---|
-| Application startup | PASS (packaged smoke) | `test-packaged-runtime.cjs` launched `PaperGraph.exe` twice |
-| Authentication | NOT TESTED live | Requires a controlled Supabase test account and packaged UI flow |
-| Workspaces | PASS at persistence/RLS level; UI end-to-end NOT TESTED | 9 persistence tests passed |
-| Paper CRUD | NOT TESTED packaged UI | Static/unit coverage exists but no full packaged CRUD run |
-| LaTeX editor | NOT TESTED packaged UI | Build and route validation passed; interactive compile not executed here |
-| PDF compilation/preview | NOT TESTED packaged UI | PDF import tests passed; live compile/preview not executed here |
-| Graph | NOT TESTED packaged UI | Graph-related automated semantic tests passed |
-| Persistence | PASS at RPC/client level | Conflict, rollback, isolation and revision tests passed |
-| Embeddings | PASS contract/runtime | Semantic and runtime tests passed |
-| Ollama lifecycle | PASS packaged smoke | Runtime reached ready twice and shut down normally |
-| BGE-M3 first download | NOT TESTED | Existing model was reused |
-| Recommendations | PASS automated; live UI NOT TESTED | 20 recommendation tests passed |
-| OpenAlex failure handling | PASS automated | Offline, malformed, retry and rate-limit tests passed |
-| Updates | NOT TESTED | No previous-version upgrade run |
-| Installer lifecycle | PASS isolated validation | Install, reinstall, model preservation and uninstall passed |
-| Uninstaller data policy | PASS isolated validation | Runtime removed; model and original installation preserved |
-| Offline full app | NOT TESTED | No complete offline packaged session was run |
+## Functional Coverage
 
-## First Run
+| Area | Current implementation and tested boundary |
+| --- | --- |
+| Authentication / workspaces | Email/password, sessions, invitations, owner/editor/viewer, ownership transfer and deletion exist. PGlite validates snapshot rollback/revision/authorization and avatar/highlight policies; deployed Auth/admin workflows NOT TESTED. |
+| LaTeX / PDFs | Autosave/history, Yjs editor, Tectonic preview, sequential multi-import, first-three-page text extraction, viewer/highlights exist. Node/mock browser suites pass; fresh packaged Tectonic compile, real cloud asset flow, collaborative editor and paper CRUD acceptance NOT TESTED. |
+| Graph | Four relation types, remembered filters, compact multi-edge/fan-out are implemented. Six layout cases cover collapse, stable ordering, opposite directions, selected endpoints, filtering. Inline path labels and citation arrowheads are absent. Real UI multi-edge drag/zoom/selection acceptance NOT TESTED. |
+| Groups | Spatial membership, overlap/blended color, notes, movement with papers, resize and deletion exist. Node/SQL checks pass; browser progresses through normal operations then fails overlap hit-testing. Later 153-node density and read-only checks in that suite were NOT TESTED. |
+| Collaboration | Mock two-page graph suite passes previews, durable commit, cancel and reconnect. Hosted Supabase Realtime and real multi-account editing NOT TESTED. |
+| Avatars | 5 MiB JPG/PNG/WebP input, center-crop/256px WebP, private peer-readable bucket, owner writes/removal, member RPC and account cleanup. Local policy/browser checks pass; deployed cleanup/storage NOT TESTED. |
+| Highlights | Separate document-keyed table, member reads/editor mutation, five colors, column-limited recolor, cascade cleanup. SQL/browser checks pass; hosted deployment NOT TESTED. |
 
-- Packaged runtime startup with an existing model: PASS.
-- New profile with no model: NOT TESTED.
-- No global Ollama installation interference: code path is designed to use the bundled runtime, but a clean-machine test was not performed.
-- Runtime missing/corrupt: automated lifecycle coverage exists; packaged user-facing path not tested.
-- Interrupted download and retry: unit/runtime behavior is covered by tests, real packaged download interruption is not tested.
+## Ollama / Embeddings / Discovery
 
-## Upgrade Testing
+**STATICALLY VERIFIED:** bundled Ollama 0.34.3, official archive/checksum pin, loopback preferred port 11435 with fallback, private `%LOCALAPPDATA%\PaperGraph\ollama\models`, no PATH/global runtime adoption, cloud disabled, token bridge, owned process guardian/shutdown, missing-model pull at window startup and retry UI. App-update/uninstall model preservation is configured, not lifecycle-tested.
 
-- Previous public version installed: NOT TESTED.
-- Update metadata generation and hosted update: NOT TESTED.
-- Update preserving user data: NOT TESTED.
-- Update preserving BGE-M3 model: isolated reinstall preservation PASS, real version upgrade NOT TESTED.
-- Downgrade/rollback: NOT TESTED.
+BGE-M3 inference embeds title + two newlines + abstract, validates 1,024 finite non-zero dimensions, stores pgvector vectors/model/hash in articles, invalidates on metadata edits, and uses bounded caches. Semantic links require raw cosine >=0.50 by default with up to three neighbors per paper. Local mocked regression and packaged existing-model readiness pass; live pgvector deployment NOT TESTED.
 
-## Installer / Uninstaller
+OpenAlex DOI/ID enrichment and semantic discovery request up to 30 candidates, deduplicate seed/workspace papers, rerank locally in batches of four, and display up to 10. Missing local inference retains provider order. Adding saves published metadata and a graph node. Client throttling/retry/access failures are unit-tested; live OpenAlex, recommendation add flow, and available remote PDF retrieval NOT TESTED.
 
-- Production NSIS build: PASS.
-- Validation NSIS build: PASS.
-- Validation clean install: PASS.
-- Validation reinstall: PASS; model hash unchanged.
-- Validation uninstall: PASS; runtime removed and existing installation registration preserved.
-- Per-user configuration: confirmed in effective builder output (`perMachine=false`).
-- Production installer signature: FAIL; `NotSigned`.
-- Production installer on a clean external machine: NOT TESTED.
-- Install path with spaces: static paths are quoted/validated; full production installer test not performed.
+## Updates and External Services
 
-## LaTeX / PDF
+Current updater: packaged-only GitHub provider, one startup check after 4,500 ms, confirmation before download, real percentage/100 clamped to taskbar progress, completion/error resets, restart/install prompt, install-on-quit enabled. There is no renderer updater bridge, numeric progress panel, byte counter, periodic scheduler, or manual button. Repeated available/downloaded events have no explicit prompt-deduplication guard; behavior on repeated events/closing during download remains NOT TESTED.
 
-- Tectonic executable is packaged and unpacked: PASS via bundle verifier.
-- Compile source/asset limits and path safety: present in source and covered by lint/build.
-- Valid interactive compile and PDF preview: NOT TESTED in this release pass.
-- Syntax-error recovery: NOT TESTED interactively.
-- Repeated compile cleanup: source uses temporary directories and cleanup; runtime evidence not captured.
-- PDF import queue: PASS, 3 tests.
-- Corrupt PDF UI handling: NOT TESTED.
-- Scanned PDF OCR limitation is documented in README and is not implemented.
+The real previous-release → 0.1.9 detection, download, taskbar progress, install/restart, model/runtime replacement and data-preservation path is **NOT TESTED**. No releases/tags/uploads/production update were created.
 
-## Research Graph
+Cloud storage/auth/Realtime, OpenAlex queries, model downloads, GitHub updates and potentially uncached Tectonic resources require network access. Local inference does not imply fully offline operation. Controlled provider/network error behavior has unit/mock coverage; real service outages and offline packaged workflows were not tested.
 
-- Persistence and workspace isolation: PASS through 9 database/client tests.
-- Semantic graph calculations: PASS through semantic tests.
-- Empty/large graph rendering: NOT TESTED in packaged UI.
-- Drag/move/select/delete/relationship interactions: NOT TESTED in packaged UI.
-- Position persistence after UI restart: not verified in this run.
-
-## Ollama / Embeddings
-
-- Bundled runtime checksum: PASS.
-- Runtime guardian included: PASS.
-- Runtime listener/bridge ownership: PASS through runtime tests and packaged smoke.
-- Loopback binding: PASS by configuration/static verification.
-- Existing model reuse: PASS; second packaged run reported `downloaded: false`.
-- First model download: NOT TESTED.
-- Offline/retry/disk-full packaged UX: NOT TESTED.
-- Model preservation across validation reinstall/uninstall: PASS.
-
-## Network / External Services
-
-- OpenAlex bounded retries/rate limits/malformed responses: PASS automated.
-- Recommendations do not send private notes/full PDFs: PASS automated.
-- Supabase live auth/sync: NOT TESTED in this release pass.
-- Offline complete app behavior: NOT TESTED.
-- Timeout/retry code paths: covered for OpenAlex/runtime contracts, not all packaged UI flows.
-
-## Authentication / Sync
-
-- Database RLS, conflicts and ownership protections: PASS automated.
-- Packaged login/logout/session persistence: NOT TESTED.
-- Realtime collaboration lifecycle: NOT TESTED.
-- Session expiry and refresh: NOT TESTED.
-- Account deletion UI flow: NOT TESTED.
+README GitHub links match publisher configuration; browser fetch failed and direct HTTP checks returned 504 for both releases/issues, so public reachability is **NOT VERIFIED**. The local logo exists. No `.github/workflows` is present; remote branch/tag protections were not inspected.
 
 ## Performance
 
-- Build and packaged startup completed successfully.
-- Runtime readiness completed twice within the smoke-test timeout.
-- 100/500-node graph performance: NOT TESTED.
-- Memory/CPU idle measurements: NOT TESTED.
-- Large PDF/LaTeX/resource exhaustion behavior: NOT TESTED.
-- Installer size warning: the generated installer is approximately 1.529 GB.
+No CPU/memory/startup/FPS benchmark was measured. Group previews use batched updates and persistence occurs on commit; this is static evidence, not a performance PASS. The density test after the failed overlap assertion did not run.
 
-## Build / Packaging
+## Previous Findings Re-evaluated
 
-- Version consistency: PASS; `package.json`, lockfile and generated installer are 0.1.2.
-- Clean dependency install: PASS after stopping stale PaperGraph dev processes; initial attempt failed with Windows `EPERM` on a locked native file.
-- Production build: PASS.
-- Lint: PASS.
-- Automated tests: PASS, 60/60.
-- Dependency audit: PASS, 0 vulnerabilities.
-- Desktop NSIS build: PASS.
-- Bundle verifier: PASS (`runtimeChecksum`, guardian, licenses and no private build secrets).
-- Authenticode: FAIL for app and installer; Ollama binary valid.
-- GitHub Actions CI/release workflow: NOT FOUND.
-- Published `latest.yml`/blockmap flow: NOT TESTED; local `desktop:build` removes old generated metadata and does not recreate it.
+- Signing: still open, rechecked against fresh binaries.
+- Upgrade, clean first-run and installer acceptance: NOT TESTED now; prior PASS statements removed.
+- Missing update metadata/blockmap: obsolete; fresh artifacts contain both and metadata hashes match.
+- Prior runtime/test/installer sizes: replaced with current command evidence.
+- Private key presence: informational handling concern without demonstrated leakage; no automatic rotation/release blocker inherited.
+- Old mixed release numbers/dates: removed from current-state claims.
+- Root license/CI absence: still present; remote governance not inferred.
 
-## Known Issues
+## Release Notes Draft — 0.1.9
 
-1. The public app and installer require Authenticode signing before distribution.
-2. The real upgrade flow from the previous public version has not been validated.
-3. First-run BGE-M3 download from an empty profile has not been validated.
-4. The package is approximately 1.529 GB, which may make download and first installation burdensome.
-5. Automated Node tests emit `MODULE_TYPELESS_PACKAGE_JSON` warnings.
-6. Full packaged UI testing of authentication, workspace/paper CRUD, LaTeX/PDF interaction, graph manipulation and collaboration remains outstanding.
-7. No GitHub Actions workflow was found, so CI/release permissions, artifact publication and update metadata generation are manual/unverified.
+Historical comparison baseline: the local **v0.1.8** tag. This comparison identifies source changes, not proof of what was deployed publicly.
 
-## Release Notes Draft: 0.1.6
+- **Added:** profile photos, private workspace-peer avatar access/member RPC, avatar cleanup in account deletion, isolated avatar policy/browser coverage, built-in help, and notification/role controls.
+- **Changed:** settings/workspace/account navigation and related app dialog/presentation helpers; Electron/undici dependencies updated. The current packaged Electron resolves to 43.7.7.
+- **Fixed:** graph filter button stacking adjustment (`2553f25`); avatar storage listing support (`9457f7c`). The filter change does not close the separately reproduced Group-header overlap failure.
+- **Retained capabilities:** colored document-keyed PDF highlights, overlapping Groups/notes/live previews, remembered relation filters, and multi-relation selection fan-out exist in this candidate, but are not all newly introduced by this tag diff.
 
-### Added
+Known issues: unsigned distribution; overlapping-Group header hit-test failure; publication-PDF private-address/size boundary; stale packaged smoke assertion; installed lifecycle/real update and clean model-first-run acceptance missing. No public release was made.
 
-- Draggable research groups for organizing articles spatially on the graph.
-- Group notes panel with in-app unsaved-changes confirmation.
-- Group overlap support with blended colors for articles in shared areas.
+## Final Verification and Release Checklist
 
-### Changed
+Cross-document consistency: **PASS** for current version/date/platform, runtime/model/dimensions, discovery counts, graph/Group/PDF/avatar behavior, signing, updater progress, test evidence and release gates. Final post-edit lint/build/Node-suite/audit reruns passed. Only the three requested Markdown files are tracked changes.
 
-- Replaced zone terminology in the interface with groups.
-- Added pencil control for opening group notes and right-click editing for group settings.
-- Group notes remain inside the map and do not block the map toolbar.
-
-### Verification Status
-
-- `npm run lint`: PASS.
-- `npm run build`: PASS.
-- Zone regression tests: PASS.
-- Desktop installer signing, real upgrade testing, and empty-profile model download remain release blockers documented below.
-
-## Previous Release Notes Draft
-
-### Added
-
-- Managed Ollama runtime packaging and lifecycle validation for Windows x64.
-- Local semantic search and recommendation support using BGE-M3 when the model is available.
-
-### Changed
-
-- Workspace persistence uses atomic snapshots and revision checks.
-- The installer is per-user and preserves application data on uninstall.
-
-### Fixed
-
-- Runtime bundle integrity, model reuse and installer lifecycle checks are covered by acceptance scripts.
-
-### Known Issues
-
-- Public distribution still requires valid Authenticode signing and a staged upgrade test.
-- First-run BGE-M3 download has not yet been validated for this release candidate.
-
-## Fixes Applied During This Review
-
-No source changes were required by this release-readiness pass. Existing security edits and pre-existing working-tree changes were preserved. The main output is this evidence report and the newly generated local build artifacts.
-
-## Final Verification
-
-| Check | Result |
-|---|---|
-| `npm ci` | PASS after stale process cleanup |
-| `npm run lint` | PASS |
-| `npm run test:semantic` | PASS, 22 tests |
-| `npm run test:recommendations` | PASS, 20 tests |
-| `npm run test:persistence` | PASS, 9 tests |
-| `npm run test:pdf-import` | PASS, 3 tests |
-| `npm run test:runtime` | PASS, 6 tests |
-| `npm audit --audit-level=high` | PASS, 0 vulnerabilities |
-| `npm run build` | PASS |
-| `npm run desktop:build` | PASS |
-| `node scripts/verify-desktop-bundle.cjs` | PASS, 1,285 files checked |
-| `node scripts/test-packaged-runtime.cjs desktop-dist/win-unpacked/PaperGraph.exe` | PASS twice; ready and normal shutdown |
-| Validation NSIS installer build | PASS |
-| `scripts/test-nsis-install.ps1` | PASS: install/reinstall/uninstall |
-| Authenticode app/installer | FAIL: `NotSigned` |
-| Real public-version upgrade | NOT TESTED |
-| Empty-profile BGE-M3 first run | NOT TESTED |
-
-## Release Checklist
-
-- [x] Version correct (`0.1.2`)
-- [x] Clean dependency install completed after process cleanup
-- [x] Production build passed
-- [x] Lint passed
-- [x] Automated tests passed
-- [x] Dependency audit passed
-- [x] Installer generated
-- [x] Packaged app launched twice
-- [x] Runtime reached ready state
-- [x] Normal shutdown verified
-- [x] Bundle integrity and secret exclusion verified
-- [x] Validation install tested
-- [x] Validation reinstall tested
-- [x] Validation uninstall tested
-- [ ] Authenticode signing verified for installer and app
-- [ ] Clean install of the production installer on a separate profile
-- [ ] Upgrade from previous public version
-- [ ] Authentication flow in packaged app
-- [ ] Workspace/paper UI flows in packaged app
-- [ ] LaTeX compile/PDF preview in packaged app
-- [ ] Graph interactions and position persistence in packaged app
-- [ ] BGE-M3 first-run download
-- [ ] Offline packaged behavior
-- [ ] Published update metadata and update flow
-- [ ] No release blockers
+- [x] Source/artifact version 0.1.9 confirmed.
+- [x] Fresh lint, 97 Node tests, production build and dependency audit pass.
+- [x] Fresh desktop packaging, bundle validation, metadata size/hash checks.
+- [x] Avatar, highlights and mock live-graph browser suites pass.
+- [x] Mock updater event/progress checks; adjusted existing-model packaged smoke.
+- [ ] Groups browser acceptance passes fully; dense/read-only and multi-edge UI acceptance.
+- [ ] Clean dependency install, clean installer/reinstall/uninstall and registration.
+- [ ] Real earlier-release upgrade/update/progress/install/data/model preservation.
+- [ ] Empty-model first run/download and offline/interruption recovery.
+- [ ] Deployed authentication, workspace/paper administration, compiler, cloud policies and collaboration.
+- [ ] Live OpenAlex/recommendation acceptance and performance evidence.
+- [ ] Valid Authenticode and documented release protection.
+- [ ] No outstanding release gates.
 
 ## Recommended Next Action
 
-Do not publish 0.1.2 yet. First configure and verify Authenticode signing, then perform a staged upgrade from the previous public installer and a clean first-run test with no BGE-M3 model. Repeat the packaged smoke, installer lifecycle, and data-preservation checks after those changes. Do not create a tag or publish an update from this workspace as part of this review.
+Resolve the reproducible Group overlap failure, address publication-PDF private-address/size handling, and refresh the smoke harness's status-card expectation, then run the missing isolated installed lifecycle/model-first-run and staged signed update acceptance. Verify hosted migrations/account cleanup and public links before deciding to release. Keep publishing disabled during validation.
