@@ -30,6 +30,10 @@ declare module "https://esm.sh/@supabase/supabase-js@2" {
     ): SupabaseResult<T>;
     storage: {
       from(bucket: string): {
+        list(
+          prefix?: string,
+          options?: { limit?: number; offset?: number },
+        ): SupabaseResult<Array<{ id: string | null; name: string }> | null>;
         remove(paths: string[]): Promise<{ error: { message: string } | null }>;
       };
     };
