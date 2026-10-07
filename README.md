@@ -46,6 +46,8 @@ See [Limitations](#limitations) for the current overlapping-Group pointer issue.
 
 ### Workspaces, accounts, and settings
 
+- Optional **Deep Research** via a personal Anara account: open it from paper/selection/Group research actions, choose a preset or question and explicitly send selected metadata. Results can be resolved through OpenAlex and added to the graph; Group summaries can be appended to notes with a preview. No persistent PaperGraph chats. Live research acceptance is pending after an authentication rejection; see [validation and limits](docs/deep-research.md). **Settings → Anara** manages the separate encrypted connection.
+
 - Supabase email/password authentication, sessions, sign-out, and account deletion through a deployed Edge Function.
 - Workspaces, invitations, viewer/editor roles, ownership transfer, member management, and workspace deletion.
 - Profile photos in Account settings and member lists, with initials fallback. JPG/PNG/WebP inputs up to 5 MiB are center-cropped and re-encoded to 256 × 256 WebP.
@@ -95,7 +97,7 @@ flowchart TB
   Main --> Updates[GitHub Releases updater]
 ```
 
-Node integration is disabled; context isolation and sandboxing are enabled. Preload exposes only semantic-runtime state, retry, and subscription methods. The local workspace, asset, and compilation HTTP routes do not have a complete authentication boundary: do not expose them as a public web service. See [SECURITY_AUDIT.md](SECURITY_AUDIT.md) and [RELEASE_READINESS.md](RELEASE_READINESS.md).
+Node integration is disabled; context isolation and sandboxing are enabled. Preload exposes fixed semantic-runtime and Anara connection methods; Anara credentials remain in main. The local workspace, asset, and compilation HTTP routes do not have a complete authentication boundary: do not expose them as a public web service. See [SECURITY_AUDIT.md](SECURITY_AUDIT.md) and [RELEASE_READINESS.md](RELEASE_READINESS.md).
 
 ## Local Semantic Processing
 
@@ -118,6 +120,7 @@ The client serializes requests with 350 ms ordinary and 1,000 ms semantic spacin
 | Service | Why / when |
 | --- | --- |
 | Supabase Auth | Registration, confirmation, sign-in, refresh, sign-out |
+| Anara (optional desktop Deep Research) | Browser OAuth; explicit research requests containing selected academic metadata/questions; follow-ups include the previous summary |
 | Supabase Postgres | Shared articles, workspaces, graph, Groups, highlights, embeddings |
 | Supabase Storage | Workspace PDFs/images and private avatars |
 | Supabase Realtime | Presence, graph previews/notifications, collaborative editing |

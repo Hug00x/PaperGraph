@@ -1,5 +1,11 @@
 ﻿# PaperGraph Release Readiness
 
+## Anara addendum — 2026-10-03
+
+**Deep Research validation:** implementation now includes graph-context drawer/presets/questions, fixed privileged MCP orchestration, bounded normalization, canonical Add to Graph, duplicates, contextual follow-up and explicit Group-note append. Fifteen new Node tests, nine Anara connection tests, twenty recommendation regressions and isolated browser fixtures pass. Paper/multiple/Group, disconnected/expired, provider rate error, rendering, add/duplicate/view, Viewer gating, close/reopen and 1440px/760px layouts are tested with mocked MCP/import callbacks. Live schema discovery passed; one controlled live research start failed with `Invalid or expired token`. Fresh research-scope consent, successful live result/citations, real cancellation/quota, cloud Add to Graph and new installed packaging remain NOT TESTED. Lint/build/Electron syntax checks pass. No release was created. See [detailed evidence](docs/deep-research.md); these results do not close existing release gates.
+
+Source now includes Settings → Anara OAuth/MCP connection; previous packaged artifacts do not include it. Real-account consent, loopback acceptance, refresh/revocation, Windows safeStorage and new packaged SDK inclusion remain untested. See [Anara verification](docs/anara.md). Existing release gates remain open. Current npm audit reports 13 high findings in existing build/lint dependencies; the prior zero-advisory result is historical.
+
 ## Release Candidate
 
 - **Version:** 0.1.9

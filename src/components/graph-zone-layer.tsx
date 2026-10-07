@@ -6,6 +6,7 @@ import { isValidZoneBounds, getZoneForNodePosition, getZonesForNodePosition, mov
   ZONE_COLORS, ZONE_CONFIG, type GraphZone, type Positions, type ZoneBounds, type ZoneColor } from "@/lib/graph-zones";
 
 import { GraphZoneDrawing } from "@/components/graph-zone-drawing";
+import type { ResearchAction } from '../../electron/research-contract.cjs';
 import { graphActivityLabel, graphPreview, type GraphActivity, type GraphPeer } from "@/lib/graph-live";
 
 type Props = {
@@ -18,6 +19,7 @@ type Props = {
   onCommit: (zones: GraphZone[], positions: Positions) => void;
   graphPeers?: GraphPeer[];
   onActivity?: (activity: GraphActivity | null, committed?: boolean) => void;
+  onResearch?: (id: string, action: ResearchAction) => void;
 };
 type Gesture = { zone: GraphZone; zones: GraphZone[]; positions: Positions; clientX: number; clientY: number;
   scale: number; corner: string | null; nextZone: GraphZone; nextPositions: Positions };
@@ -43,6 +45,16 @@ export function GraphZoneLayer(props: Props) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
   useEffect(() => () => { if (frame.current !== null) cancelAnimationFrame(frame.current); }, []);
+  useEffect(() => {
+    const dismissForArticle = (event: MouseEvent) => {
+      if (!(event.target instanceof Element) || !event.target.closest('[data-article-id]')) return;
+      setDialog(null);
+      setError('');
+      onActivity?.(null);
+    };
+    document.addEventListener('contextmenu', dismissForArticle, true);
+    return () => document.removeEventListener('contextmenu', dismissForArticle, true);
+  }, [onActivity]);
   useEffect(() => {
     if (!dialog) return;
     triggerRef.current = document.activeElement as HTMLElement | null;
@@ -198,6 +210,8 @@ export function GraphZoneLayer(props: Props) {
               <path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z" />
             </svg>
           </button>}
+          {selected && count > 0 && props.onResearch && <button type="button" data-graph-control className="pointer-events-auto papergraph-ask-button"
+            onClick={() => props.onResearch?.(zone.id, 'question')}>{isEnglish ? 'Ask Papergraph' : 'Perguntar a Papergraph'}</button>}
         </div>
         {selected && canEdit && ["nw", "ne", "sw", "se"].map((corner) => <button key={corner} type="button" data-graph-control
           aria-label={`${isEnglish ? "Resize group" : "Redimensionar grupo"} ${corner}`} className="papergraph-zone-handle pointer-events-auto absolute z-[21] h-4 w-4 rounded border-2 focus-visible:outline-2 focus-visible:outline-[var(--accent)]"

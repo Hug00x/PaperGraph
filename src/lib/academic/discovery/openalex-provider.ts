@@ -1,7 +1,7 @@
 import { abstractFromInvertedIndex } from "../openalex.ts";
 import { DiscoveryError, openAlexClient } from "../openalex-client.ts";
 import { discoveryConfig as config } from "./config.ts";
-import { normalizeDoi, openAlexId, safePublicationUrl } from "./identity.ts";
+import { normalizeDoi, normalizeTitle, openAlexId, safePublicationUrl } from "./identity.ts";
 import type { PaperDiscoveryProvider, RecommendationQuery, ScientificPaper } from "./types.ts";
 
 const fields = "id,doi,title,abstract_inverted_index,publication_year,authorships,primary_location,best_oa_location,locations,cited_by_count,type,topics,referenced_works";
@@ -29,6 +29,16 @@ export function buildSemanticQuery(input: RecommendationQuery) {
   return Array.from(`${input.title.trim()}\n\n${input.abstract.trim()}`.trim()).slice(0, config.queryCharacters).join("");
 }
 export class OpenAlexDiscoveryProvider implements PaperDiscoveryProvider {
+  async resolveResearchPaper(candidate: { title: string; doi?: string | null; openAlexId?: string | null; year?: number | null }, signal?: AbortSignal) {
+    if (candidate.openAlexId || candidate.doi) return this.lookup(candidate.openAlexId || candidate.doi!, signal);
+    if (!candidate.title || candidate.title.length > 500) throw new DiscoveryError('invalid-request');
+    const params = new URLSearchParams({ 'search.title': candidate.title, 'per-page': '5', select: fields });
+    const response = await openAlexClient.fetch(`https://api.openalex.org/works?${params}`, { signal });
+    const data = record(await response.json());
+    const matches = list(data.results).map(normalizeOpenAlexWork).filter((paper): paper is ScientificPaper => Boolean(paper))
+      .filter(paper => normalizeTitle(paper.title) === normalizeTitle(candidate.title) && (!candidate.year || paper.year === candidate.year));
+    return matches.length === 1 ? matches[0] : null;
+  }
   async lookup(idOrDoi: string, signal?: AbortSignal) {
     const id = openAlexId(idOrDoi);
     const doi = normalizeDoi(idOrDoi);

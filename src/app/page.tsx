@@ -1,6 +1,8 @@
 "use client";
 
 import { AppDialog } from "@/components/app-dialog";
+import { AnaraSettings } from "@/components/anara-settings";
+import type { ResearchCandidate } from '../../electron/research-contract.cjs';
 import { ProfilePhotoControl } from "@/components/profile-photo-control";
 import { UserAvatar } from "@/components/user-avatar";
 import { useAppDialog } from "@/lib/use-app-dialog";
@@ -2871,6 +2873,24 @@ export default function Home() {
     await commitImportedArticle(payload.article, undefined, true, signal);
   }
 
+  async function addResearchArticle(candidate: ResearchCandidate, seedId: string, signal: AbortSignal) {
+    if (!canEditCurrentWorkspace || !accountWorkspaceId || !authAccessToken) throw new Error('read-only');
+    const scopedWorkspace = accountWorkspaceId;
+    const duplicate = currentArticles.find(article => samePaper({ ...candidate, externalId: candidate.openAlexId }, articleIdentity(article)));
+    if (duplicate) return duplicate.id;
+    const response = await fetch('/api/research-papers', { method: 'POST', signal,
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authAccessToken}` },
+      body: JSON.stringify({ workspaceId: scopedWorkspace, articleId: seedId, candidate }) });
+    if (!response.ok) throw new Error('Could not resolve research paper');
+    const payload = await response.json() as { existingId: string | null; article: WorkspaceArticle | null };
+    signal.throwIfAborted();
+    if (displayedWorkspaceIdRef.current !== scopedWorkspace) throw new Error('Workspace changed');
+    if (payload.existingId) return payload.existingId;
+    if (!payload.article) throw new Error('Missing canonical metadata');
+    await commitImportedArticle(payload.article, undefined, true, signal);
+    return payload.article.id;
+  }
+
   async function commitImportedArticle(importedArticle: WorkspaceArticle, uploadedPdfAsset?: WorkspaceImageAsset, keepSelection = false, signal?: AbortSignal) {
     signal?.throwIfAborted();
     if (displayedWorkspaceIdRef.current !== accountWorkspaceId) throw new Error("Workspace changed");
@@ -3388,10 +3408,12 @@ export default function Home() {
           {activeTab === "graph" ? (
             <div className="relative flex min-h-0 flex-1 overflow-hidden">
               <GraphPane
+                imageAssets={currentImageAssets}
                 key={accountWorkspaceId}
                 workspaceId={accountWorkspaceId ?? ""}
                 accessToken={authAccessToken ?? ""}
                 onAddRecommendation={addRecommendedArticle}
+                onAddResearchPaper={addResearchArticle}
                 activeArticle={activeGraphArticle}
                 articles={submittedArticles}
                 language={appLanguage}
@@ -3569,6 +3591,8 @@ export default function Home() {
                     </section>
                   </div>
                 ) : null}
+
+                {settingsSection === "anara" ? <AnaraSettings isEnglish={isEnglish} /> : null}
 
                 {settingsSection === "workspaces" ? (
                   <div className="space-y-5">

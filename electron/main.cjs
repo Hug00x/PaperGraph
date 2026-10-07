@@ -1,5 +1,8 @@
-const { app, BrowserWindow, dialog, shell, ipcMain } = require("electron");
+const { app, BrowserWindow, dialog, shell, ipcMain, safeStorage } = require("electron");
+const { AnaraConnection } = require("./anara-connection.cjs");
+const { AnaraResearch } = require('./anara-research.cjs');
 const { OllamaManager } = require("./ollama-manager.cjs");
+const { LocalChat } = require('./local-chat.cjs');
 const { spawn } = require("node:child_process");
 const { createWriteStream, existsSync } = require("node:fs");
 const { mkdir } = require("node:fs/promises");
@@ -9,6 +12,9 @@ const path = require("node:path");
 let mainWindow = null;
 let nextServerProcess = null;
 let embeddingRuntime = null;
+let localChat = null;
+let anaraConnection = null;
+let anaraResearch = null;
 let embeddingEnvironment = {};
 let trustedAppOrigin = null;
 let quitFinished = false;
@@ -356,11 +362,21 @@ function setupAutoUpdates() {
 
 async function boot() {
   try {
+    if (!anaraConnection) {
+      anaraConnection = new AnaraConnection({ directory: app.getPath("userData"), safeStorage,
+        openExternal: url => shell.openExternal(url), focus: focusMainWindow });
+      anaraResearch = new AnaraResearch(anaraConnection);
+      anaraConnection.on("state", state => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("anara:changed", state);
+      });
+      void anaraConnection.restore();
+    }
     embeddingRuntime = new OllamaManager({
       runtimeDirectory: isDev ? path.join(app.getAppPath(), "build/ollama") : path.join(process.resourcesPath, "ollama"),
       dataDirectory: path.join(process.env.LOCALAPPDATA || app.getPath("userData"), "PaperGraph", "ollama"),
     });
     embeddingEnvironment = await embeddingRuntime.prepare();
+    localChat = new LocalChat(embeddingRuntime);
     embeddingRuntime.on("state", (state) => {
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("semantic-runtime:changed", state);
     });
@@ -389,6 +405,8 @@ app.on("before-quit", (event) => {
   if (quitting) return;
   quitting = true;
   void (async () => {
+    await anaraResearch?.stop(true);
+    await anaraConnection?.stop().catch(() => {});
     await embeddingRuntime?.stop().catch(() => {});
     if (nextServerProcess && nextServerProcess.exitCode === null) {
       if (process.platform === "win32") {
@@ -411,8 +429,30 @@ function validateSender(event) {
       event.senderFrame !== mainWindow.webContents.mainFrame ||
       new URL(event.senderFrame.url).origin !== trustedAppOrigin) throw new Error("Invalid runtime IPC sender");
 }
+ipcMain.handle('local-chat:run', (event, request) => {
+  validateSender(event);
+  return localChat.run(request, update => {
+    if (!event.sender.isDestroyed()) event.sender.send('local-chat:changed', update);
+  });
+});
+ipcMain.handle('local-chat:cancel', (event, requestId) => {
+  validateSender(event);
+  if (typeof requestId !== 'string' || !/^[a-zA-Z0-9_-]{8,128}$/.test(requestId)) throw new Error('Invalid local request');
+  localChat.cancel(requestId);
+});
 ipcMain.handle("semantic-runtime:state", (event) => { validateSender(event); return embeddingRuntime.state; });
 ipcMain.handle("semantic-runtime:retry", (event) => { validateSender(event); void embeddingRuntime.start(); return embeddingRuntime.state; });
+ipcMain.handle("anara:state", event => { validateSender(event); return anaraConnection.state; });
+ipcMain.handle("anara:connect", event => { validateSender(event); return anaraConnection.connect(); });
+ipcMain.handle("anara:disconnect", async event => { validateSender(event); await anaraResearch.stop(true); return anaraConnection.disconnect(); });
+ipcMain.handle('research:availability', event => { validateSender(event); return anaraResearch.availability(); });
+ipcMain.handle('research:connect', event => { validateSender(event); return anaraConnection.connectForResearch(); });
+ipcMain.handle('research:run', (event, request) => { validateSender(event); return anaraResearch.run(request); });
+ipcMain.handle('research:cancel', (event, requestId) => {
+  validateSender(event);
+  if (typeof requestId !== 'string' || !/^[a-zA-Z0-9_-]{8,128}$/.test(requestId)) throw new Error('Invalid research request');
+  return anaraResearch.cancel(requestId);
+});
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 

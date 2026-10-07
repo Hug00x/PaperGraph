@@ -8,11 +8,15 @@ import {
   type AppLanguage,
 } from "@/lib/portuguese-labels";
 import { getFriendlyErrorMessage } from "@/lib/friendly-errors";
-import type { ArticlePosition, UnlinkedMention, WorkspaceArticle, WorkspaceRelation } from "@/lib/workspace-data";
+import type { ArticlePosition, UnlinkedMention, WorkspaceArticle, WorkspaceRelation, WorkspaceImageAsset } from "@/lib/workspace-data";
 import { getVisibleArticleTags, isImportedPdfArticle, isViewOnlyArticle } from "@/lib/article-presentation";
 import { PdfImportControl } from "@/components/pdf-import-control";
 import type { PdfImportResult } from "@/lib/pdf-import-queue";
 import { RecommendationsPanel } from "@/components/recommendations-panel";
+import { ResearchActions } from '@/components/research-actions';
+import { DeepResearchDrawer, type ResearchSession, type AddResearchPaper } from '@/components/deep-research-drawer';
+import { researchPaper } from '@/lib/deep-research-context';
+import type { ResearchAction } from '../../electron/research-contract.cjs';
 import type { RecommendedPaper } from "@/lib/academic/discovery/types";
 
 import { GraphZoneNotes } from "@/components/graph-zone-notes";
@@ -25,6 +29,8 @@ type GraphPaneProps = {
   workspaceId: string;
   accessToken: string;
   onAddRecommendation: (paper: RecommendedPaper, signal: AbortSignal) => Promise<void>;
+  onAddResearchPaper?: AddResearchPaper;
+  imageAssets?: WorkspaceImageAsset[];
   activeArticle: WorkspaceArticle | null;
   articles: WorkspaceArticle[];
   language: AppLanguage;
@@ -207,11 +213,15 @@ export function GraphPane({
   onExportArticlePdf,
   onImportPdfArticle,
   onDeleteArticle,
-  workspaceId, accessToken, onAddRecommendation,
+  workspaceId, accessToken, onAddRecommendation, onAddResearchPaper, imageAssets,
 }: GraphPaneProps) {
   const isEnglish = language === "en";
   const [draftZones, setDraftZones] = useState<GraphZone[] | null>(null);
   const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null);
+  const [selectedPaperIds, setSelectedPaperIds] = useState<string[]>([]);
+  const [researchSession, setResearchSession] = useState<ResearchSession | null>(null);
+  const [researchOpen, setResearchOpen] = useState(false);
+  const [researchRunning, setResearchRunning] = useState(false);
   const [creatingZone, setCreatingZone] = useState(false);
   const [notesZoneId, setNotesZoneId] = useState<string | null>(null);
   const notesDirtyRef = useRef(false);
@@ -253,6 +263,17 @@ export function GraphPane({
     }
     action();
   }, []);
+  useEffect(() => {
+    const dismissPanels = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (!target.closest('[data-deep-research]')) setResearchOpen(false);
+      if (!target.closest('#graph-filters, [aria-controls="graph-filters"]')) setFilterPanelOpen(false);
+      if (!contextMenuRef.current?.contains(target)) setContextMenu(null);
+    };
+    document.addEventListener('pointerdown', dismissPanels, true);
+    return () => document.removeEventListener('pointerdown', dismissPanels, true);
+  }, []);
   const openZoneNotes = useCallback((zoneId: string) => {
     requestNotesAction(() => {
       if (notesZoneId === zoneId) {
@@ -262,6 +283,7 @@ export function GraphPane({
       }
       notesDirtyRef.current = false;
       setNotesZoneId(zoneId);
+      setResearchOpen(false);
       setFilterPanelOpen(false);
       setContextMenu(null);
       setManualConnectionSourceId(null);
@@ -272,9 +294,39 @@ export function GraphPane({
     requestNotesAction(() => {
       notesDirtyRef.current = false;
       setNotesZoneId(null);
+      setSelectedPaperIds(articleId ? [articleId] : []);
       onSelectArticle(articleId);
     });
   }, [onSelectArticle, requestNotesAction]);
+
+  function togglePaperSelection(id: string) {
+    requestNotesAction(() => {
+      setNotesZoneId(null); setSelectedZoneId(null);
+      setSelectedPaperIds(ids => {
+        const current = ids.length ? ids : activeArticle ? [activeArticle.id] : [];
+        return current.includes(id) ? current.filter(value => value !== id) : [...current, id];
+      });
+    });
+  }
+  function openResearch(contextArticles: WorkspaceArticle[], action: ResearchAction, group?: GraphZone) {
+    if (!contextArticles.length) return;
+    setContextMenu(null);
+    setFilterPanelOpen(false);
+    if (researchRunning) {
+      setResearchOpen(true);
+      return;
+    }
+    const papers = contextArticles.map(article => ({ id: article.id, metadata: researchPaper(article) }));
+    if (researchSession && JSON.stringify(researchSession.papers) === JSON.stringify(papers) && researchSession.groupId === group?.id && researchSession.action === action) {
+      setResearchOpen(true); return;
+    }
+    requestNotesAction(() => {
+      setNotesZoneId(null); setContextMenu(null);
+      setResearchSession({ id: crypto.randomUUID(), kind: group ? 'group' : papers.length > 1 ? 'selection' : 'paper',
+        groupId: group?.id, groupName: group?.name, papers, action });
+      setResearchOpen(true);
+    });
+  }
 
   useLayoutEffect(() => {
     const menu = contextMenuRef.current;
@@ -1049,7 +1101,8 @@ export function GraphPane({
   );
 
   return (
-    <section className="papergraph-graph-pane relative isolate min-h-0 w-full flex-1 overflow-hidden">
+    <section className="papergraph-graph-pane relative isolate flex min-h-0 w-full flex-1 overflow-hidden">
+      <div className="relative min-w-0 flex-1 overflow-hidden">
       {notesZone && <GraphZoneNotes key={notesZone.id} zone={notesZone} canEdit={canEdit} isEnglish={isEnglish}
         onDirtyChange={(dirty) => { notesDirtyRef.current = dirty; }}
         onRequestClose={() => requestNotesAction(() => { notesDirtyRef.current = false; setNotesZoneId(null); })} onSave={(notes) => {
@@ -1069,7 +1122,7 @@ export function GraphPane({
         </div>
       </div>}
 
-      <aside className="papergraph-graph-panel absolute bottom-5 left-5 top-5 z-50 flex max-h-[calc(100%_-_2.5rem)] w-[20rem] flex-col overflow-hidden rounded-[24px] border border-[var(--border)] p-4 shadow-[0_18px_50px_rgba(0,0,0,0.18)] backdrop-blur-xl">
+      <aside className={`papergraph-graph-panel absolute bottom-5 left-5 top-5 z-50 ${researchOpen ? 'hidden xl:flex' : 'flex'} max-h-[calc(100%_-_2.5rem)] w-[20rem] flex-col overflow-hidden rounded-[24px] border border-[var(--border)] p-4 shadow-[0_18px_50px_rgba(0,0,0,0.18)] backdrop-blur-xl`}>
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
@@ -1152,7 +1205,8 @@ export function GraphPane({
               <button
                 key={article.id}
                 type="button"
-                onClick={() => {
+                onClick={(event) => {
+                  if (event.shiftKey || event.ctrlKey || event.metaKey) { togglePaperSelection(article.id); return; }
                   const nextArticleId = isActive ? null : article.id;
 
                   setContextMenu(null);
@@ -1252,6 +1306,10 @@ export function GraphPane({
           graphPeers={graphPeers} onActivity={onGraphActivity}
           selectedId={selectedZoneId} onSelect={setSelectedZoneId} viewport={viewport} size={containerSize}
           canEdit={canEdit} isEnglish={isEnglish} creating={creatingZone}
+          onResearch={(id, action) => {
+            const group = zones.find(zone => zone.id === id);
+            if (group) openResearch(articles.filter(article => getZonesForNodePosition(articlePositions[article.id], [group]).length > 0), action, group);
+          }}
           onFinishDrawing={() => setCreatingZone(false)} onOpenNotes={openZoneNotes}
           candidateId={draggingArticleId ? getZoneForNodePosition(displayedPositions[draggingArticleId], displayedZones)?.id ?? null : null}
           onPreview={(nextZones, nextPositions) => { setDraftZones(nextZones); setDraftPositions(nextPositions); }}
@@ -1456,6 +1514,7 @@ export function GraphPane({
                   }
 
                   event.preventDefault();
+                  if (event.shiftKey || event.ctrlKey || event.metaKey) { togglePaperSelection(article.id); return; }
                   stopViewportAnimation();
                   setContextMenu(null);
                   setSelectedZoneId(null);
@@ -1495,11 +1554,20 @@ export function GraphPane({
                 onContextMenu={(event) => {
                   event.preventDefault();
                   const bounds = containerRef.current?.getBoundingClientRect();
-                  setShowContextRelations(false);
-                  setContextMenu({
-                    articleId: article.id,
+                  const position = {
                     x: event.clientX - (bounds?.left ?? 0),
                     y: event.clientY - (bounds?.top ?? 0),
+                  };
+                  requestNotesAction(() => {
+                    notesDirtyRef.current = false;
+                    setNotesZoneId(null);
+                    setSelectedZoneId(null);
+                    setResearchOpen(false);
+                    setFilterPanelOpen(false);
+                    setCreatingZone(false);
+                    setManualConnectionSourceId(null);
+                    setShowContextRelations(false);
+                    setContextMenu({ articleId: article.id, ...position });
                   });
                 }}
                 className={`group absolute z-40 flex w-[9rem] flex-col items-center gap-2 text-center transition-transform ${
@@ -1517,7 +1585,7 @@ export function GraphPane({
                     isActive
                       ? "is-active border-[var(--accent)] text-white shadow-[0_0_32px_rgba(142,231,255,0.2)]"
                       : "border-[var(--border)] text-white/90 group-hover:border-[var(--accent)]"
-                  } ${
+                  } ${selectedPaperIds.includes(article.id) ? 'ring-2 ring-[var(--accent)]' : ''} ${
                     activeManualConnectionSourceId === article.id
                       ? "ring-2 ring-[rgba(142,231,255,0.45)]"
                       : ""
@@ -1571,7 +1639,11 @@ export function GraphPane({
             className="papergraph-graph-menu absolute z-50 w-64 overflow-y-auto overscroll-contain rounded-[18px] border border-[var(--border)] p-2 shadow-[0_16px_40px_rgba(0,0,0,0.24)] backdrop-blur-xl"
             style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }}
           >
-            {!showContextRelations ? <>
+            {!showContextRelations ? <div className="flex flex-col gap-2 p-1">
+            <ResearchActions isEnglish={isEnglish}
+              gaps={selectedPaperIds.includes(contextMenu.articleId) && selectedPaperIds.length > 1}
+              onChoose={action => openResearch(articles.filter(article => selectedPaperIds.includes(contextMenu.articleId) && selectedPaperIds.length > 1
+                ? selectedPaperIds.includes(article.id) : article.id === contextMenu.articleId), action)} />
             {canEditContextMenuArticle ? (
               <button
                 type="button"
@@ -1579,7 +1651,7 @@ export function GraphPane({
                   onEditArticle(contextMenu.articleId);
                   setContextMenu(null);
                 }}
-                className="w-full rounded-[14px] bg-[var(--accent)] px-3 py-2 text-sm font-semibold text-[#041016] transition-transform hover:-translate-y-0.5"
+                className="w-full rounded-[14px] bg-[var(--accent)] px-3 py-2 text-sm font-semibold text-[#041016] transition-colors hover:brightness-110"
               >
                 {isEnglish ? "Edit article" : "Editar artigo"}
               </button>
@@ -1591,7 +1663,7 @@ export function GraphPane({
                 void onExportArticlePdf(contextMenu.articleId);
                 setContextMenu(null);
               }}
-              className={`${canEditContextMenuArticle ? "mt-2 " : ""}w-full rounded-[14px] border border-[var(--border)] bg-white/5 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-white/10`}
+              className="w-full rounded-[14px] border border-[var(--border)] bg-white/5 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-white/10"
             >
               {contextMenuArticle && isViewOnlyArticle(contextMenuArticle) && !isImportedPdfArticle(contextMenuArticle)
                 ? (isEnglish ? "View article" : "Visualizar artigo")
@@ -1606,7 +1678,7 @@ export function GraphPane({
                   setDeleteArticleError(null);
                   setContextMenu(null);
                 }}
-                className="mt-2 w-full rounded-[14px] border border-red-300/30 bg-red-500/15 px-3 py-2 text-sm font-semibold text-red-100 transition-colors hover:bg-red-500/25"
+                className="w-full rounded-[14px] border border-red-300/30 bg-red-500/15 px-3 py-2 text-sm font-semibold text-red-100 transition-colors hover:bg-red-500/25"
               >
                 {isEnglish ? "Remove article" : "Remover artigo"}
               </button>
@@ -1614,12 +1686,12 @@ export function GraphPane({
 
             {contextMenuRemovableRelations.length > 0 ? (
               <button type="button" onClick={() => setShowContextRelations(true)}
-                className="mt-2 flex w-full items-center justify-between gap-3 rounded-[14px] border border-[var(--border)] px-3 py-2 text-sm font-semibold text-[var(--foreground)] hover:bg-white/10">
+                className="flex w-full items-center justify-between gap-3 rounded-[14px] border border-[var(--border)] px-3 py-2 text-sm font-semibold text-[var(--foreground)] hover:bg-white/10">
                 <span>{isEnglish ? "Remove link..." : "Remover liga\u00e7\u00e3o..."}</span>
                 <span className="text-xs text-[var(--muted)]">{contextMenuRemovableRelations.length} &rsaquo;</span>
               </button>
             ) : null}
-            </> : <>
+            </div> : <>
               <button type="button" onClick={() => setShowContextRelations(false)}
                 className="mb-2 w-full rounded-lg px-3 py-2 text-left text-sm text-[var(--muted)] hover:bg-white/10">
                 &lsaquo; {isEnglish ? "Back" : "Voltar"}
@@ -1648,7 +1720,12 @@ export function GraphPane({
 
       </div>
 
-      {activeArticle ? (
+      {selectedPaperIds.length > 1 && !researchOpen && !contextMenu && <div data-graph-control className="papergraph-graph-panel absolute right-5 top-5 z-50 w-72 rounded-2xl border border-[var(--border)] p-3">
+        <p className="mb-2 text-xs">{selectedPaperIds.length} {isEnglish ? 'selected papers' : 'artigos selecionados'}</p>
+        <ResearchActions isEnglish={isEnglish} gaps onChoose={action => openResearch(articles.filter(article => selectedPaperIds.includes(article.id)), action)} />
+        <button type="button" className="mt-2 text-xs underline" onClick={() => setSelectedPaperIds([])}>{isEnglish ? 'Clear selection' : 'Limpar seleção'}</button>
+      </div>}
+      {activeArticle && !researchOpen && !contextMenu && selectedPaperIds.length < 2 ? (
         <aside
           data-graph-control
           className="papergraph-graph-panel absolute bottom-5 right-5 z-50 w-[min(23rem,calc(100%_-_2.5rem))] max-h-[calc(100%_-_2.5rem)] overflow-hidden rounded-[24px] border border-[var(--border)] p-4 shadow-[0_18px_50px_rgba(0,0,0,0.2)] backdrop-blur-xl"
@@ -1847,6 +1924,23 @@ export function GraphPane({
           </div>
         </div>
       ) : null}
+      </div>
+      {researchSession && <DeepResearchDrawer key={researchSession.id} session={researchSession} open={researchOpen} imageAssets={imageAssets}
+        en={isEnglish} articles={articles} workspaceId={workspaceId} accessToken={accessToken} canEdit={canEdit}
+        groupNotes={zones.find(zone => zone.id === researchSession.groupId)?.notes}
+        onClose={() => {
+          setResearchOpen(false);
+          requestAnimationFrame(() => containerRef.current?.querySelector<HTMLButtonElement>(`[data-article-id="${researchSession.papers[0]?.id}"]`)?.focus());
+        }} onRunningChange={setResearchRunning}
+        onView={id => { setResearchOpen(false); selectArticle(id); centerViewportOnArticle(id); }}
+        onAdd={onAddResearchPaper} onSaveNotes={summary => {
+          if (!canEdit) return;
+          const group = zones.find(zone => zone.id === researchSession.groupId);
+          if (!group) return;
+          const notes = [group.notes, summary].filter(Boolean).join('\n\n');
+          if (notes.length > 20000) return;
+          onZonesChange(zones.map(zone => zone.id === group.id ? { ...zone, notes } : zone), articlePositions);
+        }} />}
     </section>
   );
 }

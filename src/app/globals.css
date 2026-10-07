@@ -745,3 +745,19 @@ a {
 .semantic-runtime-status progress { display: block; width: 100%; accent-color: #93e7fa; margin: 10px 0; }
 .semantic-runtime-status small { color: #bdd0d9; }
 .semantic-runtime-retry { margin-top: 10px; border-radius: 8px; padding: 8px 14px; background: #93e7fa; color: #17242d; cursor: pointer; }
+
+.deep-research-drawer { width: 420px; max-width: 90vw; flex-shrink: 0; z-index: 80; backdrop-filter: blur(16px); }
+@media (max-width: 1023px) {
+  .deep-research-drawer { position: absolute; inset: 0 0 0 auto; width: min(420px, calc(100% - 16px)); }
+}
+
+.papergraph-ask-button { background: #ffffff; color: #12384b; border: 1px solid #8ee7ff; border-radius: 14px; padding: .65rem .9rem; font-size: .8rem; font-weight: 650; cursor: pointer; }
+.papergraph-ask-button:hover { background: #dcf6ff; }
+.papergraph-ask-button:focus-visible, .papergraph-research-mode button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.papergraph-ask-button:disabled { opacity: .45; cursor: not-allowed; }
+html[data-papergraph-theme="light"] .papergraph-ask-button { background: #12384b; color: #ffffff; border-color: #12384b; }
+html[data-papergraph-theme="light"] .papergraph-ask-button:hover { background: #1b5068; }
+.papergraph-research-mode { display: flex; gap: 4px; padding: 4px; border: 1px solid var(--border); border-radius: 14px; background: var(--background); }
+.papergraph-research-mode button { flex: 1; border-radius: 10px; padding: .55rem .7rem; color: var(--muted); font-size: .8rem; cursor: pointer; }
+.papergraph-research-mode button[aria-pressed="true"] { background: #dcf6ff; color: #12384b; font-weight: 650; }
+.papergraph-research-mode button:disabled { cursor: not-allowed; opacity: .5; }

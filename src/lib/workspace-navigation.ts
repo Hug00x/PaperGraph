@@ -1,7 +1,7 @@
 import type { AppLanguage } from "./portuguese-labels.ts";
 import type { WorkspaceTab } from "./workspace-ui-state.ts";
 
-export const settingsSections = ["general", "workspaces", "help", "account"] as const;
+export const settingsSections = ["general", "workspaces", "anara", "help", "account"] as const;
 export type SettingsSection = (typeof settingsSections)[number];
 export function getWorkspaceNavigationLabels(appLanguage: AppLanguage, shouldUseArticleViewer: boolean) {
   function getTabLabel(tab: WorkspaceTab) {
@@ -57,6 +57,7 @@ export function getWorkspaceNavigationLabels(appLanguage: AppLanguage, shouldUse
   }
 
   function getSettingsSectionLabel(section: SettingsSection) {
+    if (section === "anara") return "Anara";
     if (appLanguage === "en") {
       switch (section) {
         case "general":
@@ -83,6 +84,7 @@ export function getWorkspaceNavigationLabels(appLanguage: AppLanguage, shouldUse
   }
 
   function getSettingsSectionDescription(section: SettingsSection) {
+    if (section === "anara") return appLanguage === "en" ? "Connected service" : "Serviço ligado";
     if (appLanguage === "en") {
       switch (section) {
         case "general":

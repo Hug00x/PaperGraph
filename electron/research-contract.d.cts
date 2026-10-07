@@ -1,0 +1,17 @@
+export type ResearchAction = 'related' | 'newer' | 'contradictions' | 'gaps' | 'question';
+export type ResearchPaper = { title: string; doi: string | null; openAlexId: string | null; year: number | null; abstract: string; authors: string[] };
+export type ResearchContext = { kind: 'paper' | 'selection' | 'group'; groupName?: string; papers: ResearchPaper[] };
+export type ResearchCandidate = Omit<ResearchPaper, 'abstract'> & { url: string; relevanceExplanation: string };
+export type ResearchResult = { summary: string; papers: ResearchCandidate[]; sources: { title: string; url: string }[]; truncated: boolean };
+export type ResearchRequest = { requestId: string; action: ResearchAction; question: string; context: ResearchContext; previousRequestId?: string; language?: 'pt' | 'en' };
+export const LIMITS: { papers: number; title: number; abstract: number; question: number; prompt: number; responseBytes: number; summary: number; candidates: number; sources: number; followUps: number; previous: number };
+export const ACTIONS: readonly ResearchAction[];
+export const TASKS: Record<ResearchAction, string>;
+export function validateRequest(raw: unknown): ResearchRequest;
+export function buildRequest(raw: unknown, previous?: string): ResearchRequest & { prompt: string };
+export function normalizeResult(raw: unknown): ResearchResult;
+export function toolData(raw: unknown): unknown;
+export function errorCode(raw: unknown): string;
+export function safeUrl(value: unknown): string;
+export function doi(value: unknown): string | null;
+export function openAlex(value: unknown): string | null;
