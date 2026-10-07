@@ -57,19 +57,40 @@ $SourcePath = ${toPowerShellString(source)}
 $TargetPath = ${toPowerShellString(target)}
 Add-Type -AssemblyName System.Drawing
 $size = 256
-$sourceImage = [System.Drawing.Image]::FromFile($SourcePath)
+$sourceImage = [System.Drawing.Bitmap]::FromFile($SourcePath)
+$left = $sourceImage.Width
+$top = $sourceImage.Height
+$right = -1
+$bottom = -1
+for ($row = 0; $row -lt $sourceImage.Height; $row++) {
+  for ($column = 0; $column -lt $sourceImage.Width; $column++) {
+    if ($sourceImage.GetPixel($column, $row).A -gt 0) {
+      $left = [Math]::Min($left, $column)
+      $top = [Math]::Min($top, $row)
+      $right = [Math]::Max($right, $column)
+      $bottom = [Math]::Max($bottom, $row)
+    }
+  }
+}
+if ($right -lt $left) {
+  $sourceImage.Dispose()
+  throw 'Windows icon source is fully transparent.'
+}
+$sourceWidth = $right - $left + 1
+$sourceHeight = $bottom - $top + 1
 $bitmap = New-Object System.Drawing.Bitmap $size, $size
 $bitmap.SetResolution(96, 96)
 $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
 $graphics.Clear([System.Drawing.Color]::Transparent)
 $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
 $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
-$scale = [Math]::Min($size / $sourceImage.Width, $size / $sourceImage.Height) * 0.9
-$drawWidth = [int][Math]::Round($sourceImage.Width * $scale)
-$drawHeight = [int][Math]::Round($sourceImage.Height * $scale)
+$scale = [Math]::Min($size / $sourceWidth, $size / $sourceHeight) * 0.98
+$drawWidth = [int][Math]::Round($sourceWidth * $scale)
+$drawHeight = [int][Math]::Round($sourceHeight * $scale)
 $x = [int][Math]::Round(($size - $drawWidth) / 2)
 $y = [int][Math]::Round(($size - $drawHeight) / 2)
-$graphics.DrawImage($sourceImage, $x, $y, $drawWidth, $drawHeight)
+$destinationRectangle = New-Object System.Drawing.Rectangle $x, $y, $drawWidth, $drawHeight
+$graphics.DrawImage($sourceImage, $destinationRectangle, $left, $top, $sourceWidth, $sourceHeight, [System.Drawing.GraphicsUnit]::Pixel)
 [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($TargetPath)) | Out-Null
 $bitmap.Save($TargetPath, [System.Drawing.Imaging.ImageFormat]::Png)
 $graphics.Dispose()

@@ -1,5 +1,9 @@
 ﻿# PaperGraph Release Readiness
 
+## 0.1.10 preparation — 2026-10-07
+
+The current source candidate is **0.1.10**. See [candidate notes and validation](docs/releases/0.1.10.md). The 0.1.9 review below is retained as historical evidence; its artifact metadata and passing checks do not validate 0.1.10. Outstanding acceptance items remain open unless explicitly closed in the candidate notes.
+
 ## Anara addendum — 2026-10-03
 
 **Deep Research validation:** implementation now includes graph-context drawer/presets/questions, fixed privileged MCP orchestration, bounded normalization, canonical Add to Graph, duplicates, contextual follow-up and explicit Group-note append. Fifteen new Node tests, nine Anara connection tests, twenty recommendation regressions and isolated browser fixtures pass. Paper/multiple/Group, disconnected/expired, provider rate error, rendering, add/duplicate/view, Viewer gating, close/reopen and 1440px/760px layouts are tested with mocked MCP/import callbacks. Live schema discovery passed; one controlled live research start failed with `Invalid or expired token`. Fresh research-scope consent, successful live result/citations, real cancellation/quota, cloud Add to Graph and new installed packaging remain NOT TESTED. Lint/build/Electron syntax checks pass. No release was created. See [detailed evidence](docs/deep-research.md); these results do not close existing release gates.

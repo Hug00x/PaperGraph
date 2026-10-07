@@ -10,7 +10,7 @@
 
 ## Overview
 
-PaperGraph **0.1.9** combines LaTeX writing, PDF collection, a research graph, spatial Groups, academic discovery, and shared workspaces. OpenAlex supplies metadata and discovery candidates; local BGE-M3 inference helps connect and rank papers. The packaged target is Windows x64; Next.js development mode is also available.
+PaperGraph **0.1.10** combines LaTeX writing, PDF collection, a research graph, spatial Groups, academic discovery, and shared workspaces. OpenAlex supplies metadata and discovery candidates; local BGE-M3 inference helps connect and rank papers. The packaged target is Windows x64; Next.js development mode is also available.
 
 ## Features
 
@@ -135,7 +135,7 @@ Inference is local, but shared-workspace metadata and vectors are stored in Supa
 
 ## Installation
 
-1. Download `PaperGraph-Setup-0.1.9.exe` from the releases page.
+1. Download `PaperGraph-Setup-0.1.10.exe` from the releases page.
 2. Run the Windows x64 NSIS installer and choose an install directory if needed.
 3. Launch from the desktop or Start Menu; initial account/model setup requires internet access.
 
