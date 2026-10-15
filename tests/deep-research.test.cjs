@@ -139,6 +139,14 @@ test('not-connected, expired, quota, rate-limit and unavailable are fixed high-l
   assert.equal(errorCode({ status: 429 }), 'rate-limited');
 });
 
+test('actual opaque Anara execution failure suggests checking balance without claiming quota exhaustion', async t => {
+  const f = fixture(t, input => input.name === 'anara_spawn_agent' ? tool({ runId }) : tool({
+    status: 'failed', failure: { message: 'Research execution failed before completion.', code: 'execution_failed' },
+  }));
+  assert.equal((await f.research.run(request())).error, 'execution-failed');
+  assert.equal(errorCode({ code: 'execution_failed', message: 'Insufficient credits' }), 'usage-limit');
+});
+
 test('cancellation is reported only after a remote terminal state; stale requests cannot start a second run', async t => {
   let cancelled = false;
   const f = fixture(t, input => {

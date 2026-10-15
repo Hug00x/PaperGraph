@@ -82,7 +82,7 @@ class AnaraResearch {
       const phase = status?.status;
       if (phase === 'completed') break;
       if (phase === 'cancelled' || phase === 'canceled') fail('cancelled');
-      if (phase === 'failed') fail(errorCode({ message: status.failure?.message || status.error?.message || 'request-failed' }));
+      if (phase === 'failed') fail(errorCode(status.failure || status.error));
       if (!['queued', 'running', 'pending', 'cancelling', 'canceling'].includes(phase)) fail('invalid-response');
       await delay(this.pollMs, signal);
     }

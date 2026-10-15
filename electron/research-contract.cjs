@@ -143,12 +143,14 @@ function normalizeResult(raw) {
   return { summary, papers, sources, truncated: (typeof report.summary === 'string' ? report.summary.length : plain.length) > LIMITS.summary };
 }
 function errorCode(error) {
+  if (error?.code === 'execution-failed') return 'execution-failed';
   if (typeof error?.code === 'string' && ['not-connected', 'authentication-expired', 'provider-unavailable', 'rate-limited', 'usage-limit', 'request-failed', 'invalid-response', 'invalid-request', 'cancelled', 'cancel-unconfirmed', 'capability-unavailable', 'busy', 'follow-up-limit'].includes(error.code)) return error.code;
   const message = String(error?.message || '');
   const status = error?.status || error?.statusCode || error?.data?.status;
   if (status === 401 || /invalid or expired token|invalid_grant|unauthorized|authentication|token expired/i.test(message)) return 'authentication-expired';
   if (status === 429 || /rate.?limit|too many requests/i.test(message)) return 'rate-limited';
   if (status === 402 || /quota|usage.?limit|credit|payment.?required|limit.*reached/i.test(message)) return 'usage-limit';
+  if (error?.code === 'execution_failed') return 'execution-failed';
   if (error?.name === 'TimeoutError') return 'provider-unavailable';
   if (error?.name === 'AbortError') return 'cancelled';
   if (status >= 500 || /fetch failed|network|unavailable|timeout|timed out/i.test(message)) return 'provider-unavailable';

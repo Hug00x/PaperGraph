@@ -26,10 +26,11 @@ export type ResearchSession = { id: string; kind: ResearchContext['kind']; group
 export type AddResearchPaper = (candidate: ResearchCandidate, seedId: string, signal: AbortSignal) => Promise<string>;
 function errorText(code: string, en: boolean) {
   const messages: Record<string, [string, string]> = {
+    'execution-failed': ['Anara could not complete the research and did not provide a specific reason. Check whether your Anara account has tokens/credits available before trying again.', 'A Anara não conseguiu concluir a investigação e não indicou o motivo específico. Verifica se a tua conta Anara tem tokens/créditos disponíveis antes de tentares novamente.'],
     'authentication-expired': ['Reconnect Anara to authorize research. Your draft is preserved.', 'Volta a ligar a Anara para autorizar a investigação. O rascunho foi preservado.'],
     'not-connected': ['Connect Anara to research this selection.', 'Liga a Anara para investigar esta seleção.'],
     'rate-limited': ['Anara is receiving too many requests. Try again later.', 'A Anara está a receber demasiados pedidos. Tenta mais tarde.'],
-    'usage-limit': ['Your current Anara usage limit has been reached.', 'Foi atingido o limite de utilização da tua conta Anara.'],
+    'usage-limit': ['Your Anara account has run out of tokens/credits or reached its usage limit. Check your balance and plan in Anara before trying again.', 'A tua conta Anara ficou sem tokens/créditos ou atingiu o limite de utilização. Consulta o saldo e o plano na Anara antes de tentares novamente.'],
     'provider-unavailable': ['Anara is temporarily unavailable. Retry when your connection is restored.', 'A Anara está temporariamente indisponível. Tenta novamente quando a ligação estiver disponível.'],
     'invalid-response': ['The research response could not be read safely.', 'Não foi possível ler o resultado da investigação em segurança.'],
     'capability-unavailable': ['This Anara connection does not expose the supported research tools. Reconnect or try later.', 'Esta ligação Anara não disponibiliza as ferramentas de investigação suportadas. Volta a ligar ou tenta mais tarde.'],
