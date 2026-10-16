@@ -1,9 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createBrowserUuid } from "./browser-uuid.ts";
 
-export const profileAvatarBucket = "papergraph-avatars";
-export const maxProfilePhotoBytes = 5 * 1024 * 1024;
-export const avatarUrlLifetime = 60 * 60;
+const profileAvatarBucket = "papergraph-avatars";
+const maxProfilePhotoBytes = 5 * 1024 * 1024;
+const avatarUrlLifetime = 60 * 60;
 
 export function validateProfilePhoto(file: Pick<File, "size" | "type">) {
   if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {

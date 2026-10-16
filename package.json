@@ -16,6 +16,8 @@
     "desktop:publish": "npm run desktop:clean && npm run build && npm run desktop:prepare && electron-builder --win nsis --publish always",
     "start": "next start",
     "lint": "eslint",
+    "test:help": "node --experimental-strip-types --test tests/help.test.mjs",
+    "test:help:browser": "node scripts/test-help-browser.mjs",
     "embeddings:backfill": "node --experimental-strip-types --env-file=.env.local scripts/backfill-embeddings.mjs",
     "test:semantic": "node --experimental-strip-types --test tests/semantic.test.mjs",
     "test:recommendations": "node --experimental-strip-types --test tests/recommendations.test.mjs",

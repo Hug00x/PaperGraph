@@ -1,5 +1,7 @@
 "use client";
 
+import { relationPairKey } from "@/lib/article-links";
+
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   getArticleStatusLabel,
@@ -110,10 +112,6 @@ function isGraphRelationFilterType(
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
-}
-
-function relationPairKey(fromArticleId: string, toArticleId: string) {
-  return [fromArticleId, toArticleId].sort().join("::");
 }
 
 function defaultArticlePosition(articleIndex: number) {

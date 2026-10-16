@@ -1,9 +1,11 @@
 "use client";
 
+import { WorkspaceHeader } from "@/components/workspace-header";
+import { GeneralSettings, type AppTheme } from "@/components/general-settings";
 import { AppDialog } from "@/components/app-dialog";
 import { AnaraSettings } from "@/components/anara-settings";
 import type { ResearchCandidate } from '../../electron/research-contract.cjs';
-import { ProfilePhotoControl } from "@/components/profile-photo-control";
+import { AccountSettings } from "@/components/account-settings";
 import { UserAvatar } from "@/components/user-avatar";
 import { useAppDialog } from "@/lib/use-app-dialog";
 import { getWorkspaceNavigationLabels, settingsSections, type SettingsSection } from "@/lib/workspace-navigation";
@@ -31,7 +33,8 @@ import {
   formatInviteStatus,
 } from "@/lib/workspace-presentation";
 import { WorkspaceRoleToggle } from "@/components/workspace-role-toggle";
-import { HelpSection } from "@/components/help-section";
+import { HelpSection, type HelpLocation } from "@/components/help-section";
+import type { HelpDestination } from "@/lib/help/content";
 import { NotificationBadge } from "@/components/notification-badge";
 import {
   type WorkspacePresenceMode,
@@ -77,7 +80,6 @@ import { articleIdentity, samePaper } from "@/lib/academic/discovery/identity";
 import type { RecommendedPaper } from "@/lib/academic/discovery/types";
 import deleteButtonImage from "@/imagens/Delete_button.png";
 import deleteButtonImageInverted from "@/imagens/Delete_button_inverted.png";
-import paperGraphLogoText from "@/imagens/PapergraghTexto.png";
 import type { AppLanguage } from "@/lib/portuguese-labels";
 import {
   defaultSnapshot,
@@ -164,7 +166,6 @@ type AcademicRelationRefreshResult = {
   status?: string;
 };
 type AuthMode = "sign-in" | "sign-up";
-type AppTheme = "dark" | "light";
 type UserProfileRow = {
   display_name: string | null;
 };
@@ -208,6 +209,8 @@ export default function Home() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<WorkspaceTab>(() => getStoredWorkspaceUiState(null).activeTab ?? "graph");
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("general");
+  const [helpLocation, setHelpLocation] = useState<HelpLocation>({ kind: "home" });
+  const [helpReturn, setHelpReturn] = useState<{ tab: WorkspaceTab; section: SettingsSection } | null>(null);
   const [appLanguage, setAppLanguage] = useState<AppLanguage>(() => {
     if (typeof window === "undefined") {
       return "pt";
@@ -1372,6 +1375,23 @@ export default function Home() {
     activateTab(tab);
   }
 
+  function openHelp(guideId: string) {
+    setHelpReturn({ tab: activeTab, section: settingsSection });
+    setHelpLocation({ kind: "guide", id: guideId });
+    setSettingsSection("help");
+    requestTabChange("settings");
+  }
+
+  function navigateFromHelp(destination: HelpDestination) {
+    if (destination === "graph" || destination === "drafts") {
+      // Reuse the normal setup/permission gates; never create content from Help.
+      requestTabChange(isMainTabDisabled(destination) ? "settings" : destination);
+      if (isMainTabDisabled(destination)) setSettingsSection("workspaces");
+    } else {
+      setSettingsSection(destination);
+    }
+  }
+
   async function confirmWorkspaceChange() {
     if (!hasPendingEditorResubmission) {
       return true;
@@ -1508,7 +1528,7 @@ export default function Home() {
           : "Escolhe um nome curto e reconhecível para este mapa.",
         cancelLabel: isEnglish ? "Cancel" : "Cancelar",
         confirmLabel: isEnglish ? "Rename workspace" : "Mudar nome",
-        eyebrow: isEnglish ? "Workspace" : "Workspace",
+        eyebrow: "Workspace",
         inputDefaultValue: workspaceItem.name,
         inputLabel: isEnglish ? "New name" : "Novo nome",
         title: isEnglish ? `Rename "${workspaceItem.name}"` : `Mudar nome de "${workspaceItem.name}"`,
@@ -3183,42 +3203,16 @@ export default function Home() {
   return (
     <div data-theme={appTheme} className="papergraph-app h-screen overflow-hidden text-[var(--foreground)]">
       <main className="flex h-full min-h-0 w-full flex-col overflow-hidden border border-transparent bg-[var(--surface)] shadow-[var(--shadow)] backdrop-blur-xl">
-        <header className="flex flex-col gap-4 border-b border-[var(--border)] px-6 py-4 lg:flex-row lg:items-center lg:justify-between lg:px-8">
-          <div className="relative h-[4.4rem] w-[17rem] overflow-hidden" aria-label="PaperGraph">
-            <Image
-              src={paperGraphLogoText}
-              alt="PaperGraph"
-              priority
-              className="absolute left-[-5.95rem] top-[-6.28rem] h-auto w-[28rem] max-w-none"
-            />
-          </div>
-          <button
-            type="button"
-            onClick={() => {
-              setSettingsSection("workspaces");
-              requestTabChange("settings");
-            }}
-            className="w-full rounded-[18px] border border-[var(--border)] bg-white/5 px-4 py-3 text-left transition-colors hover:bg-white/10 sm:w-auto sm:min-w-[16rem]"
-          >
-            <p className="text-[10px] uppercase tracking-[0.24em] text-[var(--muted)]">
-              {isEnglish ? "Active workspace" : "Workspace ativa"}
-            </p>
-            <p className="mt-1 truncate text-sm font-semibold text-white">
-              {accountWorkspace?.name ?? (isEnglish ? "Local workspace" : "Workspace local")}
-            </p>
-            {accountWorkspace ? (
-              <p className="mt-1 text-[11px] text-[var(--muted)]">
-                {onlinePresenceCount <= 1
-                  ? isEnglish
-                    ? "Only you online"
-                    : "Só tu online"
-                  : isEnglish
-                    ? `${onlinePresenceCount} online now`
-                    : `${onlinePresenceCount} online agora`}
-              </p>
-            ) : null}
-          </button>
-        </header>
+        <WorkspaceHeader
+          language={appLanguage}
+          workspaceName={accountWorkspace?.name ?? null}
+          onlinePresenceCount={onlinePresenceCount}
+          onHelp={() => openHelp("graph-navigation")}
+          onWorkspaces={() => {
+            setSettingsSection("workspaces");
+            requestTabChange("settings");
+          }}
+        />
 
         <div className="border-b border-[var(--border)] px-4 py-4 lg:px-5">
           <div className="grid gap-3 md:grid-cols-4">
@@ -3381,7 +3375,7 @@ export default function Home() {
                 <div className="flex flex-1 items-center justify-center rounded-[28px] border border-[var(--border)] bg-[var(--surface-strong)] p-6 text-center">
                   <div className="max-w-md">
                     <p className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
-                      {isEnglish ? "Editor" : "Editor"}
+                      {"Editor"}
                     </p>
                     <h2 className="mt-2 text-xl font-semibold text-white">
                       {isEnglish ? "No article selected" : "Nenhum artigo selecionado"}
@@ -3491,106 +3485,14 @@ export default function Home() {
               </aside>
 
               <section className="scrollbar-hidden min-h-0 overflow-y-auto rounded-[28px] border border-[var(--border)] bg-[var(--surface-strong)] p-5">
-                {settingsSection === "general" ? (
-                  <div className="space-y-5">
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
-                        {isEnglish ? "General" : "Geral"}
-                      </p>
-                      <h2 className="mt-2 text-xl font-semibold text-white">
-                        {isEnglish ? "Interface language" : "Idioma da interface"}
-                      </h2>
-                      <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-                        {isEnglish
-                          ? "The setting is saved in this browser and updates the workspace interface."
-                          : "A escolha fica guardada neste browser e atualiza a interface da workspace."}
-                      </p>
-                    </div>
-
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      {(["pt", "en"] as const).map((language) => {
-                        const isActiveLanguage = appLanguage === language;
-
-                        return (
-                          <button
-                            key={language}
-                            type="button"
-                            onClick={() => setAppLanguage(language)}
-                            className={`rounded-[20px] border p-4 text-left transition-colors ${
-                              isActiveLanguage
-                                ? "border-[var(--accent)] bg-[rgba(142,231,255,0.14)]"
-                                : "border-[var(--border)] bg-black/15 hover:bg-white/8"
-                            }`}
-                          >
-                            <p className="text-sm font-semibold text-white">
-                              {language === "pt" ? "Português" : "English"}
-                            </p>
-                            <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
-                              {language === "pt"
-                                ? "Interface principal em português."
-                                : "Main interface in English."}
-                            </p>
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    <section className="space-y-3 rounded-[22px] border border-[var(--border)] bg-black/15 p-4">
-                      <div>
-                        <h3 className="text-base font-semibold text-white">
-                          {isEnglish ? "Theme" : "Tema"}
-                        </h3>
-                      </div>
-
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        {(["dark", "light"] as const).map((theme) => {
-                          const isActiveTheme = appTheme === theme;
-
-                          return (
-                            <button
-                              key={theme}
-                              type="button"
-                              onClick={() => setAppTheme(theme)}
-                              className={`rounded-[20px] border p-4 text-left transition-colors ${
-                                isActiveTheme
-                                  ? "border-[var(--accent)] bg-[rgba(142,231,255,0.14)]"
-                                  : "border-[var(--border)] bg-white/5 hover:bg-white/8"
-                              }`}
-                            >
-                              <div className="flex items-center justify-between gap-3">
-                                <p className="text-sm font-semibold text-white">
-                                  {theme === "dark"
-                                    ? isEnglish
-                                      ? "Dark"
-                                      : "Escuro"
-                                    : isEnglish
-                                      ? "Light"
-                                      : "Claro"}
-                                </p>
-                                <span
-                                  className={`h-4 w-4 rounded-full border ${
-                                    theme === "dark"
-                                      ? "border-slate-400 bg-[#0a0f14]"
-                                      : "border-sky-300 bg-[#edf5fb]"
-                                  }`}
-                                />
-                              </div>
-                              <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
-                                {theme === "dark"
-                                  ? isEnglish
-                                    ? "Current default theme for graph-heavy work."
-                                    : "Tema padrao atual para trabalho focado no mapa."
-                                  : isEnglish
-                                    ? "Brighter theme for reading and review."
-                                    : "Tema mais claro para leitura e revisao."}
-                              </p>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </section>
+                {settingsSection !== "help" ? (
+                  <div className="mb-4 flex justify-end">
+                    <button type="button" className="help-text-link" onClick={() => openHelp(
+                      settingsSection === "anara" ? "anara" : settingsSection === "workspaces" ? "invites" : settingsSection === "account" ? "account" : "preferences-updates"
+                    )}>{isEnglish ? "Help with this section" : "Ajuda sobre esta secção"} ↗</button>
                   </div>
                 ) : null}
+                {settingsSection === "general" ? (<GeneralSettings appLanguage={appLanguage} appTheme={appTheme} onLanguageChange={setAppLanguage} onThemeChange={setAppTheme} />) : null}
 
                 {settingsSection === "anara" ? <AnaraSettings isEnglish={isEnglish} /> : null}
 
@@ -3598,7 +3500,7 @@ export default function Home() {
                   <div className="space-y-5">
                     <div>
                       <p className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
-                        {isEnglish ? "Workspaces" : "Workspaces"}
+                        {"Workspaces"}
                       </p>
                       <h2 className="mt-2 text-xl font-semibold text-white">
                         {isEnglish ? "Your article maps" : "Os teus mapas de artigos"}
@@ -4074,216 +3976,31 @@ export default function Home() {
                 ) : null}
 
                 {settingsSection === "help" ? (
-                  <HelpSection language={appLanguage} />
+                  <HelpSection language={appLanguage} location={helpLocation} onLocationChange={setHelpLocation}
+                    onNavigate={navigateFromHelp} onReturn={helpReturn ? () => {
+                      setSettingsSection(helpReturn.section);
+                      requestTabChange(helpReturn.tab);
+                      setHelpReturn(null);
+                    } : undefined} />
                 ) : null}
 
-                {settingsSection === "account" ? (
-                  <div className="space-y-5">
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.24em] text-[var(--muted)]">
-                        {isEnglish ? "Profile and session" : "Perfil e sessão"}
-                      </p>
-                      <h2 className="mt-2 text-xl font-semibold text-white">
-                        {isEnglish ? "Account" : "Conta"}
-                      </h2>
-                      <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-                        {isEnglish
-                          ? "Manage your session and public display name."
-                          : "Gere a tua sessão e o nome visível do perfil."}
-                      </p>
-                    </div>
-
-                    {!supabase ? (
-                      <div className="rounded-[20px] border border-red-300/30 bg-red-500/10 p-4 text-sm leading-6 text-red-100">
-                        {isEnglish
-                          ? "Supabase is not configured. Check NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY in .env.local."
-                          : "O Supabase não está configurado. Confirma NEXT_PUBLIC_SUPABASE_URL e NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY no .env.local."}
-                      </div>
-                    ) : null}
-
-                    <div className="max-w-4xl">
-                      <section className="rounded-[20px] border border-[var(--border)] bg-black/15 p-4">
-                        <p className="text-xs uppercase tracking-[0.22em] text-[var(--muted)]">
-                          {isEnglish ? "Current session" : "Sessão atual"}
-                        </p>
-
-                        {isAuthLoading ? (
-                          <p className="mt-3 text-sm leading-6 text-[var(--muted)]">
-                            {isEnglish ? "Checking session..." : "A confirmar sessão..."}
-                          </p>
-                        ) : authUser ? (
-                          <div className="mt-3 space-y-3">
-                            <div>
-                              <p className="text-base font-semibold text-white">
-                                {visibleAccountName ?? (isEnglish ? "Connected account" : "Conta ligada")}
-                              </p>
-                              {authUser.email ? (
-                                <p className="mt-1 truncate text-sm text-[var(--muted)]">{authUser.email}</p>
-                              ) : null}
-                              <p className="mt-1 truncate text-xs text-[var(--muted)]">{authUser.id}</p>
-                            </div>
-
-                            {supabase ? (
-                              <ProfilePhotoControl key={authUser.id} supabase={supabase} userId={authUser.id}
-                                name={visibleAccountName} language={appLanguage}
-                                disabled={isAuthSubmitting || isAccountDeletionRunning}
-                                onChanged={() => loadWorkspaceCollaboration(accountWorkspace)} />
-                            ) : null}
-
-                            <form className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]" onSubmit={handleProfileNameSubmit}>
-                              <label className="min-w-0">
-                                <span className="text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
-                                  {isEnglish ? "Display name" : "Nome visível"}
-                                </span>
-                                <input
-                                  type="text"
-                                  value={profileNameDraft}
-                                  onChange={(event) => setProfileNameDraft(event.target.value)}
-                                  minLength={2}
-                                  className="mt-2 w-full rounded-[16px] border border-[var(--border)] bg-black/20 px-4 py-3 text-sm text-white outline-none transition-colors placeholder:text-white/35 focus:border-[var(--accent)]"
-                                />
-                              </label>
-                              <button
-                                type="submit"
-                                disabled={isAuthSubmitting}
-                                className="self-end rounded-full border border-[var(--border)] bg-white/5 px-4 py-3 text-xs font-semibold text-white transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
-                              >
-                                {isEnglish ? "Save name" : "Guardar nome"}
-                              </button>
-                            </form>
-
-                            <div className="flex flex-wrap gap-2">
-                              <button
-                                type="button"
-                                disabled={isAuthSubmitting || isAccountDeletionRunning}
-                                onClick={() => {
-                                  void handleSignOut();
-                                }}
-                                className="rounded-full border border-red-300/30 bg-red-500/15 px-4 py-2 text-xs font-semibold text-red-100 transition-colors hover:bg-red-500/25 disabled:cursor-not-allowed disabled:opacity-50"
-                              >
-                                {isAuthSubmitting
-                                  ? isEnglish
-                                    ? "Signing out..."
-                                    : "A sair..."
-                                  : isEnglish
-                                    ? "Sign out"
-                                    : "Terminar sessão"}
-                              </button>
-                              <button
-                                type="button"
-                                disabled={isAuthSubmitting || isAccountDeletionRunning}
-                                onClick={() => {
-                                  void handleDeleteAccount();
-                                }}
-                                className="rounded-full border border-red-300/40 bg-red-600/20 px-4 py-2 text-xs font-semibold text-red-100 transition-colors hover:bg-red-600/30 disabled:cursor-not-allowed disabled:opacity-50"
-                              >
-                                {isAccountDeletionRunning
-                                  ? isEnglish
-                                    ? "Deleting..."
-                                    : "A apagar..."
-                                  : isEnglish
-                                    ? "Delete account"
-                                    : "Eliminar conta"}
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          <form className="mt-3 space-y-3" onSubmit={handleAuthSubmit}>
-                            <div className="grid grid-cols-2 gap-2">
-                              {(["sign-in", "sign-up"] as const).map((mode) => {
-                                const isActiveMode = authMode === mode;
-
-                                return (
-                                  <button
-                                    key={mode}
-                                    type="button"
-                                    onClick={() => {
-                                      setAuthMode(mode);
-                                      setAuthError(null);
-                                      setAuthStatus(null);
-                                    }}
-                                    className={`rounded-full border px-3 py-2 text-xs font-semibold transition-colors ${
-                                      isActiveMode
-                                        ? "border-[var(--accent)] bg-[rgba(142,231,255,0.14)] text-white"
-                                        : "border-[var(--border)] bg-white/5 text-[var(--muted)] hover:bg-white/10 hover:text-white"
-                                    }`}
-                                  >
-                                    {mode === "sign-in"
-                                      ? isEnglish
-                                        ? "Sign in"
-                                        : "Entrar"
-                                      : isEnglish
-                                        ? "Create account"
-                                        : "Criar conta"}
-                                  </button>
-                                );
-                              })}
-                            </div>
-
-                            <label className="block">
-                              <span className="text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
-                                Email
-                              </span>
-                              <input
-                                type="email"
-                                value={authEmail}
-                                onChange={(event) => setAuthEmail(event.target.value)}
-                                required
-                                placeholder={isEnglish ? "you@example.com" : "tu@example.com"}
-                                className="mt-2 w-full rounded-[16px] border border-[var(--border)] bg-black/20 px-4 py-3 text-sm text-white outline-none transition-colors placeholder:text-white/35 focus:border-[var(--accent)]"
-                              />
-                            </label>
-
-                            <label className="block">
-                              <span className="text-[11px] uppercase tracking-[0.22em] text-[var(--muted)]">
-                                {isEnglish ? "Password" : "Password"}
-                              </span>
-                              <input
-                                type="password"
-                                value={authPassword}
-                                onChange={(event) => setAuthPassword(event.target.value)}
-                                required
-                                minLength={6}
-                                placeholder={isEnglish ? "At least 6 characters" : "Pelo menos 6 caracteres"}
-                                className="mt-2 w-full rounded-[16px] border border-[var(--border)] bg-black/20 px-4 py-3 text-sm text-white outline-none transition-colors placeholder:text-white/35 focus:border-[var(--accent)]"
-                              />
-                            </label>
-
-                            <button
-                              type="submit"
-                              disabled={isAuthSubmitting || !supabase}
-                              className="w-full rounded-full border border-[var(--accent)] bg-[var(--accent)] px-4 py-3 text-sm font-semibold text-[#041016] transition-transform hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                              {isAuthSubmitting
-                                ? isEnglish
-                                  ? "Working..."
-                                  : "A processar..."
-                                : authMode === "sign-in"
-                                  ? isEnglish
-                                    ? "Sign in"
-                                    : "Entrar"
-                                  : isEnglish
-                                    ? "Create account"
-                                    : "Criar conta"}
-                            </button>
-                          </form>
-                        )}
-                      </section>
-                    </div>
-
-                    {authStatus ? (
-                      <p className="rounded-[18px] border border-[rgba(142,231,255,0.25)] bg-[rgba(142,231,255,0.08)] px-4 py-3 text-sm leading-6 text-[var(--accent)]">
-                        {authStatus}
-                      </p>
-                    ) : null}
-
-                    {authError ? (
-                      <p className="rounded-[18px] border border-red-300/30 bg-red-500/10 px-4 py-3 text-sm leading-6 text-red-100">
-                        {authError}
-                      </p>
-                    ) : null}
-                  </div>
-                ) : null}
+                {settingsSection === "account" ? (<AccountSettings
+                    appLanguage={appLanguage}
+                    authUser={authUser}
+                    supabase={supabase}
+                    visibleAccountName={visibleAccountName}
+                    profileNameDraft={profileNameDraft}
+                    isAuthLoading={isAuthLoading}
+                    isAuthSubmitting={isAuthSubmitting}
+                    isAccountDeletionRunning={isAccountDeletionRunning}
+                    handleProfileNameSubmit={handleProfileNameSubmit}
+                    setProfileNameDraft={setProfileNameDraft}
+                    handleSignOut={handleSignOut}
+                    handleDeleteAccount={handleDeleteAccount}
+                    authStatus={authStatus}
+                    authError={authError}
+                    onPhotoChanged={() => loadWorkspaceCollaboration(accountWorkspace)}
+                  />) : null}
 
               </section>
             </div>

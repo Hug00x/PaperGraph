@@ -1,5 +1,7 @@
 "use client";
 
+import { latexImageDirectory, formatBytes, getImageUrl, isPdfAsset, getAssetKindLabel, createAssetLatexSnippet, ensureAssetPackages, getDefaultImageInsertionIndex } from "@/lib/latex-assets";
+
 import { getCollaboratorColor } from "../lib/collaborator-color.ts";
 
 import { normalizeKeywordTags } from "../lib/article-tags.ts";
@@ -74,38 +76,6 @@ type EditorPaneProps = {
   workspaceId?: string | null;
 };
 
-const latexImageDirectory = "papergraph-images";
-
-function formatBytes(size: number) {
-  if (size < 1024 * 1024) {
-    return `${Math.max(1, Math.round(size / 1024))} KB`;
-  }
-
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function escapeLatexText(value: string) {
-  return value
-    .replace(/\\/g, "\\textbackslash{}")
-    .replace(/([#$%&_{}])/g, "\\$1")
-    .replace(/\^/g, "\\textasciicircum{}")
-    .replace(/~/g, "\\textasciitilde{}");
-}
-
-function getImageUrl(imageAsset: WorkspaceImageAsset) {
-  const storagePath = imageAsset.storagePath ?? imageAsset.storedName;
-
-  return `/api/images/${encodeURIComponent(imageAsset.storedName)}?path=${encodeURIComponent(storagePath)}`;
-}
-
-function isPdfAsset(imageAsset: WorkspaceImageAsset) {
-  return imageAsset.mimeType === "application/pdf" || imageAsset.storedName.toLowerCase().endsWith(".pdf");
-}
-
-function getAssetKindLabel(imageAsset: WorkspaceImageAsset) {
-  return isPdfAsset(imageAsset) ? "PDF" : "IMG";
-}
-
 const submittedArticleStatusOptions = ["Review", "Published"] as const;
 
 function SubmissionStatusToggle({
@@ -156,66 +126,6 @@ function SubmissionStatusToggle({
       })}
     </div>
   );
-}
-
-function getImageCaption(imageAsset: WorkspaceImageAsset) {
-  return imageAsset.originalName.replace(/\.[^/.]+$/, "");
-}
-
-function createImageLatexSnippet(imageAsset: WorkspaceImageAsset) {
-  return [
-    "",
-    "\\begin{figure}[htbp]",
-    "  \\centering",
-    `  \\includegraphics[width=0.85\\linewidth]{${latexImageDirectory}/${imageAsset.storedName}}`,
-    `  \\caption{${escapeLatexText(getImageCaption(imageAsset))}}`,
-    "\\end{figure}",
-    "",
-  ].join("\n");
-}
-
-function createPdfLatexSnippet(imageAsset: WorkspaceImageAsset) {
-  return [
-    "",
-    "\\includepdf[",
-    "    pages=-,",
-    "    pagecommand={\\thispagestyle{empty}}",
-    `]{${latexImageDirectory}/${imageAsset.storedName}}`,
-    "",
-  ].join("\n");
-}
-
-function createAssetLatexSnippet(imageAsset: WorkspaceImageAsset) {
-  return isPdfAsset(imageAsset) ? createPdfLatexSnippet(imageAsset) : createImageLatexSnippet(imageAsset);
-}
-
-function ensureLatexPackage(documentSource: string, packageName: string) {
-  const packagePattern = new RegExp(`\\\\usepackage(?:\\[[^\\]]+\\])?\\{${packageName}\\}`);
-
-  if (packagePattern.test(documentSource)) {
-    return documentSource;
-  }
-
-  const packageLine = `\\usepackage{${packageName}}\n`;
-  const beginDocumentIndex = documentSource.search(/\\begin\{document\}/);
-
-  if (beginDocumentIndex === -1) {
-    return `${packageLine}${documentSource}`;
-  }
-
-  return `${documentSource.slice(0, beginDocumentIndex).trimEnd()}\n${packageLine}\n${documentSource.slice(
-    beginDocumentIndex,
-  )}`;
-}
-
-function ensureAssetPackages(documentSource: string, imageAsset: WorkspaceImageAsset) {
-  return ensureLatexPackage(documentSource, isPdfAsset(imageAsset) ? "pdfpages" : "graphicx");
-}
-
-function getDefaultImageInsertionIndex(documentSource: string) {
-  const endDocumentIndex = documentSource.lastIndexOf("\\end{document}");
-
-  return endDocumentIndex === -1 ? documentSource.length : endDocumentIndex;
 }
 
 export function EditorPane({

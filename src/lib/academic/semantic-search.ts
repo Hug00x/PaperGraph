@@ -3,7 +3,7 @@ import { embeddingConfig } from "./embedding.ts";
 
 // Initial BGE-M3 graph policy, checked against related/unrelated workspace examples.
 // This is a cosine score cutoff, not a probability or a Litmaps setting.
-export const DEFAULT_SEMANTIC_SIMILARITY_THRESHOLD = 0.5;
+const DEFAULT_SEMANTIC_SIMILARITY_THRESHOLD = 0.5;
 
 export function getSemanticSimilarityThreshold() {
   const configured = process.env.SEMANTIC_SIMILARITY_THRESHOLD?.trim();

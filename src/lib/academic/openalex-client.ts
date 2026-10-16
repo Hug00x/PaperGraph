@@ -1,10 +1,10 @@
-export const openAlexConfig = { baseUrl: "https://api.openalex.org", timeoutMs: 15000,
+const openAlexConfig = { baseUrl: "https://api.openalex.org", timeoutMs: 15000,
   intervalMs: 350, semanticIntervalMs: 1000, attempts: 2, maxWaitMs: 5000 };
 export class DiscoveryError extends Error {
   code: string;
   constructor(code: string) { super(code); this.code = code; }
 }
-export function waitFor(ms: number, signal?: AbortSignal) {
+function waitFor(ms: number, signal?: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
     signal?.throwIfAborted();
     const abort = () => { clearTimeout(timer); reject(signal?.reason); };

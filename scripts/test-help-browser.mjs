@@ -1,0 +1,124 @@
+import WebSocket from '../node_modules/next/dist/compiled/ws/index.js';
+import { spawn } from 'node:child_process';
+import { readFile, writeFile, mkdir, copyFile, unlink, rmdir, mkdtemp } from 'node:fs/promises';
+import { existsSync, constants } from 'node:fs';
+import assert from 'node:assert/strict';
+import path from 'node:path';
+const route = path.resolve(process.env.HELP_TEST_APP_ROOT || '.', 'src/app/help-check/page.tsx');
+const createdRoute = !existsSync(route);
+if (!createdRoute && await readFile(route, 'utf8') !== await readFile('tests/fixtures/help-page.tsx', 'utf8')) throw new Error('Fixture route already exists with different content');
+await mkdir(path.dirname(route), { recursive: true });
+if (createdRoute) await copyFile('tests/fixtures/help-page.tsx', route, constants.COPYFILE_EXCL);
+await mkdir('.utmp', { recursive: true });
+const profile = await mkdtemp(path.resolve('.utmp/help-browser-'));
+const executable = process.env.BROWSER_PATH || ['C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', '/usr/bin/chromium'].find(existsSync);
+if (!executable) { if (createdRoute) { await unlink(route); await rmdir(path.dirname(route)); } throw new Error('Set BROWSER_PATH'); }
+const browser = spawn(executable, ['--headless=new', '--no-sandbox', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { windowsHide: true, stdio: 'ignore' });
+const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+const keepAlive = setInterval(() => {}, 1000);
+let ws;
+try {
+  let pages;
+  for (let i = 0; i < 100; i++) { try { const port = (await readFile(path.join(profile, 'DevToolsActivePort'), 'utf8')).split('\n')[0]; pages = await (await fetch(`http://127.0.0.1:${port}/json`)).json(); break; } catch { await pause(100); } }
+  assert.ok(pages, 'Browser started');
+  ws = new WebSocket(pages.find(page => page.type === 'page').webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+  const pending = new Map(); let sequence = 0;
+  ws.on('message', data => { const message = JSON.parse(data); if (!message.id) return; const entry = pending.get(message.id); pending.delete(message.id); if (message.error) entry.reject(new Error(JSON.stringify(message.error))); else entry.resolve(message.result); });
+  const cdp = (method, params = {}) => new Promise((resolve, reject) => {
+    const id = ++sequence;
+    const timeout = setTimeout(() => { pending.delete(id); reject(new Error(`CDP timeout: ${method}`)); }, 30000);
+    pending.set(id, { resolve: value => { clearTimeout(timeout); resolve(value); }, reject: error => { clearTimeout(timeout); reject(error); } });
+    ws.send(JSON.stringify({ id, method, params }));
+  });
+  const ev = async expression => { const data = await cdp('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }); if (data.exceptionDetails) throw new Error(JSON.stringify(data.exceptionDetails)); return data.result.value; };
+  const wait = async expression => { for (let i = 0; i < 200; i++) { if (await ev(expression)) return; await pause(100); } throw new Error(`Timed out: ${expression}`); };
+  const button = (label, scope = 'document') => `[...${scope}.querySelectorAll('button')].find(b=>b.textContent.replace(/[↗→←]/g,'').trim()===${JSON.stringify(label.replace(/[↗→←]/g,'').trim())})`;
+  const click = async expression => { assert.ok(await ev(`!!(${expression})`), `Control exists: ${expression}`); await ev(`(${expression}).click()`); await pause(120); };
+  await cdp('Page.enable');
+  await cdp('Network.enable');
+  await cdp('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1100, deviceScaleFactor: 1, mobile: false });
+  await cdp('Page.navigate', { url: `${process.env.HELP_TEST_URL || 'http://127.0.0.1:3015'}/help-check` });
+  await wait("!!document.querySelector('[data-help-ready=true]')");
+  const search = async query => {
+    await ev("document.querySelector('#help-search-input').focus()");
+    await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', modifiers: 2 });
+    await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', modifiers: 2 });
+    await cdp('Input.insertText', { text: query }); await pause(120);
+  };
+  const key = async name => { await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: name }); await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: name }); await pause(120); };
+  const shot = async name => writeFile(`.utmp/help-${name}.png`, Buffer.from((await cdp('Page.captureScreenshot')).data, 'base64'));
+  await shot('home-dark');
+  await click(button('Open quick start'));
+  assert.ok(await ev("document.querySelector('.help-guide').textContent.includes('Before you begin')"));
+  await click(button('Show me where ↗')); await wait("!!document.querySelector('#destination')");
+  assert.equal(await ev("document.querySelector('#destination').firstChild.textContent"), 'workspaces');
+  await click(button('Back to Help')); await wait("!!document.querySelector('.help-guide')");
+  await click(button('Help overview'));
+  await search('How do I connect papers?');
+  await wait("document.querySelectorAll('[role=option]').length>0");
+  await shot('search');
+  await key('ArrowDown');
+  assert.ok(await ev("document.querySelector('#help-search-input').getAttribute('aria-activedescendant')==='help-result-1'"));
+  await key('ArrowUp'); await key('Enter');
+  assert.equal(await ev("document.querySelector('#help-search-input').value"), '');
+  await wait("!!document.querySelector('.help-guide')");
+  assert.ok(await ev("document.querySelector('.help-guide').textContent.includes('Manual')"));
+  await shot('long-guide');
+  await click(button('Help overview'));
+  await click(button('Groups & notes', "document.querySelector('.help-sidebar')"));
+  await click("[...document.querySelectorAll('.help-card')].find(b=>b.textContent.includes('Read and save Group notes'))");
+  await click(button('Back')); assert.equal(await ev("!!document.querySelector('.help-guide')"), false);
+  await search('zzzznonexistent'); assert.ok(await ev("document.querySelector('.help-empty').textContent.includes('No matching')"));
+  await key('Escape'); assert.equal(await ev("document.querySelector('#help-search-input').value"), '');
+  await search('PDF'); await click("document.querySelector('[aria-label=\"Clear search\"]')");
+  assert.equal(await ev("document.activeElement.id"), 'help-search-input');
+  await click(button('Overview', "document.querySelector('.help-sidebar')"));
+  await ev("document.querySelector('.help-faq summary').click()");
+  assert.ok(await ev("document.querySelector('.help-faq details').open")); await shot('faq');
+  await click(button('Keyboard & gestures', "document.querySelector('.help-sidebar')"));
+  assert.equal(await ev("document.querySelectorAll('.help-center tbody tr').length"), 11); await shot('shortcuts');
+  await click(button('Troubleshooting', "document.querySelector('.help-sidebar')")); await shot('troubleshooting');
+  await click("[...document.querySelectorAll('.help-card')].find(b=>b.textContent.includes('Local model unavailable'))");
+  assert.ok(await ev("document.querySelector('.help-guide').textContent.includes('Try again')"));
+  await click(button('Help overview')); await search('Grupos');
+  await click("document.querySelector('#language')"); await wait("document.querySelector('#help-title').textContent==='Ajuda e aprendizagem'");
+  assert.ok(await ev("document.querySelectorAll('[role=option]').length>0"));
+  await key('Escape');
+  await ev("document.documentElement.dataset.papergraphTheme='light'");
+  await click(button('Visão geral', "document.querySelector('.help-sidebar')"));
+  await cdp('Emulation.setDeviceMetricsOverride', { width: 760, height: 1000, deviceScaleFactor: 1, mobile: false });
+  await shot('light-narrow');
+  for (const width of [390, 760, 1440]) {
+    await cdp('Emulation.setDeviceMetricsOverride', { width, height: 1100, deviceScaleFactor: 1, mobile: false });
+    assert.ok(await ev('document.documentElement.scrollWidth<=window.innerWidth'), `No horizontal overflow at ${width}`);
+  }
+  await cdp('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 });
+  await search('compilacao'); await key('Enter'); await wait("!!document.querySelector('.help-guide')");
+  assert.ok(await ev("document.querySelector('.help-guide').textContent.includes('compilação')"));
+  await click(button('Visão geral da Ajuda')); await click(button('Grupos e notas', "document.querySelector('.help-sidebar')"));
+  assert.ok(await ev("document.querySelectorAll('.help-card').length===2"));
+  await cdp('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+  await click("document.querySelector('#invalid-guide')"); assert.ok(await ev("document.querySelector('.help-empty').textContent.includes('Guia não encontrado')"));
+  await click(button('Voltar à visão geral')); await click("document.querySelector('#language')");
+  await search('Navigate, select and arrange papers'); await key('Enter');
+  await click(button('Show me where ↗')); await wait("!!document.querySelector('.papergraph-graph-pane')");
+  await click("document.querySelector('[aria-label=Help]')"); await wait("!!document.querySelector('.help-guide')");
+  assert.ok(await ev("document.querySelector('#help-guide-title').textContent==='Navigate, select and arrange papers'"));
+  await click(button('← Return to previous view')); await wait("!!document.querySelector('.papergraph-graph-pane')");
+  await click("document.querySelector('[aria-label^=\"Study group:\"]')");
+  await click("document.querySelector('[aria-label=\"Open group notes\"]')");
+  await ev("document.querySelector('textarea').focus()"); await cdp('Input.insertText', { text: ' unsaved test' });
+  await click(button('Close', "document.querySelector('[role=dialog]')")); await wait("!!document.querySelector('[role=alertdialog]')");
+  await click(button('Keep editing')); assert.ok(await ev("document.querySelector('textarea').value.includes('unsaved test')"));
+  assert.equal(await ev("document.querySelector('#writes').textContent"), '0');
+  await click(button('Save notes')); await click("document.querySelector('[aria-label=Help]')"); await wait("!!document.querySelector('.help-guide')");
+  assert.equal(await ev("document.querySelector('#writes').textContent"), '1', 'Help itself never writes');
+  await click("document.querySelector('#toggle-role')");
+  await search('Invite people'); await key('Enter'); assert.ok(await ev("document.querySelector('.help-guide').textContent.includes('Viewers')"));
+  await click("document.querySelector('#reopen-help')"); assert.ok(await ev("document.querySelector('.help-guide').textContent.includes('Invite people')"));
+  console.log('PASS Help navigation, related topics, search/keyboard/clear/empty, FAQ, shortcuts, troubleshooting, bilingual themes, responsive widths, offline search, invalid guide, reopen, header Help, unsaved-note protection and role guidance. Screenshots: .utmp/help-*.png');
+} finally { clearInterval(keepAlive); ws?.close(); browser.kill(); if (createdRoute) { await unlink(route).catch(() => {}); await rmdir(path.dirname(route)).catch(() => {}); } }
+
+
+

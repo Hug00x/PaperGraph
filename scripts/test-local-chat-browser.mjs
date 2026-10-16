@@ -1,6 +1,6 @@
 import WebSocket from '../node_modules/next/dist/compiled/ws/index.js';
 import { spawn } from 'node:child_process';
-import { readFile, writeFile, mkdir, copyFile, unlink, rmdir, mkdtemp } from 'node:fs/promises';
+import { readFile, mkdir, copyFile, unlink, rmdir, mkdtemp } from 'node:fs/promises';
 import { existsSync, constants } from 'node:fs';
 import assert from 'node:assert/strict';
 import path from 'node:path';

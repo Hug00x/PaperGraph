@@ -3,7 +3,7 @@ import type { WorkspaceImageAsset } from "@/lib/workspace-data";
 
 export const paperGraphAssetBucket = "papergraph-assets";
 
-export function getWorkspaceAssetStoragePath(workspaceId: string, articleId: string | undefined, storedName: string) {
+function getWorkspaceAssetStoragePath(workspaceId: string, articleId: string | undefined, storedName: string) {
   return `${workspaceId}/${articleId ?? "workspace"}/${storedName}`;
 }
 

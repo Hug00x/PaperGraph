@@ -64,7 +64,7 @@ export function formatWorkspaceRole(role: string, language: AppLanguage) {
   }
 
   if (role === "editor" || role === "member") {
-    return language === "en" ? "Editor" : "Editor";
+    return "Editor";
   }
 
   if (role === "viewer") {

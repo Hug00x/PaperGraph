@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
-import { isValidZoneBounds, getZoneForNodePosition, getZonesForNodePosition, moveZoneMembers, resizeZone,
+import { isValidZoneBounds, getZonesForNodePosition, moveZoneMembers, resizeZone,
   ZONE_COLORS, ZONE_CONFIG, type GraphZone, type Positions, type ZoneBounds, type ZoneColor } from "@/lib/graph-zones";
 
 import { GraphZoneDrawing } from "@/components/graph-zone-drawing";
@@ -149,7 +149,7 @@ export function GraphZoneLayer(props: Props) {
       const selected = selectedId === zone.id;
       const shown = preview.zones.find((item) => item.id === zone.id) ?? zone;
       const collaborators = graphPeers.filter((peer) => peer.activity?.target.kind === "zone" && peer.activity.target.id === zone.id);
-      const count = Object.values(preview.positions).filter((p) => getZoneForNodePosition(p, preview.zones)?.id === zone.id).length;
+      const count = Object.values(preview.positions).filter((p) => getZonesForNodePosition(p, preview.zones).some((candidate) => candidate.id === zone.id)).length;
       const left = size.width / 2 + viewport.x + (shown.x * 30 - 1500) * viewport.scale;
       const top = size.height / 2 + viewport.y + (shown.y * 30 - 1500) * viewport.scale;
       // No stacking context on the wrapper: controls from every zone must sit
